@@ -15,6 +15,9 @@ Usage:
     conda activate drones
     python quickstart_train.py
     python quickstart_train.py --timesteps 500000 --out my_run
+    python quickstart_train.py --watch          # open the PyBullet window DURING training
+                                                # (forces 1 env, ~5-10x slower, but you see
+                                                #  the drone go from flailing -> hovering)
 """
 import argparse
 import time
@@ -40,15 +43,21 @@ def main():
                         help="parallel env copies (uses more CPU cores)")
     parser.add_argument("--out", type=Path, default=HERE.parent / "results",
                         help="where to write best_model.zip / evaluations.npz")
+    parser.add_argument("--watch", action="store_true",
+                        help="show the PyBullet GUI during training (forces --n_envs 1, much slower)")
     args = parser.parse_args()
 
     OUTPUT_DIR = str(args.out)
     args.out.mkdir(parents=True, exist_ok=True)
 
+    if args.watch and args.n_envs != 1:
+        print("[INFO] --watch: forcing n_envs=1 (PyBullet allows one GUI window per process)")
+        args.n_envs = 1
+
     # --- environments -------------------------------------------------------
     train_env = make_vec_env(
         HoverAviary,
-        env_kwargs=dict(obs=OBS, act=ACT),
+        env_kwargs=dict(obs=OBS, act=ACT, gui=args.watch),
         n_envs=args.n_envs,
         seed=0,
     )
