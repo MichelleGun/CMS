@@ -10,6 +10,10 @@
   Solved (reward 474.1/474) in 160k steps / ~6.5 min CPU.
   Artefacts in `results/`.
 - Scripts written: `quickstart_train.py`, `quickstart_eval.py`.
+- **Virtual basketball court** (`court.py` + `fly_in_court.py`) — scaled FIBA court
+  with textured markings and two hoops. PID waypoint tour flies a lap of the court;
+  `--rl` drops the hover policy in (hovers at centre only, as expected for the
+  1-D-thrust action space).
 
 ## Next
 
