@@ -1,170 +1,124 @@
-# Drone RL — Assignment 3 (CMS)
+# Drone RL, Assignment 3 (CMS)
 
-Reinforcement learning for quadrotor control, built on
-[`gym-pybullet-drones`](https://github.com/utiasDSL/gym-pybullet-drones) (PyBullet physics)
-and [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3) PPO.
+A simulated quadrotor (PyBullet, via [`gym-pybullet-drones`](https://github.com/utiasDSL/gym-pybullet-drones),
+trained with [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3)) that learns two
+things: how to hover, and how to find a hoop placed at a random spot inside a 2x2x2 m cage every
+episode. The 2x2x2 m cage matches the footprint of a planned real-hardware demo, so the task is
+built around that constraint from the start.
 
-**Status:** first milestone done — a PPO agent learns to take off and hold a hover
-at 1.0 m altitude. Mean reward **474.1 / 474** ("perfect") over 20 evaluation episodes,
-trained in **160k steps (~6.5 min on a laptop CPU)**.
+For a full, step-by-step guide to recreating this entire system from nothing, see
+[tutorial/TUTORIAL.md](tutorial/TUTORIAL.md). For exact environment setup commands, see
+[SETUP.md](SETUP.md). For the full chronological build log and open questions, see
+[PROGRESS.md](PROGRESS.md).
 
 ![Trained hover policy](results/hover_trajectory.png)
 
 ---
 
-## Why PyBullet and not MuJoCo
+## How to run it
 
-| | PyBullet (`gym-pybullet-drones`) | MuJoCo |
-|---|---|---|
-| Ready-made quadrotor env | **Yes** — Crazyflie model, Gymnasium API, SB3 examples, PID baselines | No maintained drone package; you build the env yourself |
-| Physics | Good for rigid-body quad dynamics | Better contacts, generally faster |
-| Time to first training run | Minutes | Hours of infrastructure first |
+This assumes the `drones` conda environment already exists. If it doesn't yet, start with
+[SETUP.md](SETUP.md) or [tutorial/TUTORIAL.md](tutorial/TUTORIAL.md).
 
-For a first RL-on-drones project the deciding factor is that PyBullet gives a working
-hover / waypoint environment on day one.
+### The web dashboard (easiest way to play with it)
 
-### Note on "real DJI drone" transfer
-Consumer DJI drones (Mini / Air / Mavic) expose **no low-level motor or attitude control**,
-so a policy that outputs rotor thrusts has nothing to send them to. Real sim-to-real would
-need a DJI/Ryze **Tello** (high-level velocity commands only) or a custom PX4 / Betaflight
-build. That is out of scope for this assignment — we train in simulation.
-
----
-
-## The task (`HoverAviary`)
-
-- **Agent:** one Crazyflie 2.X quadrotor
-- **Goal:** reach and hold position `(0, 0, 1.0)` m for an 8 s episode
-- **Observation** (`kin`, 27-dim): position, orientation, linear & angular velocity, plus a short action history
-- **Action** (`one_d_rpm`, 1-dim): a single scalar per step, applied as equal RPM to all four motors — the simplest action space, learns fastest
-- **Reward:** shaped, ~474 ≈ a stationary hover exactly on target
-
----
-
-## Repository layout
-
-```
-CMS/
-├── README.md                 <- this file
-├── SETUP.md                  <- exact environment setup (Windows + conda)
-├── PROGRESS.md               <- what's done / what's next
-├── requirements-lock.txt     <- exact package versions used
-├── tutorial/
-│   ├── TUTORIAL.md           <- full walkthrough: install PyBullet -> hover -> court
-│   └── walkthrough.ipynb     <- runnable notebook of the headless-safe steps
-├── scripts/
-│   ├── quickstart_train.py   <- PPO training, early-stops when solved
-│   ├── quickstart_eval.py    <- headless evaluation + trajectory plot
-│   ├── court.py              <- builds a virtual basketball court in PyBullet
-│   └── fly_in_court.py       <- fly the drone around the court (PID tour or RL policy)
-├── assets/
-│   └── court_texture.png     <- top-down court markings (auto-generated)
-└── results/
-    ├── best_model.zip        <- trained policy (load with PPO.load)
-    ├── final_model.zip       <- policy at end of training
-    ├── evaluations.npz       <- reward vs timesteps (EvalCallback log)
-    └── hover_trajectory.png  <- altitude / drift of the trained policy
-```
-
-`gym-pybullet-drones` itself is **not** vendored here — it is installed as a dependency
-(see `SETUP.md`). These scripts import it as a normal Python package.
-
----
-
-## Reproduce
-
-Once the `drones` conda environment exists (see [SETUP.md](SETUP.md)):
+A local website with a live 3D view of the drone and hoop, a choice of training algorithm,
+start/stop controls, a reward chart, an onboard drone camera, and video replay. No coding needed
+once it's running.
 
 ```bash
 conda activate drones
-cd path/to/CMS/scripts
-
-# train headless (4 parallel envs, fast — ~7 min, early-stops when solved)
-python quickstart_train.py
-
-# evaluate the saved policy + regenerate the plot (headless, ~30 s)
-python quickstart_eval.py
-
-# watch the trained policy fly in the PyBullet GUI
-python -m gym_pybullet_drones.examples.play --model_path ../results/best_model.zip
+cd path/to/CMS/webapp
+python -m uvicorn main:app --app-dir backend --port 8000
 ```
 
-### Watching the simulation
+Then open `http://localhost:8000` in a browser. Stop it with Ctrl+C.
 
-**During training** — add `--watch`: a PyBullet window opens and you see the drone go
-from flailing to a clean hover as PPO learns.
+If `uvicorn` is on your PATH, `uvicorn main:app --app-dir backend --port 8000` (or
+`cd backend && uvicorn main:app --port 8000`) also works. If the plain `uvicorn` command isn't
+found even after `conda activate drones`, use the `python -m uvicorn` form above instead, that's
+the one confirmed to work regardless of PATH quirks.
 
-```bash
-python quickstart_train.py --watch
-```
+Full feature list and notes: [webapp/README.md](webapp/README.md).
 
-This forces a single environment (PyBullet allows one GUI window per process), so it runs
-roughly 5–10× slower than the headless 4-env run, and motion looks fast because there is no
-real-time throttle. Good for a demo recording; use headless for real training.
+### From the command line
 
-**While a headless run is going** — open a *second* terminal and replay the current best
-policy. `results/best_model.zip` is overwritten every time training reaches a new best, so
-re-run this whenever you want a fresh snapshot:
+| Script | What it does |
+|---|---|
+| `scripts/quickstart_train.py` | Trains the hover policy (PPO, stops early once solved). |
+| `scripts/quickstart_eval.py` | Evaluates the saved hover policy and regenerates the trajectory plot. |
+| `scripts/fly_in_court.py` | Flies the drone around a virtual basketball court (PID tour, or the RL hover policy). |
+| `scripts/train_hoop_find.py` | Trains the hoop-finding policy (PPO only, writes to `results/hoop/`). |
+| `scripts/fly_hoop_demo.py` | Watches the trained hoop-finding policy; the hoop moves to a new spot every episode. |
+| `scripts/train_hoop_multi.py` | Same hoop task, with a choice of algorithm and a run-scoped output folder. This is what the webapp itself calls, and it also works standalone from the terminal. |
 
-```bash
-python -m gym_pybullet_drones.examples.play --model_path ../results/best_model.zip
-```
+Run these from `scripts/` with `drones` activated. Full walkthroughs and explanations of each are
+in [tutorial/TUTORIAL.md](tutorial/TUTORIAL.md).
 
-> If `conda activate drones` fails with `EnvironmentNameNotFound`, your shell's `conda` and
-> the env are from different installs (e.g. Anaconda vs Miniconda). Either
-> `conda config --append envs_dirs <path>\Miniconda3\envs` once, activate by full path
-> (`conda activate <path>\envs\drones`), or just call that env's Python directly:
-> `& "<path>\envs\drones\python.exe" quickstart_eval.py`.
+### The notebook
+
+`tutorial/walkthrough.ipynb` already has training curves, full rollout diagnostics, and embedded
+video for both tasks baked in. Re-run it with
+`jupyter nbconvert --to notebook --execute --inplace tutorial/walkthrough.ipynb` if you want fresh
+numbers after retraining.
 
 ---
 
-## Flying in a basketball court
+## Which file to edit for what
 
-`fly_in_court.py` drops the drone into a virtual FIBA-style court (markings baked
-into `assets/court_texture.png`, plus two 3D hoops). The court is scaled down
-(`--scale 0.5` → 14 × 7.5 m, rim at ~1.5 m) so the drone's motion stays meaningful.
-
-```bash
-cd path/to/CMS/scripts
-
-# PID waypoint tour: centre -> wings -> up to each hoop -> back  (this actually flies around)
-python fly_in_court.py
-python fly_in_court.py --record        # also save results/video-*.mp4
-python fly_in_court.py --scale 0.4     # smaller court
-
-# the trained RL policy, in the court
-python fly_in_court.py --rl
+```
+CMS/
+├── scripts/       drone environments, training scripts, and shared helpers
+├── webapp/        the local web dashboard (FastAPI backend + browser frontend)
+├── tutorial/      TUTORIAL.md and the runnable notebook
+├── assets/        the basketball court texture
+└── results/       trained models, evaluation logs, videos, and webapp run data
 ```
 
-The **PID tour** uses a classic position controller (`DSLPIDControl`) — it's the
-good visual demo. The **`--rl`** mode loads `results/best_model.zip`; because that
-policy was trained with the 1-D-thrust action space it can only hold altitude, so
-it just hovers at centre court. Making the *RL* agent fly a course means retraining
-with a position/velocity action space — see [PROGRESS.md](PROGRESS.md).
-
-![court markings](assets/court_texture.png)
+| Want to change... | Edit... |
+|---|---|
+| Room size, reward, random hoop/start position, action space | `scripts/hoop_env.py` |
+| Hover task behaviour | `scripts/quickstart_train.py` (the environment itself, `HoverAviary`, lives in the installed `gym-pybullet-drones` package, not this repo) |
+| Basketball court geometry or markings | `scripts/court.py` |
+| Add or change a training algorithm in the webapp | `webapp/backend/config.py` (the algorithm list) and `scripts/train_hoop_multi.py` (`ALGO_CLASSES`) |
+| What gets logged during training (telemetry, camera, eval snapshots) | `scripts/telemetry_callback.py` |
+| Onboard camera capture | `scripts/camera_capture.py` |
+| Replay video generation | `scripts/replay_hoop.py` |
+| Webapp API, subprocess start/stop | `webapp/backend/main.py`, `webapp/backend/run_manager.py` |
+| Webapp interface (3D view, controls, chart) | `webapp/frontend/index.html`, `webapp/frontend/js/*.js` |
+| 3D scene shared by the CLI and the webapp's replay generator | `scripts/court.py` (`build_room`, `build_hoop`) |
 
 ---
 
 ## Results so far
 
-Training reward (from `results/evaluations.npz`):
+### Hover
 
 | Steps | Mean reward |
 |------:|------------:|
 | 8k    | 336 |
 | 16k   | 441 |
-| 40k   | 219  *(PPO instability — recovered)* |
+| 40k   | 219 (PPO instability, recovered) |
 | 104k  | 466 |
 | 152k  | 474 |
-| 160k  | **474 → early stop** |
+| 160k  | 474, early stop |
 
-The dip around 40–56k is ordinary early-PPO variance with default hyperparameters;
-lowering the learning rate to `1e-4` smooths it.
+Final policy (20 episodes): **474.1 ± 0.0**. The drone climbs to 1.0 m and holds it with
+millimetre-scale drift.
 
-Final policy (`quickstart_eval.py`, 20 episodes): **474.1 ± 0.0** — the drone climbs to
-1.0 m and holds it with millimetre-scale horizontal drift.
+### Hoop-finding (hardware-demo cage)
+
+Evaluated over 20 episodes with fresh random hoop and start positions, not seen during training.
+
+| | First attempt (`pid`, 400k steps) | Current (`vel`, 500k steps) |
+|---|---:|---:|
+| Reached the hoop | 0/20 | **9/20** |
+| Mean final distance to hoop | 0.84 ± 0.34 m | **0.34 ± 0.22 m** |
+
+Still improving, not plateaued yet. The full diagnosis of the `pid` to `vel` fix is in
+[tutorial/TUTORIAL.md](tutorial/TUTORIAL.md) and [PROGRESS.md](PROGRESS.md). Training curves,
+full rollout diagnostics, and video for both policies are in `tutorial/walkthrough.ipynb`.
 
 ---
 
-See [PROGRESS.md](PROGRESS.md) for next steps.
+See [PROGRESS.md](PROGRESS.md) for what's next and what's still open.

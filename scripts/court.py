@@ -170,3 +170,83 @@ def build_court(client, scale=0.5, texture_png=None):
         "rim_x": rim_x,          # right hoop at (+rim_x, 0, rim_h); left at (-rim_x, 0, rim_h)
         "scale": scale,
     }
+
+
+# ----------------------------------------------------------------------------- #
+# hardware-demo cage: a bare 2x2x2 m room with one hoop, moved on every episode
+# ----------------------------------------------------------------------------- #
+def _hoop_at(client, center, rim_r=0.12, bb_w=0.4, bb_h=0.25, pole_r=0.02, face_dir=(0, 1)):
+    """One pole + backboard + ring of rim markers at an absolute (x, y, rim_z).
+
+    `face_dir` is the horizontal direction the open (approach) side of the
+    hoop points toward; the backboard is mounted on the opposite side.
+    """
+    cx, cy, rim_h = center
+    fx, fy = np.asarray(face_dir, dtype=float)
+    norm = np.hypot(fx, fy)
+    fx, fy = (fx / norm, fy / norm) if norm > 1e-6 else (0.0, 1.0)
+    ids = []
+
+    col = p.createCollisionShape(p.GEOM_CYLINDER, radius=pole_r, height=rim_h,
+                                 physicsClientId=client)
+    vis = p.createVisualShape(p.GEOM_CYLINDER, radius=pole_r, length=rim_h,
+                              rgbaColor=[0.15, 0.15, 0.15, 1], physicsClientId=client)
+    ids.append(p.createMultiBody(0, col, vis, [cx, cy, rim_h / 2], physicsClientId=client))
+
+    bb_x, bb_y = cx - fx * (rim_r + 0.03), cy - fy * (rim_r + 0.03)
+    orn = p.getQuaternionFromEuler([0, 0, np.arctan2(fy, fx)])
+    bb = p.createVisualShape(p.GEOM_BOX, halfExtents=[bb_w / 2, 0.02, bb_h / 2],
+                             rgbaColor=[1, 1, 1, 0.85], physicsClientId=client)
+    bbc = p.createCollisionShape(p.GEOM_BOX, halfExtents=[bb_w / 2, 0.02, bb_h / 2],
+                                 physicsClientId=client)
+    ids.append(p.createMultiBody(0, bbc, bb, [bb_x, bb_y, rim_h + 0.15 * rim_r / 0.23], orn,
+                                 physicsClientId=client))
+
+    marker = p.createVisualShape(p.GEOM_SPHERE, radius=0.015,
+                                 rgbaColor=[0.95, 0.45, 0.1, 1], physicsClientId=client)
+    for a in np.linspace(0, 2 * np.pi, 14, endpoint=False):
+        ids.append(p.createMultiBody(
+            0, -1, marker,
+            [cx + np.cos(a) * rim_r, cy + np.sin(a) * rim_r, rim_h],
+            physicsClientId=client))
+    return ids
+
+
+def _draw_room_wireframe(client, room, color=(0.2, 0.6, 1.0)):
+    """12-edge wireframe box marking the physical cage bounds (visual only)."""
+    rx, ry, rz = np.array(room) / 2
+    corners = np.array([[x, y, z] for x in (-rx, rx) for y in (-ry, ry) for z in (0, 2 * rz)])
+    for i in range(8):
+        for j in range(i + 1, 8):
+            if np.sum(corners[i] != corners[j]) == 1:
+                p.addUserDebugLine(corners[i], corners[j], lineColorRGB=color, lineWidth=1.5,
+                                   physicsClientId=client)
+
+
+def build_room(client, room=(2.0, 2.0, 2.0), show_wireframe=True):
+    """Floor slab + wireframe bounds for the hardware-demo cage. Build once per run."""
+    rx, ry, rz = room
+    floor_col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[rx / 2, ry / 2, 0.01],
+                                       physicsClientId=client)
+    floor_vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[rx / 2, ry / 2, 0.01],
+                                    rgbaColor=[0.5, 0.5, 0.55, 1], physicsClientId=client)
+    floor = p.createMultiBody(0, floor_col, floor_vis, [0, 0, -0.01], physicsClientId=client)
+    if show_wireframe:
+        _draw_room_wireframe(client, room)
+    return {"floor_id": floor, "room": np.array(room, dtype=float)}
+
+
+def build_hoop(client, hoop_pos, rim_r=0.12):
+    """Single hoop at `hoop_pos = (x, y, rim_height)`. Rebuild every episode to move it."""
+    cx, cy, _ = hoop_pos
+    face_dir = (cx, cy) if (abs(cx) > 1e-6 or abs(cy) > 1e-6) else (0.0, 1.0)
+    return _hoop_at(client, hoop_pos, rim_r=rim_r, face_dir=face_dir)
+
+
+def build_mini_hoop(client, room=(2.0, 2.0, 2.0), hoop_pos=(0.5, 0.5, 0.6), rim_r=0.12):
+    """Convenience: room + one hoop in a single call, for a static (non-episodic) view."""
+    info = build_room(client, room=room)
+    info["hoop"] = build_hoop(client, hoop_pos, rim_r=rim_r)
+    info["hoop_pos"] = np.array(hoop_pos, dtype=float)
+    info["rim_radius"] = rim_r
+    return info
