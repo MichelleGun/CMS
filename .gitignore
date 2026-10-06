@@ -16,3 +16,12 @@ tb/
 Thumbs.db
 .idea/
 .vscode/
+
+# hardware: flight logs / demos / per-setup calibration are regenerated on each machine
+# (`flights/` is deliberately not called `runs/`, which the rule above would swallow anyway)
+hardware/flights/*
+!hardware/flights/.gitkeep
+hardware/config.local.yaml
+hardware/calibration/camera_intrinsics.json
+hardware/calibration/markers/
+.pytest_cache/

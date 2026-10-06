@@ -1,5 +1,20 @@
 # Progress log
 
+## Done (2026-10-06)
+
+- **Tello hardware bridge (`hardware/`)** so the sim-trained policy, keyboard flying and imitation learning can run on
+  a real DJI Tello. Nothing has flown yet; everything is tested offline against a simulated Tello (`FakeTello`) and
+  the real simulator. See `hardware/README.md` (safety section first).
+  - The policy sees the same 75-number observation as `HoopFindAviary`; `sim_check/obs_parity.py` asserts it
+    against the live environment (max difference 0.0).
+  - Position: overhead ArUco camera fused with Tello dead-reckoning in a Kalman filter (blackout-tolerant,
+    latency-aware, timestamp-corrected, yaw health-checked). Tuning guide in `state_estimation/TUNING.md`.
+  - Safety: SPACE hold, L safe land, X / BACKSPACE motor cut, plus global Ctrl+Shift+X/L/H hotkeys; geofence on
+    the action, battery/tilt/telemetry/estimator/time-cap triggers, height-aware landing escalation.
+  - Imitation: demos recorded in the sim's formats, behaviour cloning into a PPO policy the existing tools can load.
+    Sim-only check: a fly-straight expert reaches the hoop 60/60, its clone 30/30 (the 500k PPO: 9/20).
+  - 99 offline tests (8 need opencv + pygame). Real-drone steps (axis + speed calibration, first flights) are still to do.
+
 ## Done (2026-09-30, later)
 
 - **Local web dashboard for the hoop-finding task** (`webapp/`). FastAPI backend plus a plain
@@ -95,10 +110,9 @@
 
 ## Open questions
 
-- Which physical drone flies the 2x2x2 m cage demo? (Tello = velocity commands
-  only; anything lower-level needs a PX4/Betaflight build.) Determines whether
-  `HoopFindAviary`'s trained policy can ever run on the real hardware, or whether
-  the demo has to be PID/scripted like `fly_in_court.py`'s tour.
+- ~~Which physical drone flies the 2x2x2 m cage demo?~~ Answered: a DJI Tello, driven with velocity
+  commands, so `HoopFindAviary`'s `vel` policy can run on it (see `hardware/`). Still open: how well it transfers
+  (takeoff height mismatch, response lag, see `hardware/README.md` section 5).
 - Single-agent only, or is multi-agent (`MultiHoverAviary`) in scope for ASS3?
 - How long does `train_hoop_find.py` actually need to converge? Still open: 500k
   steps gets to 9/20 (45%) hoop-reach rate, eval reward still noisily improving,

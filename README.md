@@ -70,6 +70,7 @@ numbers after retraining.
 CMS/
 ├── scripts/       drone environments, training scripts, and shared helpers
 ├── webapp/        the local web dashboard (FastAPI backend + browser frontend)
+├── hardware/      flying the policies on a real DJI Tello (see hardware/README.md)
 ├── tutorial/      TUTORIAL.md and the runnable notebook
 ├── assets/        the basketball court texture
 └── results/       trained models, evaluation logs, videos, and webapp run data
@@ -87,6 +88,24 @@ CMS/
 | Webapp API, subprocess start/stop | `webapp/backend/main.py`, `webapp/backend/run_manager.py` |
 | Webapp interface (3D view, controls, chart) | `webapp/frontend/index.html`, `webapp/frontend/js/*.js` |
 | 3D scene shared by the CLI and the webapp's replay generator | `scripts/court.py` (`build_room`, `build_hoop`) |
+| Anything about the real Tello: safety limits, calibration, camera, keyboard flying, imitation, running a policy | `hardware/` (settings in `hardware/config.yaml`) |
+
+---
+
+## Real hardware (DJI Tello)
+
+`hardware/` runs the simulator's policies on a Tello in the 2x2x2 m cage: keyboard flying, loading a trained policy,
+recording demonstrations for behaviour cloning, an overhead-camera plus dead-reckoning position estimate, and
+emergency-stop / safe-landing keys. It reproduces the simulator's 75-number observation exactly (checked against the
+real environment) and is fully testable without a drone. **It has not flown a real Tello yet.**
+[hardware/README.md](hardware/README.md) has three parts: what the folder is for, a step by step beginner
+walkthrough (start here, it begins with steps that need no drone), and a full explanation of what is inside, why,
+and how it was made.
+
+```
+python hardware/control/keyboard_teleop.py --dry-run          # fly a simulated Tello with the keyboard
+python -m pytest hardware/tests -q                            # offline checks
+```
 
 ---
 

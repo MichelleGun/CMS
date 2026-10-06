@@ -23,10 +23,14 @@ async def stream_run(ws: WebSocket, run_id: str):
     telemetry_path = run_dir / "telemetry.jsonl"
     status_path = run_dir / "live_status.json"
     meta_path = run_dir / "meta.json"
+    log_path = run_dir / "train.log"
 
     last_telemetry_pos = 0
     last_status_mtime = 0.0
     last_final_status = None
+    # Attach "live", like tailing a real terminal: start from current EOF,
+    # not the beginning of the file, once it exists.
+    last_log_pos = log_path.stat().st_size if log_path.is_file() else 0
 
     try:
         while True:
@@ -59,6 +63,19 @@ async def stream_run(ws: WebSocket, run_id: str):
                         await ws.send_json({"type": "status", **status})
                     except json.JSONDecodeError:
                         pass
+
+            if log_path.is_file():
+                size = log_path.stat().st_size
+                if size < last_log_pos:
+                    last_log_pos = 0
+                if size > last_log_pos:
+                    with open(log_path, "r", errors="replace") as f:
+                        f.seek(last_log_pos)
+                        new_text = f.read()
+                        last_log_pos = f.tell()
+                    for line in new_text.splitlines():
+                        if line.strip():
+                            await ws.send_json({"type": "log", "line": line})
 
             if meta_path.is_file():
                 try:

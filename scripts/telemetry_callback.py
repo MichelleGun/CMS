@@ -75,9 +75,18 @@ class TelemetryCallback(BaseCallback):
             "rpy": rpy.tolist(),
             "target": (pos + rel).tolist(),
         }
-        with open(self.telemetry_path, "a") as f:
-            f.write(json.dumps(record) + "\n")
-        self._append_count += 1
+        # Best-effort, like CameraCallback: OneDrive sync (the run dir lives
+        # under a OneDrive-synced path) or the dashboard backend polling the
+        # same file can hold a transient lock, which must never take down
+        # training over what's just a dropped dashboard frame.
+        try:
+            with open(self.telemetry_path, "a") as f:
+                f.write(json.dumps(record) + "\n")
+            self._append_count += 1
+        except OSError as e:
+            if self.verbose:
+                print(f"[TelemetryCallback] write failed: {e}")
+            return True
         if self._append_count % self.rotate_every == 0:
             self._rotate()
         return True
@@ -87,8 +96,16 @@ class TelemetryCallback(BaseCallback):
             lines = self.telemetry_path.read_text().splitlines()
         except FileNotFoundError:
             return
+        except OSError as e:
+            if self.verbose:
+                print(f"[TelemetryCallback] rotate read failed: {e}")
+            return
         if len(lines) > self.max_lines:
-            _atomic_write_text(self.telemetry_path, "\n".join(lines[-self.max_lines:]) + "\n")
+            try:
+                _atomic_write_text(self.telemetry_path, "\n".join(lines[-self.max_lines:]) + "\n")
+            except OSError as e:
+                if self.verbose:
+                    print(f"[TelemetryCallback] rotate write failed: {e}")
 
 
 class DashboardEvalCallback(EvalCallback):
@@ -122,7 +139,11 @@ class DashboardEvalCallback(EvalCallback):
                 "elapsed_sec": time.time() - self.t0,
                 "updated_at": datetime.now().isoformat(),
             }
-            _atomic_write_text(self.live_status_path, json.dumps(status))
+            try:
+                _atomic_write_text(self.live_status_path, json.dumps(status))
+            except OSError as e:
+                if self.verbose:
+                    print(f"[DashboardEvalCallback] status write failed: {e}")
         return continue_training
 
 

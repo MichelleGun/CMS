@@ -35,7 +35,7 @@ const Api = {
   setCamera: (runId, enabled) => apiPost(`/api/runs/${encodeURIComponent(runId)}/camera`, { enabled }),
   cameraLatestUrl: (runId) => `/api/runs/${encodeURIComponent(runId)}/camera/latest.jpg?t=${Date.now()}`,
 
-  openRunSocket(runId, { onTelemetry, onStatus, onRunEnded, onError } = {}) {
+  openRunSocket(runId, { onTelemetry, onStatus, onRunEnded, onLog, onError } = {}) {
     const ws = new WebSocket(`${WS_BASE}/ws/runs/${encodeURIComponent(runId)}`);
     ws.onmessage = (evt) => {
       let msg;
@@ -43,6 +43,7 @@ const Api = {
       if (msg.type === "telemetry" && onTelemetry) onTelemetry(msg);
       else if (msg.type === "status" && onStatus) onStatus(msg);
       else if (msg.type === "run_ended" && onRunEnded) onRunEnded(msg);
+      else if (msg.type === "log" && onLog) onLog(msg);
     };
     if (onError) ws.onerror = onError;
     return ws;

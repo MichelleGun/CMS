@@ -1,0 +1,109 @@
+# Hardware configuration. Values marked CALIBRATE are placeholders until the
+# matching script in calibration/ has been run on YOUR drone and camera.
+# Paths are relative to this file's folder (hardware/), never absolute.
+
+control:
+  hz: 30
+  speed_limit: 0.25        # m/s, must equal the sim's SPEED_LIMIT (action speed fraction 1.0)
+  rc_per_mps: 128.0        # CALIBRATE (calibrate_speed.py). ~video estimate: rc 15 -> ~0.117 m/s
+  rc_max: 35               # hard clamp on every rc channel (0..100). 35/128 = 0.27 m/s
+  yaw_rc_max: 20
+  yaw_ref_deg: 0.0         # cage-frame heading to hold (sim holds yaw at its start value, 0)
+  yaw_kp: 0.6              # rc per degree of yaw error
+  yaw_kd: 0.15             # rc per deg/s of yaw rate (damping)
+  yaw_deadband_deg: 3.0
+  warmup_s: 1.5            # hover after takeoff before the policy engages (buffer stays zero)
+  ramp_s: 1.0              # policy speed scale ramps 0 -> speed_scale over this long
+  max_flight_s: 120        # hard per-flight cap
+  min_takeoff_battery: 30
+
+conventions:               # CALIBRATE with calibration/calibrate_axes.py
+  axes_calibrated: false   # real flights are refused while false (set true by calibrate_axes.py)
+  vel_to_mps: 0.1          # Tello vgx/vgy/vgz unit -> m/s (dm/s assumed, UNVERIFIED)
+  vel_signs: [1, -1, -1]   # Tello (vgx,vgy,vgz) -> body forward/left/up (UNVERIFIED)
+  att_signs: {roll: 1, pitch: 1, yaw: -1}   # Tello deg -> FLU rad convention (UNVERIFIED)
+  rc_signs: {lr: -1, fb: 1, ud: 1, yaw: -1} # body left/forward/up/CCW -> rc channels (UNVERIFIED)
+  telemetry_delay_s: 0.05  # assumed state-packet delay, CALIBRATE
+
+fence:                     # cage limits and zones, metres
+  x: [-1.0, 1.0]
+  y: [-1.0, 1.0]
+  z: [0.15, 1.9]
+  soft_margin: 0.30        # outward speed starts tapering this far inside a wall
+  zero_offset: 0.10        # ...and reaches zero this far inside the wall (room to coast: command latency + slow braking)
+  push_gain: 1.5           # 1/s: inward velocity added per metre past the zero-speed line (stops drift into the wall)
+  push_max: 0.08           # m/s cap on that push
+  hard_margin: 0.15        # beyond the wall by this much -> safe land
+  fight_fraction: 0.30     # clamped-action fraction over fight_window_s -> hold, then land
+  fight_window_s: 2.0
+
+safety:
+  telemetry_stale_hold_s: 0.5
+  telemetry_stale_land_s: 2.0
+  hold_to_land_s: 2.0      # a HOLD-level fault that persists this long becomes LAND
+  tilt_limit_rad: 0.5
+  battery_land_pct: 20
+  battery_land_hold_s: 3.0
+  battery_critical_pct: 10
+  temp_land_c: 85
+  temp_hold_s: 3.0
+  overrun_s: 0.1
+  overrun_count: 3
+  axis_mismatch_hold_s: 1.0
+  land_reissue_s: 3.0      # re-send land if still airborne
+  land_emergency_low_s: 5.0   # ...and cut motors if smoothed height is below emergency_low_m
+  land_emergency_max_s: 10.0  # ...or below emergency_max_m by now
+  land_emergency_blind_s: 15.0  # height unreliable: time alone governs
+  emergency_low_m: 0.3
+  emergency_max_m: 0.5     # auto-escalation to motor cut never happens above this height
+  landed_h_m: 0.10
+  landed_range_m: 0.06     # smoothed height must also be flat (max-min over landed_window_s) to count as landed
+  landed_window_s: 0.6
+  landed_hold_s: 0.3
+
+estimator:
+  q_acc: 0.8               # process noise: accel std (m/s^2). Raise if velocity model lags manoeuvres
+  sigma_vel: 0.06          # Tello velocity measurement std (m/s)
+  sigma_z: 0.03            # height measurement std (m)
+  sigma_cam_xy: 0.03       # overhead-camera xy std (m) at good quality
+  cam_gate_chi2: 13.8      # Mahalanobis gate (2 dof, p=0.999)
+  cam_degraded_s: 0.5      # no camera this long -> DEGRADED
+  pos_lost_std: 0.35       # position std above this (m) -> LOST
+  history_s: 1.5           # out-of-sequence replay window
+  yaw_offset_gain: 0.5     # 1/s
+  yaw_offset_max_rate_dps: 5.0
+  yaw_degraded_deg: 15.0
+  yaw_degraded_s: 1.0
+  yaw_lost_deg: 30.0
+  yaw_jump_deg: 20.0
+  cam_latency_s: 0.08      # CALIBRATE: baseline camera latency
+  latency_min_s: 0.02
+  latency_max_s: 0.20
+  latency_window_s: 5.0
+  latency_ema: 0.1
+  angvel_lpf_alpha: 0.35   # low-pass on d(rpy)/dt for the observation's angular velocity
+
+camera:
+  index: 0
+  width: 1280
+  height: 720
+  height_m: 3.0            # CALIBRATE: overhead camera height above the floor
+  intrinsics_file: calibration/camera_intrinsics.json   # written by calibrate_camera.py
+
+aruco:
+  dictionary: DICT_4X4_50
+  drone_id: 10
+  hoop_id: 20
+  drone_marker_m: 0.07     # printed side length of the marker on top of the drone (outer black square)
+  # floor/corner reference markers: id -> cage-frame (x, y) of the marker centre, metres
+  reference:
+    0: [-1.0, -1.0]
+    1: [1.0, -1.0]
+    2: [1.0, 1.0]
+    3: [-1.0, 1.0]
+
+hoop:
+  z: 1.0                   # hoop height (m). The overhead camera cannot measure it, so it is set here
+  max_age_s: 600           # hoop.json older than this is refused
+  xy_std_max_m: 0.02
+  frames: 30

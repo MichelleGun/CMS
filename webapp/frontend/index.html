@@ -24,6 +24,47 @@
     <section id="viewport-wrap">
       <canvas id="scene-canvas"></canvas>
       <div id="viewport-hint">Drag to orbit, scroll to zoom. Arrow keys move the selected marker.</div>
+
+      <div id="run-scrim"></div>
+
+      <div id="run-loading" hidden>
+        <div class="spinner"></div>
+        <div>Starting run&hellip;</div>
+      </div>
+
+      <div id="run-overlay" hidden>
+        <div id="overlay-header">
+          <div id="overlay-toggle">
+            <button id="view-newest-btn" class="toggle-btn active" type="button">Newest</button>
+            <button id="view-best-btn" class="toggle-btn" type="button" disabled>Best</button>
+          </div>
+          <button id="back-to-setup-btn" class="secondary-btn" type="button">Back to setup</button>
+        </div>
+
+        <div id="best-toast" class="toast" hidden>New best found!</div>
+
+        <div id="overlay-terminal-card" class="overlay-card">
+          <h3>Training log</h3>
+          <pre id="overlay-terminal"></pre>
+        </div>
+
+        <div id="overlay-side-card" class="overlay-card">
+          <div id="overlay-camera-pane">
+            <h3>Drone camera</h3>
+            <img id="overlay-camera-frame" alt="drone camera off" hidden>
+            <div id="overlay-camera-placeholder" class="note">camera off</div>
+          </div>
+          <div id="overlay-replay-pane" hidden>
+            <h3>Best run replay</h3>
+            <div id="overlay-replay-status" class="note"></div>
+            <video id="overlay-replay-video" controls hidden></video>
+          </div>
+        </div>
+
+        <div id="overlay-stop-row">
+          <button id="stop-btn" class="danger-btn" type="button" disabled>Stop</button>
+        </div>
+      </div>
     </section>
 
     <aside id="control-panels">
@@ -76,7 +117,6 @@
         </div>
         <div class="button-row">
           <button id="start-btn" class="primary-btn">Start training</button>
-          <button id="stop-btn" class="danger-btn" disabled>Stop</button>
         </div>
       </div>
 

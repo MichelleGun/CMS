@@ -13,6 +13,20 @@
   let replayPollTimer = null;
   let lastReplayId = null;
 
+  // uiMode: "setup" (configuring, no run in view) | "starting" (run picked,
+  // waiting for its first data) | "run" (the darkened overlay is showing).
+  let uiMode = "setup";
+  let overlayView = "newest"; // "newest" | "best", which card set the overlay shows
+  let overlayReplayPollTimer = null;
+  let overlayBestReplayRunId = null; // avoids re-rendering the same best replay repeatedly
+  // Auto-resume into the most recent run on first load (e.g. after a page
+  // refresh mid-run), but never again once the user has deliberately gone
+  // back to setup, otherwise the 2.5s run-list poll would pull them right
+  // back into the overlay.
+  let autoSelectEnabled = true;
+  const lastBestSeen = {}; // run_id -> highest best_eval_reward observed, for the toast
+  let toastTimer = null;
+
   const statusPill = document.getElementById("status-pill");
   const runListEl = document.getElementById("run-list");
   const readoutEl = document.getElementById("position-readout");
@@ -29,6 +43,23 @@
   const replayVideo = document.getElementById("replay-video");
   const replayViewToggle = document.getElementById("replay-view-toggle");
   let lastReplayUrls = null;
+
+  const sceneCanvas = document.getElementById("scene-canvas");
+  const runScrim = document.getElementById("run-scrim");
+  const runLoading = document.getElementById("run-loading");
+  const runOverlay = document.getElementById("run-overlay");
+  const viewNewestBtn = document.getElementById("view-newest-btn");
+  const viewBestBtn = document.getElementById("view-best-btn");
+  const backToSetupBtn = document.getElementById("back-to-setup-btn");
+  const bestToast = document.getElementById("best-toast");
+  const overlayTerminal = document.getElementById("overlay-terminal");
+  const overlayCameraFrame = document.getElementById("overlay-camera-frame");
+  const overlayCameraPlaceholder = document.getElementById("overlay-camera-placeholder");
+  const overlayCameraPane = document.getElementById("overlay-camera-pane");
+  const overlayReplayPane = document.getElementById("overlay-replay-pane");
+  const overlayReplayStatus = document.getElementById("overlay-replay-status");
+  const overlayReplayVideo = document.getElementById("overlay-replay-video");
+  const MAX_LOG_LINES = 500;
 
   function fmt(n, d = 2) { return (n === null || n === undefined) ? "-" : Number(n).toFixed(d); }
 
@@ -54,6 +85,111 @@
     Scene3D.setDroneTarget(start, [0, 0, 0], true);
   }
 
+  // ------------------------------------------------------------- ui mode
+
+  function applyPanelState() {
+    const activeRun = runs.find((r) => r.status === "training");
+    startBtn.disabled = !!activeRun || uiMode !== "setup";
+    Controls.setPanelActive(uiMode === "setup" && !activeRun);
+  }
+
+  function setUiMode(mode) {
+    uiMode = mode;
+    runScrim.classList.toggle("visible", mode !== "setup");
+    sceneCanvas.classList.toggle("dimmed", mode !== "setup");
+    runLoading.hidden = mode !== "starting";
+    runOverlay.hidden = mode !== "run";
+    if (mode === "run") {
+      setOverlayView("newest");
+    } else if (overlayReplayPollTimer) {
+      clearInterval(overlayReplayPollTimer);
+      overlayReplayPollTimer = null;
+    }
+    applyPanelState();
+  }
+
+  function setOverlayView(which) {
+    overlayView = which;
+    viewNewestBtn.classList.toggle("active", which === "newest");
+    viewBestBtn.classList.toggle("active", which === "best");
+    overlayCameraPane.hidden = which !== "newest";
+    overlayReplayPane.hidden = which !== "best";
+    if (which === "best") {
+      requestOverlayBestReplay();
+    } else if (overlayReplayPollTimer) {
+      clearInterval(overlayReplayPollTimer);
+      overlayReplayPollTimer = null;
+    }
+  }
+
+  function backToSetup() {
+    autoSelectEnabled = false;
+    viewedRunId = null;
+    if (ws) { ws.close(); ws = null; }
+    stopCameraPolling();
+    cameraToggle.checked = false;
+    renderRunList();
+    showDraftPreview();
+    setUiMode("setup");
+  }
+
+  function clearTerminal() { overlayTerminal.textContent = ""; }
+
+  function appendLogLine(line) {
+    const atBottom = overlayTerminal.scrollTop + overlayTerminal.clientHeight >= overlayTerminal.scrollHeight - 4;
+    overlayTerminal.appendChild(document.createTextNode(line + "\n"));
+    while (overlayTerminal.childNodes.length > MAX_LOG_LINES) {
+      overlayTerminal.removeChild(overlayTerminal.firstChild);
+    }
+    if (atBottom) overlayTerminal.scrollTop = overlayTerminal.scrollHeight;
+  }
+
+  function showBestToast() {
+    bestToast.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { bestToast.hidden = true; }, 4000);
+  }
+
+  // -------------------------------------------------------- best replay
+
+  function requestOverlayBestReplay() {
+    if (!bestRunId) return;
+    if (overlayBestReplayRunId === bestRunId && !overlayReplayVideo.hidden) return;
+    overlayBestReplayRunId = bestRunId;
+    overlayReplayStatus.textContent = "rendering...";
+    overlayReplayVideo.hidden = true;
+    Api.startReplay(bestRunId, { variant: "best", pov: false, episodes: 1 }).then((res) => {
+      pollOverlayReplay(bestRunId, res.replay_id);
+    }).catch((e) => {
+      overlayReplayStatus.textContent = "failed: " + e.message;
+    });
+  }
+
+  function pollOverlayReplay(runId, replayId) {
+    if (overlayReplayPollTimer) clearInterval(overlayReplayPollTimer);
+    overlayReplayPollTimer = setInterval(async () => {
+      try {
+        const status = await Api.getReplayStatus(runId, replayId, false);
+        if (status.status === "done") {
+          clearInterval(overlayReplayPollTimer);
+          overlayReplayPollTimer = null;
+          overlayReplayStatus.textContent = "";
+          overlayReplayVideo.src = status.video_url;
+          overlayReplayVideo.hidden = false;
+          overlayReplayVideo.play().catch(() => {});
+        } else if (status.status === "failed") {
+          clearInterval(overlayReplayPollTimer);
+          overlayReplayPollTimer = null;
+          overlayReplayStatus.textContent = "failed (see server log, ffmpeg may be missing)";
+        }
+      } catch (e) {
+        clearInterval(overlayReplayPollTimer);
+        overlayReplayPollTimer = null;
+        overlayReplayStatus.textContent = "failed: " + e.message;
+      }
+    }, 2000);
+  }
+
   // ----------------------------------------------------------------- runs
 
   async function refreshRuns() {
@@ -63,12 +199,11 @@
     bestRunId = data.best_run_id;
     renderRunList();
 
-    const activeRun = runs.find((r) => r.status === "training");
-    startBtn.disabled = !!activeRun;
     stopBtn.disabled = !(viewedRunId && runs.find((r) => r.run_id === viewedRunId && r.status === "training"));
-    Controls.setPanelActive(!activeRun);
+    viewBestBtn.disabled = !bestRunId;
+    applyPanelState();
 
-    if (!viewedRunId && currentRunId) selectRun(currentRunId);
+    if (!viewedRunId && currentRunId && autoSelectEnabled) selectRun(currentRunId);
     if (bestRunId) {
       Api.getRun(bestRunId).then((r) => {
         if (r.curve) RewardChart.setBestCurve(r.curve.timesteps, r.curve.mean_reward);
@@ -80,7 +215,9 @@
     runListEl.innerHTML = "";
     runs.slice().reverse().forEach((r) => {
       const row = document.createElement("div");
-      row.className = "run-row" + (r.run_id === viewedRunId ? " selected" : "");
+      row.className = "run-row" +
+        (r.run_id === viewedRunId ? " selected" : "") +
+        (r.status === "training" ? " active-training" : "");
       const best = r.best_eval_reward !== null && r.best_eval_reward !== undefined
         ? r.best_eval_reward.toFixed(1) : "-";
       row.innerHTML = `<span class="algo-badge">${r.algo}</span><br>` +
@@ -99,13 +236,17 @@
 
   function selectRun(runId, retriesLeft = SELECT_RUN_MAX_RETRIES) {
     if (viewedRunId === runId && retriesLeft === SELECT_RUN_MAX_RETRIES) return;
-    viewedRunId = runId;
-    renderRunList();
-    if (ws) { ws.close(); ws = null; }
-    RewardChart.clearCurrent();
-    replayStatusEl.textContent = "";
-    replayVideo.hidden = true;
-    replayViewToggle.hidden = true;
+    if (retriesLeft === SELECT_RUN_MAX_RETRIES) {
+      viewedRunId = runId;
+      renderRunList();
+      if (ws) { ws.close(); ws = null; }
+      RewardChart.clearCurrent();
+      clearTerminal();
+      replayStatusEl.textContent = "";
+      replayVideo.hidden = true;
+      replayViewToggle.hidden = true;
+      setUiMode("starting");
+    }
 
     Api.getRun(runId).then((r) => {
       const status = (r.meta.final_status) || (r.live_status && r.live_status.status) || "unknown";
@@ -114,12 +255,15 @@
       if (r.curve) RewardChart.setCurrentCurve(r.curve.timesteps, r.curve.mean_reward);
       if (r.meta.target_override) Scene3D.setHoop(r.meta.target_override);
       if (isViewedRunTraining) openLiveSocket(runId);
+      setUiMode("run");
     }).catch(() => {
       // The training subprocess may not have written meta.json yet (it
       // takes a moment to start): retry briefly before giving up, rather
       // than leaving this run stuck with no live view for its whole life.
       if (retriesLeft > 0 && viewedRunId === runId) {
         setTimeout(() => selectRun(runId, retriesLeft - 1), 500);
+      } else if (viewedRunId === runId) {
+        setUiMode("setup");
       }
     });
   }
@@ -133,6 +277,11 @@
       onStatus: (msg) => {
         setStatusPill("training");
         RewardChart.appendCurrentPoint(msg.current_timestep, msg.latest_eval_reward);
+        const prevBest = lastBestSeen[runId];
+        if (msg.best_eval_reward !== undefined && msg.best_eval_reward !== null) {
+          if (prevBest !== undefined && msg.best_eval_reward > prevBest) showBestToast();
+          lastBestSeen[runId] = msg.best_eval_reward;
+        }
       },
       onRunEnded: (msg) => {
         setStatusPill(msg.status);
@@ -140,6 +289,7 @@
         showDraftPreview();
         refreshRuns();
       },
+      onLog: (msg) => appendLogLine(msg.line),
     });
   }
 
@@ -187,9 +337,13 @@
     stopCameraPolling();
     cameraFrame.hidden = false;
     cameraPlaceholder.hidden = true;
+    overlayCameraFrame.hidden = false;
+    overlayCameraPlaceholder.hidden = true;
     cameraPollTimer = setInterval(() => {
       if (!viewedRunId) return;
-      cameraFrame.src = Api.cameraLatestUrl(viewedRunId);
+      const url = Api.cameraLatestUrl(viewedRunId);
+      cameraFrame.src = url;
+      overlayCameraFrame.src = url;
     }, 700);
   }
 
@@ -198,6 +352,8 @@
     cameraPollTimer = null;
     cameraFrame.hidden = true;
     cameraPlaceholder.hidden = false;
+    overlayCameraFrame.hidden = true;
+    overlayCameraPlaceholder.hidden = false;
   }
 
   async function onCameraToggle() {
@@ -288,6 +444,9 @@
     startBtn.addEventListener("click", startTraining);
     stopBtn.addEventListener("click", stopTraining);
     cameraToggle.addEventListener("change", onCameraToggle);
+    viewNewestBtn.addEventListener("click", () => setOverlayView("newest"));
+    viewBestBtn.addEventListener("click", () => setOverlayView("best"));
+    backToSetupBtn.addEventListener("click", backToSetup);
     document.getElementById("replay-current-btn").addEventListener("click", () => requestReplay("current"));
     document.getElementById("replay-best-btn").addEventListener("click", () => requestReplay("best"));
 

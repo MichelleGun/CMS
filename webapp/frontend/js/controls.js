@@ -57,8 +57,10 @@ const Controls = (() => {
 
   function setPanelActive(active) {
     panelActive = active;
-    document.querySelectorAll("#panel-position input, #panel-position button")
-      .forEach((el) => { el.disabled = !active; });
+    document.querySelectorAll(
+      "#panel-position input, #panel-position button, " +
+      "#panel-training input, #panel-training select, #panel-training button"
+    ).forEach((el) => { el.disabled = !active; });
   }
 
   function wireDom() {

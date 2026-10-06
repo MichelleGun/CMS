@@ -1,0 +1,19 @@
+# Hardware-side extras. The simulator / training stack is unchanged (see ../requirements-lock.txt).
+# Tested with Python 3.12 (the `drones` conda env) on Windows.
+#
+#   pip install -r hardware/requirements-hardware.txt
+#
+# Already present in the `drones` env: numpy, scipy, pyyaml, stable-baselines3, torch, gymnasium, pybullet,
+# gym-pybullet-drones, matplotlib, pytest.
+#
+# Needed only to talk to the real drone / camera / keyboard (everything else, including all tests that do not
+# touch OpenCV or pygame, runs without them):
+djitellopy>=2.5          # Tello SDK wrapper
+opencv-contrib-python    # cv2.aruco (use opencv-contrib-python-headless on a server without a display)
+pygame                   # keyboard window
+pynput                   # optional: global kill hotkeys that work when the window has lost focus
+
+# Notes
+# - djitellopy depends on opencv-python; if pip complains about two OpenCV packages, uninstall opencv-python and
+#   keep opencv-contrib-python (the contrib build includes everything the base build has plus aruco).
+# - Do not install a second copy of numpy: the env's numpy 2.x is what the rest of the stack uses.
