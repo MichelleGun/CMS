@@ -1,0 +1,168 @@
+{
+  "name": "Tello-Friend-Kit",
+  "prepared_date": "2026-10-08",
+  "python": "3.11",
+  "file_count_excluding_manifest": 32,
+  "files": [
+    {
+      "path": ".gitignore",
+      "bytes": 200,
+      "sha256": "715433815c2f74ddd94e13c6e28178f405feb07cfc9bc4f48ee60a4fb6daec04"
+    },
+    {
+      "path": ".python-version",
+      "bytes": 5,
+      "sha256": "49a506dd32096b010d75205acf3430c9ae6c40351888129499e5a5e487126c93"
+    },
+    {
+      "path": "README.md",
+      "bytes": 7561,
+      "sha256": "dac5b0c8f4971809a6164502d1c9fb14675e8f4ecc5db5063439010ff8ebc647"
+    },
+    {
+      "path": "VERIFICATION.md",
+      "bytes": 1945,
+      "sha256": "95a74a61d9a09bf681363afc2eff0ed6e385fedf6ab088c0bf391ff7a40af5f5"
+    },
+    {
+      "path": "config/tello.toml",
+      "bytes": 504,
+      "sha256": "1b8810357b74c3d7673aeadf6c43b928b481cd4f7662c70985723751212a057d"
+    },
+    {
+      "path": "data/logs/.gitkeep",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "data/photos/.gitkeep",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "data/videos/.gitkeep",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/sdk/SOURCES.md",
+      "bytes": 617,
+      "sha256": "9744fb146d0bb3774c0e7b92bbb5e14cc60070ab91ff917e0150c45176782da8"
+    },
+    {
+      "path": "docs/sdk/Tello_SDK_2.0_User_Guide.pdf",
+      "bytes": 147483,
+      "sha256": "fdba179b2efde3d3dc35e514fe6282b9fc08fb47c90f4aec8961cd278a771633"
+    },
+    {
+      "path": "docs/setup.md",
+      "bytes": 2795,
+      "sha256": "a6a918f9dc18cb69d426733b99bc1532e232ef545782ea1aa522275f2ddedc8a"
+    },
+    {
+      "path": "pyproject.toml",
+      "bytes": 762,
+      "sha256": "5e7898df491f2dc57de0e63cddd26af58609dba39365defa4c0731bf3902f50e"
+    },
+    {
+      "path": "requirements-dev.txt",
+      "bytes": 652,
+      "sha256": "93e9e7af6494a15fc3f56750afb9bc8ee11f09d4a5908396a26555979d3c59a4"
+    },
+    {
+      "path": "requirements.txt",
+      "bytes": 438,
+      "sha256": "c36837187df660549c3d1660b94abe1517f65fa01892c80004060e0b8f9564ce"
+    },
+    {
+      "path": "run.cmd",
+      "bytes": 331,
+      "sha256": "e5cd333e70aa0a4e84c9eef127a84a64e5237e611270e0e135f6fe86e78944f3"
+    },
+    {
+      "path": "scripts/setup.ps1",
+      "bytes": 3898,
+      "sha256": "9e45b196cbc9e3157a4d020d5da4168c02e0db42600a3a143b7fda598a7a155d"
+    },
+    {
+      "path": "setup.cmd",
+      "bytes": 124,
+      "sha256": "72c6b0dfde5d2f93628900d877afc17a4a4df8b9fa851dfb42a9117d81719f91"
+    },
+    {
+      "path": "src/tello_lab/__init__.py",
+      "bytes": 48,
+      "sha256": "07247d6bdfe0e8f6533695a80821d8b5c8e5fd8b62cddd82571ea1a718fd487b"
+    },
+    {
+      "path": "src/tello_lab/__main__.py",
+      "bytes": 48,
+      "sha256": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d"
+    },
+    {
+      "path": "src/tello_lab/cli.py",
+      "bytes": 9624,
+      "sha256": "67f3e30eb4faeb1ae5fda81f95bfd2bc5bd55ee576fc807ea5a0e961ccb9471a"
+    },
+    {
+      "path": "src/tello_lab/config.py",
+      "bytes": 3203,
+      "sha256": "eb8c4bc709ca87772e8388ec32c326ea7f1564ddb62b427c095e2bdb00e9f238"
+    },
+    {
+      "path": "src/tello_lab/drone.py",
+      "bytes": 6428,
+      "sha256": "2fbdb5d49de59c657b11a1db5800f55314530159bb988cf6ecf4dbcfd08dc445"
+    },
+    {
+      "path": "src/tello_lab/observe.py",
+      "bytes": 4522,
+      "sha256": "f44de870115c1d90329c03308d3c0569ad67ad4750a58cc7e136df2de9e0f408"
+    },
+    {
+      "path": "src/tello_lab/perception.py",
+      "bytes": 3601,
+      "sha256": "be9efbf51e296a88603568f4301bdf557293011de5d16051cd92842cdd26e83a"
+    },
+    {
+      "path": "src/tello_lab/recording.py",
+      "bytes": 4417,
+      "sha256": "15c807550ebe137e074c8a1385fa88527357cd81e9667443c8e4dde221312170"
+    },
+    {
+      "path": "src/tello_lab/survey.py",
+      "bytes": 10638,
+      "sha256": "31a3e04e2a9a2f50ce1366cff704123fc808145664efc87a3eae6b441b924626"
+    },
+    {
+      "path": "src/tello_lab/video.py",
+      "bytes": 4398,
+      "sha256": "5562015bd549e846f3c6178a018003690b090e28ca6c22727697ebc5946b0ccc"
+    },
+    {
+      "path": "tests/test_config_cli.py",
+      "bytes": 3211,
+      "sha256": "1be45fc89e4bfd3f4ad529d02b6a516fed93ce63a4192df93bb6a8c48d87b634"
+    },
+    {
+      "path": "tests/test_flight.py",
+      "bytes": 6769,
+      "sha256": "162f3727fc76276e2bab7c4139f2ec5957559b9c71ca8197014e0bd49b901330"
+    },
+    {
+      "path": "tests/test_perception.py",
+      "bytes": 1407,
+      "sha256": "edbd6b9d74801939095174ed3f634b64912701909afae17906bb168c467ac68c"
+    },
+    {
+      "path": "tests/test_survey.py",
+      "bytes": 7995,
+      "sha256": "14846ef445f7ce04659725f7654207d884a6850b6fd84b747b5bf7dfcfdcb627"
+    },
+    {
+      "path": "uv.lock",
+      "bytes": 28862,
+      "sha256": "2b221f223949ce1689ef8eae8e286fbeca09468439b9f848ea6292a10f0ee1da"
+    }
+  ]
+}

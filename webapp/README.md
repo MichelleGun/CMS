@@ -10,6 +10,9 @@ video replays afterward.
 ```bash
 conda activate drones
 uvicorn main:app --app-dir path/to/CMS/webapp/backend --port 8000
+
+# or:
+# uvicorn main:app --app-dir "C:\Users\miche\OneDrive\Documents\Michelle\UTS\SPR_26\RL\ASS3\CMS\webapp\backend" --port 8000
 ```
 
 Then open `http://localhost:8000`. Stop it with Ctrl+C.
@@ -21,6 +24,28 @@ followed this session's build): `fastapi`, `uvicorn[standard]`, `psutil`.
 pip install fastapi "uvicorn[standard]" psutil
 ```
 
+## The "Real drone" panel
+
+The bottom panel watches a real Tello flying the onboard-camera hoop task
+(`hardware/onboard/`, which has its own README). It shows battery, temperature, height,
+ring lock, estimated range, forward travel and the live rc command, plus the drone's own
+camera with the detected ring drawn on it.
+
+**It cannot take off a real drone, by design.** `POST /api/drone/flights` accepts dry runs
+only; a real flight is started from a terminal by someone standing next to the cage, and
+the panel attaches to whichever flight is newest. A page left open in a forgotten tab, a
+double click or a reconnecting socket must not be able to spin propellers in another
+room. Every button in the panel either reads state or makes the drone safer: **Land now**
+and **Emergency stop**.
+
+Commands are flag files (`land.flag`, `kill.flag`, `camera_enabled.flag`) that the flight
+script polls each tick, the same mechanism the training camera toggle already uses. That
+is fail-safe in the direction that matters: if the backend dies no flag appears and the
+flight's own safety still lands the drone.
+
+The "Dry run" disclosure starts a simulated flight — no hardware is touched — which is
+the way to see the panel working before there is anything to watch.
+
 ## Layout
 
 ```
@@ -28,6 +53,11 @@ webapp/
   backend/     FastAPI app: REST API, WebSocket, serves the frontend and result videos
   frontend/    plain HTML/CSS/JS, Three.js and Chart.js loaded from a CDN, no build step
 ```
+
+The real-drone side mirrors the training side exactly: `drone_manager.py` next to
+`run_manager.py`, `drone_ws.py` next to `telemetry_ws.py`, `frontend/js/drone.js` next to
+the other modules. It reads what `hardware/onboard/fly_hoop.py` writes under
+`hardware/flights/<flight_id>/` and never imports djitellopy, OpenCV or the flight code.
 
 The backend never imports `stable_baselines3`/`pybullet`/`torch` itself. It only starts,
 stops and polls the training and replay scripts in `../scripts/` as subprocesses, and reads

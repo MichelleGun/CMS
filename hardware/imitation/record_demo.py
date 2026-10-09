@@ -2,14 +2,21 @@
 Demonstration recording and loading, in the simulator's own formats so one demo file can train
 (or fine-tune) the same policy the sim trains:
 
-    obs      (N, 75)  float32   exactly HoopFindAviary's observation
-    intent   (N, 4)   float32   what the operator / expert asked for: [dx, dy, dz, speed_fraction]
+    obs      (N, D)   float32   D = 75 for HoopFindAviary; onboard/spec.OBS_DIM for the
+                                onboard-camera traversal task
+    intent   (N, 4)   float32   what the operator / expert asked for
     executed (N, 4)   float32   what was actually commanded after geofence + speed ramp
     t        (N,)               seconds since the first sample
     episode  (N,)       int     episode index (one flight = one episode)
-    meta     JSON string        hoop, source, profile, speed_scale, reached, ...
+    meta     JSON string        obs_dim, task, obs_shape, hoop, source, profile, ...
 
 BC trains on `intent` by default: the human wanted that motion, even if the fence trimmed it.
+
+The observation width is a parameter, not a constant, because two different tasks record
+through this module: the simulator's 75-number state observation (where `intent` means
+[dx, dy, dz, speed_fraction]) and the onboard-camera task's feature vector (where it
+means four rc channels). `meta["task"]` and `meta["obs_shape"]` tell the trainer which it
+is holding, so it can pick the right loss and build a model with the right spaces.
 """
 import json
 import time
@@ -22,16 +29,33 @@ HW = Path(__file__).resolve().parents[1]
 DEMO_DIR = HW / "flights" / "demos"
 
 
+SIM_OBS_DIM = 75                 # HoopFindAviary; see common/constants.py OBS_DIM
+SIM_TASK = "sim_hoop"
+
+
 class DemoRecorder:
-    def __init__(self, meta: dict = None, episode=0):
+    def __init__(self, meta: dict = None, episode=0, obs_dim=SIM_OBS_DIM,
+                 task=SIM_TASK, obs_shape=None):
+        """obs_dim/task/obs_shape describe which task is being recorded.
+
+        obs_shape is the shape a model built for this task expects per sample: (1, 75)
+        for the simulator (BaseRLAviary returns a 2-D observation) and (OBS_DIM,) for the
+        onboard-camera task. It is stored so the trainer does not have to guess.
+        """
+        self.obs_dim = int(obs_dim)
         self.meta = dict(meta or {})
+        self.meta.setdefault("task", task)
+        self.meta.setdefault("obs_dim", self.obs_dim)
+        self.meta.setdefault("obs_shape", list(obs_shape) if obs_shape is not None
+                             else ([1, self.obs_dim] if self.obs_dim == SIM_OBS_DIM
+                                   else [self.obs_dim]))
         self.episode = episode
         self._obs, self._intent, self._exec, self._t, self._ep = [], [], [], [], []
         self._t0 = None
 
     def add(self, obs, intent, executed, t):
         o = np.asarray(obs, dtype=np.float32).reshape(-1)
-        if o.shape[0] != 75 or not np.all(np.isfinite(o)):
+        if o.shape[0] != self.obs_dim or not np.all(np.isfinite(o)):
             return False
         self._t0 = t if self._t0 is None else self._t0
         self._obs.append(o)
@@ -87,7 +111,17 @@ def mc_returns(obs: np.ndarray, episode: np.ndarray, gamma=0.99, reach_radius=0.
 
     reward = -|hoop - pos|, +10 when within reach_radius (HoopFindAviary._computeReward).
     Used only to warm up a critic before PPO fine-tuning; demos carry no stored reward.
+
+    Simulator-only: it reads obs[:, 72:75] as the hoop-minus-position vector, which only
+    exists in HoopFindAviary's 75-number observation. The onboard-camera task has no such
+    field and a different reward entirely (see onboard/gym_env.py), so this raises rather
+    than silently returning returns computed from unrelated columns.
     """
+    if obs.shape[1] != SIM_OBS_DIM:
+        raise ValueError(
+            f"mc_returns is specific to the simulator's {SIM_OBS_DIM}-number observation "
+            f"(it reads obs[:, 72:75] as hoop - position); got width {obs.shape[1]}. "
+            "For the onboard-camera task, warm the critic from its own env instead.")
     dist = np.linalg.norm(obs[:, 72:75], axis=1)
     r = -dist + 10.0 * (dist < reach_radius)
     G = np.zeros_like(r, dtype=np.float64)

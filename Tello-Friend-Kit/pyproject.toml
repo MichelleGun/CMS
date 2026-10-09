@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tello-flight-lab"
+version = "0.1.0"
+description = "Tello EDU connection, camera, telemetry, and supervised flight tests"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "djitellopy>=2.5.0,<3",
+    "opencv-python>=4.10,<5",
+    "numpy>=1.26,<3",
+]
+
+[project.scripts]
+tello-lab = "tello_lab.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [".cache", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.uv]
+package = true

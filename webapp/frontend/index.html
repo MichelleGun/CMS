@@ -157,6 +157,51 @@
         <video id="replay-video" controls hidden></video>
       </div>
 
+      <div class="panel" id="panel-drone">
+        <h2>Real drone</h2>
+        <div id="drone-head">
+          <div id="drone-pill" class="pill pill-idle">no flight</div>
+          <span id="drone-flight-id" class="note"></span>
+        </div>
+        <div id="drone-readout" class="readout">no flight recorded yet</div>
+
+        <label class="checkbox-row">
+          <input type="checkbox" id="drone-camera-toggle"> Show the drone's own view
+        </label>
+        <div id="drone-camera-view">
+          <img id="drone-camera-frame" alt="drone camera off" hidden>
+          <div id="drone-camera-placeholder">camera off</div>
+        </div>
+
+        <div class="button-row">
+          <button id="drone-land-btn" class="danger-btn" disabled>Land now</button>
+          <button id="drone-kill-btn" class="danger-btn" disabled>Emergency stop</button>
+        </div>
+        <div id="drone-note" class="note">
+          Real flights are started from a terminal next to the cage. This panel watches
+          one and can land it.
+        </div>
+
+        <details id="drone-dryrun">
+          <summary>Dry run (no drone)</summary>
+          <div class="field-row">
+            <label for="drone-mode">Controller</label>
+            <select id="drone-mode"></select>
+          </div>
+          <div class="field-row">
+            <label for="drone-profile">Drone behaviour</label>
+            <select id="drone-profile"></select>
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="drone-no-forward"> Align only, never move forward
+          </label>
+          <div class="button-row">
+            <button id="drone-dryrun-btn" class="secondary-btn">Start dry run</button>
+            <button id="drone-stop-btn" class="secondary-btn">Stop dry run</button>
+          </div>
+        </details>
+      </div>
+
     </aside>
   </main>
 
@@ -164,6 +209,7 @@
   <script src="js/scene3d.js"></script>
   <script src="js/controls.js"></script>
   <script src="js/chart.js"></script>
+  <script src="js/drone.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

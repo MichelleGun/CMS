@@ -14,6 +14,13 @@ SCRIPTS_DIR = CMS_DIR / "scripts"
 RESULTS_HOOP_DIR = CMS_DIR / "results" / "hoop"
 RUNS_DIR = RESULTS_HOOP_DIR / "runs"
 
+# The real-drone side. hardware/onboard/fly_hoop.py writes one directory per flight
+# under FLIGHTS_DIR, in the same spirit as RUNS_DIR: the folder IS the database, so
+# restarting the backend just re-reads it.
+HARDWARE_DIR = CMS_DIR / "hardware"
+FLIGHTS_DIR = HARDWARE_DIR / "flights"
+FLY_HOOP_SCRIPT = HARDWARE_DIR / "onboard" / "fly_hoop.py"
+
 sys.path.insert(0, str(SCRIPTS_DIR))
 import hoop_env  # noqa: E402  (local module, path set above)
 
@@ -36,6 +43,7 @@ ALGORITHMS = [
 ALGORITHM_IDS = {a["id"] for a in ALGORITHMS}
 
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
+FLIGHTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def bounds_ok(pos):

@@ -440,6 +440,8 @@
     showDraftPreview();
 
     RewardChart.init(document.getElementById("reward-chart"));
+    // The real-drone panel owns its own polling and socket, so it only needs starting.
+    Drone.init();
 
     startBtn.addEventListener("click", startTraining);
     stopBtn.addEventListener("click", stopTraining);

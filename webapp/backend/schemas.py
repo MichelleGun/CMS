@@ -42,3 +42,28 @@ class ReplayResponse(BaseModel):
 
 class CameraToggleRequest(BaseModel):
     enabled: bool
+
+
+# --- real drone (hardware/onboard/fly_hoop.py) ------------------------------
+
+class StartFlightRequest(BaseModel):
+    """dry_run defaults to True and the manager refuses anything else.
+
+    It is accepted as a field at all only so that an attempt to set it False gets a clear
+    explanation of where real flights are started from, rather than being silently ignored.
+    """
+    mode: Literal["expert", "policy", "hover"] = "expert"
+    profile: Literal["ideal", "typical", "harsh"] = "typical"
+    seed: int = 0
+    attempts: int = 1
+    no_forward: bool = False
+    no_commit: bool = False
+    max_travel: Optional[float] = None
+    max_airborne: float = 40.0
+    record: bool = False
+    model: Optional[str] = None
+    dry_run: bool = True
+
+
+class DroneCameraToggleRequest(BaseModel):
+    enabled: bool

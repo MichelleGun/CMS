@@ -1,0 +1,22 @@
+# Direct connection to the drone's TELLO-xxxxxx Wi-Fi.
+[drone]
+host = "192.168.10.1"
+
+# Project test limits; these are deliberately smaller than the SDK limits.
+[flight]
+minimum_battery_percent = 30
+abort_battery_percent = 20
+speed_cm_s = 20
+hover_seconds = 5.0
+square_side_cm = 50
+countdown_seconds = 5
+
+[telemetry]
+sample_hz = 5.0
+
+# Test enclosure: 2 m x 2 m x 2 m cage. Clearance is a project test margin.
+[cage]
+width_cm = 200
+length_cm = 200
+height_cm = 200
+clearance_cm = 30.0
