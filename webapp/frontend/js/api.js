@@ -34,18 +34,24 @@ const Api = {
     apiGet(`/api/runs/${encodeURIComponent(runId)}/replay/${encodeURIComponent(replayId)}?pov=${pov ? "true" : "false"}`),
   setCamera: (runId, enabled) => apiPost(`/api/runs/${encodeURIComponent(runId)}/camera`, { enabled }),
   cameraLatestUrl: (runId) => `/api/runs/${encodeURIComponent(runId)}/camera/latest.jpg?t=${Date.now()}`,
+  setRealtime: (runId, enabled) => apiPost(`/api/runs/${encodeURIComponent(runId)}/realtime`, { enabled }),
+  startShowcase: (runId, payload) => apiPost(`/api/runs/${encodeURIComponent(runId)}/showcase`, payload || {}),
+  showcaseCamUrl: (runId) => `/api/runs/${encodeURIComponent(runId)}/showcase/cam.jpg?t=${Date.now()}`,
 
-  openRunSocket(runId, { onTelemetry, onStatus, onRunEnded, onLog, onError } = {}) {
+  openRunSocket(runId, { onTelemetry, onStatus, onRunEnded, onLog, onShowcase, onError, onAny, onClose } = {}) {
     const ws = new WebSocket(`${WS_BASE}/ws/runs/${encodeURIComponent(runId)}`);
     ws.onmessage = (evt) => {
       let msg;
       try { msg = JSON.parse(evt.data); } catch (e) { return; }
+      if (onAny) onAny(msg);
       if (msg.type === "telemetry" && onTelemetry) onTelemetry(msg);
       else if (msg.type === "status" && onStatus) onStatus(msg);
       else if (msg.type === "run_ended" && onRunEnded) onRunEnded(msg);
       else if (msg.type === "log" && onLog) onLog(msg);
+      else if (msg.type === "showcase" && onShowcase) onShowcase(msg);
     };
     if (onError) ws.onerror = onError;
+    if (onClose) ws.onclose = onClose;
     return ws;
   },
 

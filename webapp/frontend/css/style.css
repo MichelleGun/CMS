@@ -163,7 +163,7 @@ h2 {
   font-size: 13px;
   margin-bottom: 8px;
 }
-.seed-row input, .field-row input, #algo-select {
+.seed-row input, .field-row input, #algo-select, #env-select {
   background: var(--bg-panel-raised);
   border: 1px solid var(--border);
   color: var(--text);
@@ -586,3 +586,30 @@ kbd {
 .history-frame { max-width: 100%; border-radius: 6px; margin-bottom: 12px; }
 
 .note:empty { display: none; }
+
+/* Environment tab: the canvas fills the right column */
+.col-main.env-view { padding: 0; }
+#env-wrap { position: relative; width: 100%; height: 100%; min-height: 360px; }
+#env-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* ---------------------------------------------------------- live run view (far view + POV) */
+#run-overlay { grid-template-rows: auto auto 1fr auto; }
+#overlay-hud { grid-column: 1; grid-row: 2; justify-self: start; align-self: start;
+  background: rgba(31, 31, 47, 0.85); font-size: 12px; line-height: 1.6; max-width: 520px; }
+#hud-source { color: var(--text-dim); }
+.hud-train { color: #3cc6ff; } .hud-show { color: #5cf08a; font-weight: bold; }
+#hud-line { font-family: Consolas, "Courier New", monospace; color: var(--text); }
+.hud-legend { color: var(--text-dim); font-size: 11px; }
+.hud-rt { font-size: 12px; margin: 2px 0; }
+.hud-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 3px 0 8px; }
+#overlay-terminal-card { grid-column: 1; grid-row: 4; max-height: 220px; background: rgba(31, 31, 47, 0.9); }
+#overlay-terminal-card.collapsed #overlay-terminal { display: none; }
+#overlay-terminal-toggle { cursor: pointer; margin: 0; }
+#overlay-terminal-card:not(.collapsed) #overlay-terminal-toggle { margin-bottom: 8px; }
+#overlay-side-card { grid-row: 2 / 4; }
+#overlay-stop-row { grid-column: 2; grid-row: 4; align-self: end; }
+#overlay-showcase-pane { display: flex; flex-direction: column; gap: 6px; }
+#showcase-status.ok { color: #5cf08a; } #showcase-status.bad { color: var(--accent-pink); }
+#env-readout { text-align: left; white-space: pre; overflow-x: auto; }
+#env-select { width: auto; max-width: 190px; }
+.duration-label { display: block; margin: 10px 0 4px; }

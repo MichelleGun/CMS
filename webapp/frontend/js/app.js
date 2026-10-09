@@ -60,6 +60,30 @@
   const overlayReplayStatus = document.getElementById("overlay-replay-status");
   const overlayReplayVideo = document.getElementById("overlay-replay-video");
   const MAX_LOG_LINES = 500;
+  const envSelect = document.getElementById("env-select");
+  const netOptions = document.getElementById("net-options");
+  const hudSource = document.getElementById("hud-source");
+  const hudLine = document.getElementById("hud-line");
+  const showcaseBtn = document.getElementById("showcase-btn");
+  const showcaseStatus = document.getElementById("showcase-status");
+  const povSource = document.getElementById("pov-source");
+  const realtimeToggle = document.getElementById("realtime-toggle");
+
+  // Live far-view state for the run in view
+  const live = { lastMsgAt: 0, simT: 0, ep: null, epStart: null, episodes: 0, passes: 0, lastT: 0, evalSuccess: null,
+                 showcase: false, showcaseTimer: null, showcaseTarget: null };
+
+  // Load a camera frame off-screen and swap it in only when complete; a frame that fails
+  // (mid-write, not there yet) just keeps the previous one on screen.
+  const frameLoading = new WeakMap();
+  function swapFrame(img, url) {
+    if (frameLoading.get(img)) return;            // previous request still in flight
+    const pre = new Image();
+    frameLoading.set(img, true);
+    pre.onload = () => { img.src = pre.src; frameLoading.set(img, false); };
+    pre.onerror = () => { frameLoading.set(img, false); };
+    pre.src = url;
+  }
 
   function fmt(n, d = 2) { return (n === null || n === undefined) ? "-" : Number(n).toFixed(d); }
 
@@ -87,18 +111,43 @@
 
   // ------------------------------------------------------------- ui mode
 
+  function untilStopped() {
+    const el = document.querySelector('input[name="duration"]:checked');
+    return !!el && el.value === "until";
+  }
+
+  function applyDuration() {
+    const until = untilStopped();
+    document.getElementById("until-note").hidden = !until;
+    const ts = document.getElementById("timesteps-input");
+    if (until) ts.disabled = true;
+    else if (!startBtn.disabled) ts.disabled = false;
+  }
+
+  function stepsText(r) {
+    const n = (r.current_timestep || 0).toLocaleString();
+    if (r.until_stopped) {
+      const h = r.elapsed_sec ? ` (${(r.elapsed_sec / 3600).toFixed(1)} h)` : "";
+      return `${n} / \u221e${h}`;
+    }
+    return `${n} / ${r.total_timesteps === null || r.total_timesteps === undefined ? "?" : r.total_timesteps.toLocaleString()}`;
+  }
+
   function applyPanelState() {
     const activeRun = runs.find((r) => r.status === "training");
-    startBtn.disabled = !!activeRun || uiMode !== "setup";
-    Controls.setPanelActive(uiMode === "setup" && !activeRun);
+    Controls.setPanelActive(uiMode === "setup" && !activeRun, !activeRun && uiMode !== "starting");
+    startBtn.disabled = !!activeRun || uiMode === "starting";
+    applyDuration();
   }
 
   function setUiMode(mode) {
     uiMode = mode;
-    runScrim.classList.toggle("visible", mode !== "setup");
-    sceneCanvas.classList.toggle("dimmed", mode !== "setup");
+    runScrim.classList.toggle("visible", mode === "starting");
+    sceneCanvas.classList.toggle("dimmed", mode === "starting");
     runLoading.hidden = mode !== "starting";
     runOverlay.hidden = mode !== "run";
+    // the run overlay's right column covers ~340 px of the viewport: keep the cage in the clear part
+    Scene3D.setViewShift(mode === "run" ? 170 : 0);
     if (mode === "run") {
       setOverlayView("newest");
     } else if (overlayReplayPollTimer) {
@@ -125,9 +174,11 @@
   function backToSetup() {
     autoSelectEnabled = false;
     viewedRunId = null;
-    if (ws) { ws.close(); ws = null; }
+    closeLiveSocket();
     stopCameraPolling();
     cameraToggle.checked = false;
+    endShowcaseView();
+    Scene3D.clearTrail();
     renderRunList();
     showDraftPreview();
     setUiMode("setup");
@@ -203,7 +254,10 @@
     viewBestBtn.disabled = !bestRunId;
     applyPanelState();
 
-    if (!viewedRunId && currentRunId && autoSelectEnabled) selectRun(currentRunId);
+    // On load, jump into a run only if one is actually training; otherwise stay in setup so
+    // the Training panel is ready to use (finished runs are one click away in the list).
+    const trainingRun = runs.find((r) => r.status === "training");
+    if (!viewedRunId && trainingRun && autoSelectEnabled) selectRun(trainingRun.run_id);
     if (bestRunId) {
       Api.getRun(bestRunId).then((r) => {
         if (r.curve) RewardChart.setBestCurve(r.curve.timesteps, r.curve.mean_reward);
@@ -220,28 +274,29 @@
         (r.status === "training" ? " active-training" : "");
       const best = r.best_eval_reward !== null && r.best_eval_reward !== undefined
         ? r.best_eval_reward.toFixed(1) : "-";
-      row.innerHTML = `<span class="algo-badge">${r.algo}</span><br>` +
-        `${r.status} &middot; ${r.current_timestep}/${r.total_timesteps}<br>` +
+      row.innerHTML = `<span class="algo-badge">${r.algo}</span> <span class="note">${r.env || ""}</span><br>` +
+        `${r.status} &middot; ${stepsText(r)}<br>` +
         `best ${best}`;
       row.addEventListener("click", () => selectRun(r.run_id));
       runListEl.appendChild(row);
     });
   }
 
-  // 20 retries at 500ms = 10s: importing torch/pybullet in the training
+  // 80 retries at 500ms = 40s: importing torch/pybullet in the training
   // subprocess before it writes its first meta.json can genuinely take
   // several seconds (observed ~5-8s cold start), so this needs real slack,
   // not just a couple of quick retries.
-  const SELECT_RUN_MAX_RETRIES = 20;
+  const SELECT_RUN_MAX_RETRIES = 80;
 
   function selectRun(runId, retriesLeft = SELECT_RUN_MAX_RETRIES) {
     if (viewedRunId === runId && retriesLeft === SELECT_RUN_MAX_RETRIES) return;
     if (retriesLeft === SELECT_RUN_MAX_RETRIES) {
       viewedRunId = runId;
       renderRunList();
-      if (ws) { ws.close(); ws = null; }
+      closeLiveSocket();
       RewardChart.clearCurrent();
       clearTerminal();
+      resetLiveView();
       replayStatusEl.textContent = "";
       replayVideo.hidden = true;
       replayViewToggle.hidden = true;
@@ -249,12 +304,23 @@
     }
 
     Api.getRun(runId).then((r) => {
-      const status = (r.meta.final_status) || (r.live_status && r.live_status.status) || "unknown";
+      const status = r.status || (r.meta.final_status) || (r.live_status && r.live_status.status) || "unknown";
       isViewedRunTraining = status === "training";
       setStatusPill(status);
       if (r.curve) RewardChart.setCurrentCurve(r.curve.timesteps, r.curve.mean_reward);
       if (r.meta.target_override) Scene3D.setHoop(r.meta.target_override);
-      if (isViewedRunTraining) openLiveSocket(runId);
+      openLiveSocket(runId);              // also carries showcase episodes for finished runs
+      realtimeToggle.checked = false;
+      if (isViewedRunTraining) Api.setRealtime(runId, false).catch(() => {});
+      if (isViewedRunTraining && r.meta.env === "net") {
+        // the drone POV is what you come here to see: turn it on for live net runs
+        cameraToggle.checked = true;
+        onCameraToggle();
+      }
+      showcaseStatus.className = "note";
+      showcaseStatus.textContent = isViewedRunTraining
+        ? "Plays one real-time episode with what the policy has learned so far (no exploration). Available after the first evaluation."
+        : "Plays one real-time episode of this run's latest saved policy.";
       setUiMode("run");
     }).catch(() => {
       // The training subprocess may not have written meta.json yet (it
@@ -268,14 +334,38 @@
     });
   }
 
+  // The far view depends on this one socket for hours, so it must survive a dropped connection
+  // or a backend restart: reconnect while the same run is in view, and reopen it if it goes
+  // quiet for longer than an evaluation pause. The drone POV is polled separately over HTTP.
+  const sock = { wanted: null, lastMsgAt: 0, retryMs: 1000, timer: null };
+
+  function closeLiveSocket() {
+    sock.wanted = null;
+    if (sock.timer) { clearTimeout(sock.timer); sock.timer = null; }
+    if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  }
+
   function openLiveSocket(runId) {
+    if (ws) { ws.onclose = null; ws.close(); ws = null; }
+    sock.wanted = runId;
+    sock.lastMsgAt = Date.now();
     ws = Api.openRunSocket(runId, {
-      onTelemetry: (msg) => {
-        Scene3D.setDroneTarget(msg.pos, msg.rpy);
-        Scene3D.setHoop(msg.target);
+      onAny: () => { sock.lastMsgAt = Date.now(); sock.retryMs = 1000; },
+      onClose: () => {
+        ws = null;
+        if (sock.wanted !== runId) return;              // closed on purpose
+        if (uiMode === "run" && !live.showcase) hudLine.textContent = "reconnecting to the live view\u2026";
+        sock.timer = setTimeout(() => { if (sock.wanted === runId) openLiveSocket(runId); }, sock.retryMs);
+        sock.retryMs = Math.min(5000, sock.retryMs * 2);
       },
+      onTelemetry: onTrainTelemetry,
+      onShowcase: onShowcaseMsg,
       onStatus: (msg) => {
         setStatusPill("training");
+        if (msg.latest_success_rate !== undefined && msg.latest_success_rate !== null) {
+          live.evalSuccess = msg.latest_success_rate;
+          renderHud();
+        }
         RewardChart.appendCurrentPoint(msg.current_timestep, msg.latest_eval_reward);
         const prevBest = lastBestSeen[runId];
         if (msg.best_eval_reward !== undefined && msg.best_eval_reward !== null) {
@@ -293,6 +383,132 @@
     });
   }
 
+  // ------------------------------------------------- live far view + HUD
+
+  function resetLiveView() {
+    live.ep = null; live.epStart = null; live.episodes = 0; live.passes = 0;
+    live.evalSuccess = null; live.lastT = 0;
+    endShowcaseView();
+    Scene3D.clearTrail();
+    hudLine.textContent = "waiting for the first episode\u2026";
+  }
+
+  function renderHud(extra) {
+    if (live.showcase) return;
+    const t = live.epStart !== null ? live.simT.toFixed(1) : "-";      // simulated seconds
+    const sr = live.evalSuccess === null ? "-" : `${Math.round(live.evalSuccess * 100)}%`;
+    hudLine.textContent =
+      `episode ${live.ep === null ? "-" : live.ep + 1}  \u00b7  ${t} s  \u00b7  ` +
+      `passes seen ${live.passes}/${live.episodes}  \u00b7  eval success ${sr}  \u00b7  step ${live.lastT}` +
+      (extra ? `  \u00b7  ${extra}` : "");
+  }
+
+  function eventMarks(msg, key) {
+    if (msg.net_contact) Scene3D.markEvent(msg.pos, "net", key);
+    if (msg.rim_contact) Scene3D.markEvent(msg.pos, "rim", key);
+  }
+
+  function onTrainTelemetry(msg) {
+    // a record older than one already shown (a replay after a reconnect) would jump the drone back
+    if (msg.t !== undefined && msg.t < live.lastT) return;
+    live.lastMsgAt = Date.now();
+    live.lastT = msg.t || live.lastT;
+    if (msg.step !== undefined) live.simT = msg.step / 30;
+    if (msg.ep !== undefined && msg.ep !== live.ep) {
+      if (live.ep !== null) Scene3D.newEpisode("train");
+      live.ep = msg.ep;
+      live.epStart = Date.now();
+    }
+    if (live.showcase) return;          // the far view is showing the showcase episode
+    Scene3D.setDroneTarget(msg.pos, msg.rpy);
+    Scene3D.setHoop(msg.target, msg.hoop_normal, msg.hoop_radius);
+    Scene3D.addTrailPoint(msg.pos, "train");
+    eventMarks(msg, "train");
+    if (msg.done) {
+      live.episodes += 1;
+      if (msg.success) { live.passes += 1; Scene3D.markEvent(msg.target, "pass", "train"); }
+      renderHud(msg.success ? "PASSED THROUGH" : "episode over");
+    } else {
+      renderHud();
+    }
+  }
+
+  // ----------------------------------------------------------- showcase
+
+  function beginShowcaseView() {
+    live.showcase = true;
+    Scene3D.clearTrail("showcase");
+    Scene3D.setTrailVisible("train", false);
+    Scene3D.setTrailVisible("showcase", true);
+    showcaseStatus.className = "note";
+    showcaseStatus.textContent = realtimeToggle.checked
+      ? "playing one episode in real time\u2026" : "playing one episode at full speed\u2026";
+    Scene3D.setDroneColor(Scene3D.droneColors.showcase);
+    hudSource.innerHTML = 'Far view &middot; <span class="hud-show">current policy (' +
+      (realtimeToggle.checked ? "real time" : "full speed") + ')</span>';
+    povSource.textContent = "current policy";
+    if (live.showcaseTimer) clearInterval(live.showcaseTimer);
+    live.showcaseTimer = setInterval(() => {
+      if (!viewedRunId) return;
+      overlayCameraFrame.hidden = false;
+      overlayCameraPlaceholder.hidden = true;
+      swapFrame(overlayCameraFrame, Api.showcaseCamUrl(viewedRunId));
+    }, 200);
+  }
+
+  function endShowcaseView() {
+    if (live.showcaseTimer) clearInterval(live.showcaseTimer);
+    live.showcaseTimer = null;
+    if (!live.showcase) return;
+    live.showcase = false;
+    Scene3D.setDroneColor(Scene3D.droneColors.train);
+    Scene3D.setTrailVisible("showcase", false);
+    Scene3D.setTrailVisible("train", true);
+    hudSource.innerHTML = 'Far view &middot; <span class="hud-train">training env (exploring)</span>';
+    povSource.textContent = "training env";
+    if (!cameraPollTimer) { overlayCameraFrame.hidden = true; overlayCameraPlaceholder.hidden = false; }
+    showcaseBtn.disabled = false;
+  }
+
+  function onShowcaseMsg(msg) {
+    if (msg.summary) {
+      const passed = msg.success;
+      showcaseStatus.className = passed ? "note ok" : "note bad";
+      showcaseStatus.textContent = passed
+        ? `Passed through the ring in ${msg.duration_s} s (net bumps: ${msg.net_hits}, rim hits: ${msg.rim_hits}).`
+        : `Did not pass (${msg.ended} after ${msg.duration_s} s; net bumps: ${msg.net_hits}, rim hits: ${msg.rim_hits}).`;
+      if (passed && live.showcaseTarget) Scene3D.markEvent(live.showcaseTarget, "pass", "showcase");
+      hudLine.textContent = showcaseStatus.textContent;
+      // keep the result on screen for a moment, then go back to the training view
+      setTimeout(endShowcaseView, 4000);
+      return;
+    }
+    if (!live.showcase) beginShowcaseView();
+    live.showcaseLastAt = Date.now();
+    live.showcaseTarget = msg.target;
+    Scene3D.setDroneTarget(msg.pos, msg.rpy);
+    Scene3D.setHoop(msg.target, msg.hoop_normal, msg.hoop_radius);
+    Scene3D.addTrailPoint(msg.pos, "showcase");
+    eventMarks(msg, "showcase");
+    hudLine.textContent = `current policy  \u00b7  ${(msg.step / 30).toFixed(1)} s  \u00b7  passes ${msg.passes || 0}`;
+  }
+
+  async function startShowcase() {
+    if (!viewedRunId) return;
+    showcaseBtn.disabled = true;
+    showcaseStatus.className = "note";
+    showcaseStatus.textContent = "loading the policy (10-30 s while training is running)\u2026";
+    try {
+      await Api.startShowcase(viewedRunId, { variant: "latest", realtime: realtimeToggle.checked });
+      // re-enable if nothing arrives (e.g. the process failed to start)
+      setTimeout(() => { if (!live.showcase) showcaseBtn.disabled = false; }, 60000);
+    } catch (e) {
+      showcaseStatus.className = "note bad";
+      showcaseStatus.textContent = "could not start: " + e.message;
+      showcaseBtn.disabled = false;
+    }
+  }
+
   // ------------------------------------------------------------- training
 
   async function startTraining() {
@@ -300,7 +516,12 @@
     const payload = {
       algo,
       timesteps: parseInt(document.getElementById("timesteps-input").value, 10) || 1000000,
+      until_stopped: untilStopped(),
       n_envs: parseInt(document.getElementById("nenvs-input").value, 10) || 4,
+      env: envSelect.value,
+      ring_jitter: document.getElementById("ring-jitter-toggle").checked ? 1.0 : 0.0,
+      radius_start: document.getElementById("radius-curriculum-toggle").checked ? 1.5 : 1.0,
+      sway_deg: parseFloat(document.getElementById("train-sway-deg").value),
     };
     if (randomizeToggle.checked) {
       payload.seed = parseInt(seedInput.value, 10) || 0;
@@ -323,6 +544,9 @@
 
   async function stopTraining() {
     if (!viewedRunId) return;
+    const run = runs.find((r) => r.run_id === viewedRunId);
+    if (run && run.until_stopped &&
+        !confirm("Stop this until-stopped training run? The policy learned so far is saved.")) return;
     stopBtn.disabled = true;
     try {
       await Api.stopRun(viewedRunId);
@@ -342,9 +566,9 @@
     cameraPollTimer = setInterval(() => {
       if (!viewedRunId) return;
       const url = Api.cameraLatestUrl(viewedRunId);
-      cameraFrame.src = url;
-      overlayCameraFrame.src = url;
-    }, 700);
+      swapFrame(cameraFrame, url);
+      if (!live.showcase) swapFrame(overlayCameraFrame, url);
+    }, 200);
   }
 
   function stopCameraPolling() {
@@ -443,6 +667,7 @@
     // The other tabs own their own polling and sockets, so they only need starting.
     Tabs.init();
     Drone.init();
+    EnvView.init();
     Imitation.init();
     History.init();
     // A live flight is visible from every tab, so it is never out of sight.
@@ -455,7 +680,46 @@
     });
 
     startBtn.addEventListener("click", startTraining);
+    showcaseBtn.addEventListener("click", startShowcase);
+    // Training pauses while the policy is evaluated (10 episodes on a separate env, every 20k
+    // steps): say so, rather than letting the far view look frozen.
+    setInterval(() => {
+      // socket went quiet for longer than any evaluation pause: reopen it
+      if (ws && sock.wanted && isViewedRunTraining && Date.now() - sock.lastMsgAt > 45000) {
+        sock.lastMsgAt = Date.now();
+        ws.close();                                     // onClose reconnects
+      }
+      // a showcase that stopped sending (its process died) must not hold the far view forever
+      if (live.showcase && live.showcaseLastAt && Date.now() - live.showcaseLastAt > 15000) {
+        endShowcaseView();
+      }
+    }, 5000);
+    setInterval(() => {
+      // (no socket = reconnecting: its own message is on the HUD)
+      if (uiMode !== "run" || !isViewedRunTraining || live.showcase || !live.lastMsgAt || !ws) return;
+      if (Date.now() - live.lastMsgAt > 2500) {
+        hudLine.textContent = `evaluating the current policy (training paused for a few seconds)\u2026  \u00b7  step ${live.lastT}`;
+      }
+    }, 1000);
+    realtimeToggle.addEventListener("change", () => {
+      // paces a live training run right away; a showcase picks the setting up when started
+      if (viewedRunId && isViewedRunTraining) {
+        Api.setRealtime(viewedRunId, realtimeToggle.checked).catch(() => {});
+      }
+      if (!live.showcase) {
+        hudSource.innerHTML = 'Far view &middot; <span class="hud-train">training env (' +
+          (realtimeToggle.checked ? "real time" : "full speed") + ', exploring)</span>';
+      }
+    });
+    document.getElementById("overlay-terminal-toggle").addEventListener("click", () => {
+      document.getElementById("overlay-terminal-card").classList.toggle("collapsed");
+    });
+    envSelect.addEventListener("change", () => {
+      netOptions.hidden = envSelect.value !== "net";
+      Controls.setEnvMode(envSelect.value);
+    });
     stopBtn.addEventListener("click", stopTraining);
+    document.querySelectorAll('input[name="duration"]').forEach((el) => el.addEventListener("change", applyDuration));
     cameraToggle.addEventListener("change", onCameraToggle);
     viewNewestBtn.addEventListener("click", () => setOverlayView("newest"));
     viewBestBtn.addEventListener("click", () => setOverlayView("best"));

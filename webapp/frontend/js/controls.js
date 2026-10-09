@@ -12,6 +12,7 @@ const Controls = (() => {
   const STEP = 0.08;
   let onChangeCb = null;
   let panelActive = true;
+  let envMode = "net";        // net: the drone always starts on the floor; the hoop is the ring centre
 
   function halfXY() {
     return [bounds.room[0] / 2 - bounds.xyMargin, bounds.room[1] / 2 - bounds.xyMargin];
@@ -21,7 +22,15 @@ const Controls = (() => {
 
   function clampStart(p) {
     const [hx, hy] = halfXY();
-    return [clamp(p[0], -hx, hx), clamp(p[1], -hy, hy), clamp(p[2], 0.05, bounds.room[2] - 0.05)];
+    const z = envMode === "net" ? bounds.startZ : clamp(p[2], 0.05, bounds.room[2] - 0.05);
+    return [clamp(p[0], -hx, hx), clamp(p[1], -hy, hy), z];
+  }
+
+  let legacyZRange = [0.3, 1.6], netZRange = [1.0, 1.2];
+  function setEnvMode(mode) {
+    envMode = mode;
+    bounds.zRange = mode === "net" ? netZRange : legacyZRange;
+    resetCenter();
   }
 
   function clampTarget(p) {
@@ -41,8 +50,13 @@ const Controls = (() => {
   }
 
   function resetCenter() {
-    draftStart = [0, 0, bounds.startZ];
-    draftTarget = [0.5, 0.5, (bounds.zRange[0] + bounds.zRange[1]) / 2];
+    if (envMode === "net") {
+      draftStart = [-0.5, -0.4, bounds.startZ];              // on the floor, clear of the ring
+      draftTarget = bounds.hoopCentre ? bounds.hoopCentre.slice() : [0, 0, 1.2];
+    } else {
+      draftStart = [0, 0, 0.1];
+      draftTarget = [0.5, 0.5, 0.95];
+    }
     emitChange();
   }
 
@@ -51,16 +65,24 @@ const Controls = (() => {
   }
 
   function setBounds(cfg) {
-    bounds = { room: cfg.room, xyMargin: cfg.xy_margin, zRange: cfg.z_range, startZ: cfg.start_z };
+    bounds = { room: cfg.room, xyMargin: cfg.xy_margin, zRange: cfg.z_range, startZ: cfg.start_z,
+               hoopCentre: cfg.hoop ? cfg.hoop.centre : null };
+    legacyZRange = [0.3, 1.6];
+    netZRange = cfg.z_range;
     resetCenter();
   }
 
-  function setPanelActive(active) {
-    panelActive = active;
-    document.querySelectorAll(
-      "#panel-position input, #panel-position button, " +
-      "#panel-training input, #panel-training select, #panel-training button"
-    ).forEach((el) => { el.disabled = !active; });
+  // positionActive: the start-position panel (setup only). trainingActive: the Training panel,
+  // usable whenever no run is training, even while a finished run is in view.
+  function setPanelActive(positionActive, trainingActive = positionActive) {
+    panelActive = positionActive;
+    document.querySelectorAll("#panel-position input, #panel-position button")
+      .forEach((el) => { el.disabled = !positionActive; });
+    document.querySelectorAll("#panel-training input, #panel-training select, #panel-training button")
+      .forEach((el) => { el.disabled = !trainingActive; });
+    const seed = document.getElementById("seed-input");
+    const rnd = document.getElementById("randomize-toggle");
+    if (seed && rnd && positionActive) seed.disabled = !rnd.checked;
   }
 
   function wireDom() {
@@ -102,5 +124,5 @@ const Controls = (() => {
 
   function onChange(cb) { onChangeCb = cb; }
 
-  return { init, getDraft, onChange, setPanelActive };
+  return { init, getDraft, onChange, setPanelActive, setEnvMode };
 })();

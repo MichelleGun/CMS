@@ -1,7 +1,7 @@
-// Hash-based tabs: #sim, #drone, #imitation, #history. No router, no build step.
+// Hash-based tabs: #sim, #env, #drone, #imitation, #history. No router, no build step.
 // Pages are <main> elements; the simulator page is #app-main, the others #tab-<name>.
 const Tabs = (() => {
-  const NAMES = ["sim", "drone", "imitation", "history"];
+  const NAMES = ["sim", "env", "drone", "imitation", "history"];
   const listeners = [];
   let current = "sim";
 

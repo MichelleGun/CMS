@@ -19,9 +19,14 @@ class StartRunRequest(BaseModel):
     start_pos: Optional[Position] = None
     target_pos: Optional[Position] = None
     timesteps: int = 1_000_000
+    until_stopped: bool = False     # ignore timesteps: train until Stop (overnight)
     n_envs: int = 4
-    eval_freq: int = 2000
+    eval_freq: int = 5000           # per env: with 4 envs, one evaluation every 20k timesteps
     n_eval_episodes: int = 10
+    env: Literal["net", "legacy"] = "net"     # net = 2x2x2 net + ring (hoop_net_env.py)
+    ring_jitter: float = Field(1.0, ge=0.0, le=2.0)
+    radius_start: float = Field(1.5, ge=1.0, le=3.0)
+    sway_deg: float = Field(20.0, ge=0.0, le=45.0)   # net env: largest ring swing about its rope knot
 
 
 class StartRunResponse(BaseModel):
@@ -33,6 +38,16 @@ class ReplayRequest(BaseModel):
     variant: Literal["current", "best"] = "current"
     episodes: int = 3
     pov: bool = False
+
+
+class ShowcaseRequest(BaseModel):
+    variant: Literal["latest", "best"] = "latest"
+    seed: Optional[int] = None
+    realtime: bool = False          # False = play as fast as possible
+
+
+class RealtimeToggleRequest(BaseModel):
+    enabled: bool
 
 
 class ReplayResponse(BaseModel):

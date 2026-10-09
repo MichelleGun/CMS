@@ -10,6 +10,7 @@ BACKEND_DIR = Path(__file__).resolve().parent
 WEBAPP_DIR = BACKEND_DIR.parent
 CMS_DIR = WEBAPP_DIR.parent
 FRONTEND_DIR = WEBAPP_DIR / "frontend"
+ASSETS_DIR = CMS_DIR / "assets"
 SCRIPTS_DIR = CMS_DIR / "scripts"
 RESULTS_HOOP_DIR = CMS_DIR / "results" / "hoop"
 RUNS_DIR = RESULTS_HOOP_DIR / "runs"
@@ -22,13 +23,32 @@ FLIGHTS_DIR = HARDWARE_DIR / "flights"
 FLY_HOOP_SCRIPT = HARDWARE_DIR / "onboard" / "fly_hoop.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
-import hoop_env  # noqa: E402  (local module, path set above)
+import hoop_net_env as hoop_env  # noqa: E402  (local module, path set above)
 
 ROOM = hoop_env.ROOM.tolist()
 XY_MARGIN = hoop_env.XY_MARGIN
 Z_RANGE = list(hoop_env.Z_RANGE)
 START_Z = hoop_env.START_Z
 REACH_RADIUS = hoop_env.REACH_RADIUS
+
+# Net + ring geometry for the dashboard's 3D views (the same HoopSpec the training env uses).
+_SPEC = hoop_env.DEFAULT_SPEC
+HOOP_SPEC = {
+    "centre": list(_SPEC.centre),
+    "inner_radius": _SPEC.inner_radius,
+    "tube_radius": _SPEC.tube_radius,
+    "normal_yaw_deg": _SPEC.normal_yaw_deg,
+    "normal_tilt_deg": _SPEC.normal_tilt_deg,
+    "centre_jitter": list(_SPEC.centre_jitter),
+    "yaw_jitter_deg": _SPEC.yaw_jitter_deg,
+    "tilt_jitter_deg": _SPEC.tilt_jitter_deg,
+    "radius_jitter_frac": _SPEC.radius_jitter_frac,
+    "drone_radius": _SPEC.drone_radius,
+    "approach_dist": _SPEC.approach_dist,
+    "sway_tilt_deg": _SPEC.sway_tilt_deg,
+    "sway_top_amp": _SPEC.sway_top_amp,
+    "sway_period_s": list(_SPEC.sway_period_s),
+}
 
 # (id, label, env action variant). "continuous_vel" feeds HoopFindAviary's own
 # VEL action directly; "discrete_vel" wraps it with HoopFindDiscreteVel (see

@@ -1,5 +1,25 @@
 # Progress log
 
+## Done (2026-10-10)
+
+- **The ring now swings about the rope knot at its top, and the swing is adjustable.** The noodle hangs from a
+  rope tied to its top, so `HoopNetAviary._update_ring` no longer slides the ring rigidly: the knot
+  (`ring_knot`) only drifts a little downwind (`sway_top_amp`, 2 cm at 20°) and the ring rotates about it,
+  so the bottom swings furthest (at the 20° default: centre ±8 cm, bottom ±14 cm). The swing is set with
+  `sway_deg` (constructor arg, `set_sway_deg()`, `--sway-deg` on `train_hoop_multi.py` / `showcase_hoop.py` /
+  `replay_hoop.py` / `fly_hoop_demo.py`) and recorded in each run's `meta.json`. On the dashboard it is
+  a "Max swing" slider on the Environment tab (live preview) and in the Training panel (sent as `sway_deg`).
+  The two sliders stay in sync. `HoopSpec.sway_amp` has been replaced by `sway_tilt_deg` (20) and
+  `sway_top_amp`.
+- **Sim ring now matches the scanned noodle, sways in the wind, and is blue.** `scripts/measure_scan_hoop.py`
+  fits the blue texels of the phone scan (placed exactly as the dashboard overlays it): centre (+0.04, +0.07,
+  1.29) m, face turned −29° and leaning 18° down, tube-centre radius 0.180 m (the real 0.18 m, so the overlay
+  scale is right). `HoopSpec` uses that pose (`Z_RANGE` follows it). `HoopNetAviary` gained live wind
+  (`wind=1.0`, `set_wind()`): per-episode wind direction/gust/period, the ring swings ≤6 cm and leans ≤5°, and a
+  rim hit shoves it (damped spring back, ≤15 cm). The observation carries the live pose. All sim rings
+  (PyBullet, dashboard, scan viewer) are blue; the Environment tab has a "Wind sway" preview.
+  Note: the tape-measured height in `hardware/onboard/README.md` is 1.20 m; the scan says 1.29 m.
+
 ## Done (2026-10-06)
 
 - **Tello hardware bridge (`hardware/`)** so the sim-trained policy, keyboard flying and imitation learning can run on

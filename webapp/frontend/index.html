@@ -4,9 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hoop Finder Dashboard</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=11">
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -14,6 +15,7 @@
     <h1>Hoop Finder</h1>
     <nav id="tabs">
       <button class="tab-btn" data-tab="sim" type="button">Simulator</button>
+      <button class="tab-btn" data-tab="env" type="button">Environment</button>
       <button class="tab-btn" data-tab="drone" type="button">Drone</button>
       <button class="tab-btn" data-tab="imitation" type="button">Imitation</button>
       <button class="tab-btn" data-tab="history" type="button">History</button>
@@ -50,15 +52,34 @@
 
         <div id="best-toast" class="toast" hidden>New best found!</div>
 
-        <div id="overlay-terminal-card" class="overlay-card">
-          <h3>Training log</h3>
+        <div id="overlay-hud" class="overlay-card">
+          <div id="hud-source">Far view &middot; <span class="hud-train">training env (exploring)</span></div>
+          <div id="hud-line">waiting for the first episode&hellip;</div>
+          <label class="checkbox-row hud-rt" title="Off: training and 'Watch current policy' run at full speed. On: both are slowed to real speed so you can follow the flight.">
+            <input type="checkbox" id="realtime-toggle"> Real-time (slower: paces training and the policy episode to real speed)</label>
+          <div class="hud-legend">
+            <span class="dot" style="background:#3cc6ff"></span> route
+            <span class="dot" style="background:#ff3c68"></span> net bump
+            <span class="dot" style="background:#ffa040"></span> rim hit
+            <span class="dot" style="background:#5cf08a"></span> passed through
+          </div>
+        </div>
+
+        <div id="overlay-terminal-card" class="overlay-card collapsed">
+          <h3 id="overlay-terminal-toggle">Training log <span class="note">(click to show/hide)</span></h3>
           <pre id="overlay-terminal"></pre>
         </div>
 
         <div id="overlay-side-card" class="overlay-card">
+          <div id="overlay-showcase-pane">
+            <h3>Current policy</h3>
+            <button id="showcase-btn" class="primary-btn" type="button">Watch current policy</button>
+            <div id="showcase-status" class="note">Plays one real-time episode with what the policy has
+              learned so far (no exploration). Available after the first evaluation.</div>
+          </div>
           <div id="overlay-camera-pane">
-            <h3>Drone camera</h3>
-            <img id="overlay-camera-frame" alt="drone camera off" hidden>
+            <h3>Drone POV <span id="pov-source" class="note">training env</span></h3>
+            <img id="overlay-camera-frame" alt="" hidden>
             <div id="overlay-camera-placeholder" class="note">camera off</div>
           </div>
           <div id="overlay-replay-pane" hidden>
@@ -69,7 +90,8 @@
         </div>
 
         <div id="overlay-stop-row">
-          <button id="stop-btn" class="danger-btn" type="button" disabled>Stop</button>
+          <button id="stop-btn" class="danger-btn" type="button" disabled
+                  title="Stops training and saves the final policy (final_model.zip)">Stop</button>
         </div>
       </div>
     </section>
@@ -108,16 +130,37 @@
 
       <div class="panel" id="panel-training">
         <h2>Training</h2>
+        <label for="env-select">Environment</label>
+        <select id="env-select">
+          <option value="net" selected>Net + ring (real cage)</option>
+          <option value="legacy">Legacy: reach a point</option>
+        </select>
+        <div id="net-options">
+          <label class="checkbox-row"><input type="checkbox" id="ring-jitter-toggle" checked>
+            Ring moves / turns a little each episode</label>
+          <label class="checkbox-row"><input type="checkbox" id="radius-curriculum-toggle" checked>
+            Wider ring at first (shrinks to real size)</label>
+          <div class="field-row"><label>Ring swing (max) <span class="sway-deg-val">20&deg;</span></label>
+            <input type="range" id="train-sway-deg" class="sway-deg-input" min="0" max="45" step="1" value="20"></div>
+        </div>
         <label for="algo-select">Algorithm</label>
         <select id="algo-select"></select>
         <div id="dqn-note" class="note" hidden>
           DQN uses 6 fixed directions plus hover instead of continuous velocity,
           may need more timesteps and cap out at a lower reward than PPO, SAC or TD3.
         </div>
+        <div class="duration-label">Duration</div>
+        <div class="entity-select" id="duration-select">
+          <label><input type="radio" name="duration" value="fixed" checked> Fixed</label>
+          <label><input type="radio" name="duration" value="until"> Until I click Stop</label>
+        </div>
         <div class="field-row">
           <label for="timesteps-input">Timesteps</label>
           <input type="number" id="timesteps-input" value="1000000">
         </div>
+        <div id="until-note" class="note" hidden>Trains until you press Stop, e.g. overnight. The
+          latest policy is saved at every evaluation (and the final one on Stop), and the PC is kept
+          awake while it trains. Keep the dashboard server window open: closing it ends training.</div>
         <div class="field-row">
           <label for="nenvs-input">Parallel envs</label>
           <input type="number" id="nenvs-input" value="4">
@@ -333,6 +376,58 @@
     </aside>
   </main>
 
+  <!-- ============================================================== ENVIRONMENT -->
+  <main id="tab-env" class="tab-page two-col" hidden>
+    <aside class="col">
+      <div class="panel">
+        <h2>Training environment</h2>
+        <div class="note">The simulated cage the policy trains in: a 2&times;2&times;2 m net with a blue
+          noodle ring hung near the centre, posed like the one in the phone scan (1.29 m up, turned and
+          leaning slightly). The drone always starts on the floor, must take off, find the ring and
+          fly through it in the arrow's direction. Touching the net bounces it back.</div>
+        <pre id="env-readout" class="readout"></pre>
+      </div>
+      <div class="panel">
+        <h2>Preview</h2>
+        <div class="button-row">
+          <button id="env-random-btn" class="secondary-btn" type="button">Randomise ring</button>
+          <button id="env-nominal-btn" class="secondary-btn" type="button">Nominal ring</button>
+        </div>
+        <label class="checkbox-row"><input type="checkbox" id="env-wind-chk"> Wind sway (live, within an episode)</label>
+        <div class="field-row"><label>Max swing <span class="sway-deg-val">20&deg;</span></label>
+          <input type="range" id="env-sway-deg" class="sway-deg-input" min="0" max="45" step="1" value="20"></div>
+        <div class="button-row">
+          <button id="env-fly-btn" class="primary-btn" type="button">Play example flight</button>
+        </div>
+        <div class="note">"Randomise ring" shows the per-episode variation (position, facing, size)
+          used in training to cover repositioning. "Wind sway" shows how the light noodle, hung from a rope
+          tied to its top, swings about that knot during an episode (it is shoved by the drone too, in
+          training). "Max swing" is how far it can swing; it is the same setting as in the Training panel.</div>
+      </div>
+      <div class="panel">
+        <h2>Real-cage scan</h2>
+        <label class="checkbox-row"><input type="checkbox" id="env-scan-chk"> Overlay phone scan (34 MB)</label>
+        <div class="note">The scan is fitted to the 2&times;2&times;2 m sim net automatically (scaled, turned
+          square to the net and centred on the floor). Fine-tune below if needed.</div>
+        <div class="field-row"><label>Scale &times;<span id="env-scan-scale-val">1.00</span></label>
+          <input type="range" id="env-scan-scale" min="0.8" max="1.2" step="0.005" value="1"></div>
+        <div class="field-row"><label>Turn <span id="env-scan-yaw-val">0</span>&deg;</label>
+          <input type="range" id="env-scan-yaw" min="-45" max="45" step="0.5" value="0"></div>
+        <div class="field-row"><label>Shift x <span id="env-scan-x-val">0.00</span> m</label>
+          <input type="range" id="env-scan-x" min="-0.3" max="0.3" step="0.01" value="0"></div>
+        <div class="field-row"><label>Shift y <span id="env-scan-y-val">0.00</span> m</label>
+          <input type="range" id="env-scan-y" min="-0.3" max="0.3" step="0.01" value="0"></div>
+        <div class="button-row">
+          <button id="env-scan-fit-btn" class="secondary-btn" type="button">Auto-fit again</button>
+        </div>
+        <div class="note" id="env-scan-status">Tick the box to load the scan.</div>
+      </div>
+    </aside>
+    <section class="col col-main env-view">
+      <div id="env-wrap"><canvas id="env-canvas"></canvas></div>
+    </section>
+  </main>
+
   <!-- ============================================================== HISTORY -->
   <main id="tab-history" class="tab-page two-col" hidden>
     <aside class="col">
@@ -354,15 +449,16 @@
     </section>
   </main>
 
-  <script src="js/api.js"></script>
-  <script src="js/scene3d.js"></script>
-  <script src="js/controls.js"></script>
-  <script src="js/chart.js"></script>
-  <script src="js/tabs.js"></script>
-  <script src="js/keys.js"></script>
-  <script src="js/drone.js"></script>
-  <script src="js/imitation.js"></script>
-  <script src="js/history.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/api.js?v=11"></script>
+  <script src="js/scene3d.js?v=11"></script>
+  <script src="js/controls.js?v=11"></script>
+  <script src="js/chart.js?v=11"></script>
+  <script src="js/tabs.js?v=11"></script>
+  <script src="js/keys.js?v=11"></script>
+  <script src="js/drone.js?v=11"></script>
+  <script src="js/imitation.js?v=11"></script>
+  <script src="js/history.js?v=11"></script>
+  <script src="js/envview.js?v=11"></script>
+  <script src="js/app.js?v=11"></script>
 </body>
 </html>

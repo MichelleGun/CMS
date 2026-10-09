@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scan viewer</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #14141f; color: #eceef5; font: 14px system-ui, sans-serif; }
+    #view { position: fixed; inset: 0; }
+    #panel { position: fixed; top: 12px; left: 12px; background: #1f1f2fcc; padding: 12px 14px; border-radius: 8px; max-width: 320px; line-height: 1.5; }
+    #panel label { display: block; cursor: pointer; }
+    #panel a { color: #3cc6ff; }
+    .k { color: #9494ab; }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="panel">
+    <strong>Scan viewer</strong> <a href="/">back to dashboard</a>
+    <div id="status" class="k">loading 34 MB...</div>
+    <div id="size"></div>
+    <label><input type="checkbox" id="wire"> wireframe (shows whether the hoop is open)</label>
+    <label><input type="checkbox" id="flat" checked> flat lighting (true texture colours)</label>
+    <div class="k">Blue ring = the real 0.30 m opening, 1 m grid, axes: red x, green y (up), blue z. Drag to orbit, scroll to zoom.</div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script>
+    const canvas = document.getElementById("view");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x14141f);
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 100);
+    camera.position.set(2.2, 1.6, 2.6);
+    const controls = new THREE.OrbitControls(camera, canvas);
+    controls.target.set(0, 0.6, 0);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x555566, 1.0));
+    scene.add(new THREE.GridHelper(4, 4, 0x888899, 0x333344));
+    scene.add(new THREE.AxesHelper(0.5));
+
+    const ref = new THREE.Mesh(new THREE.TorusGeometry(0.15 + 0.03, 0.03, 16, 64),
+      new THREE.MeshBasicMaterial({ color: 0x2f6fff }));
+    ref.position.set(1.4, 0.6, 0);
+    scene.add(ref);
+
+    const mats = [];
+    new THREE.GLTFLoader().load("/assets/3D_net%26hoop.glb", (gltf) => {
+      scene.add(gltf.scene);
+      gltf.scene.traverse((o) => {
+        if (!o.isMesh) return;
+        [].concat(o.material).forEach((m) => { m.side = THREE.DoubleSide; mats.push(m); });
+      });
+      const box = new THREE.Box3().setFromObject(gltf.scene), s = box.getSize(new THREE.Vector3());
+      document.getElementById("size").textContent =
+        `size ${s.x.toFixed(2)} x ${s.y.toFixed(2)} (up) x ${s.z.toFixed(2)} m`;
+      document.getElementById("status").textContent = "loaded";
+      applyFlat();
+    }, (e) => {
+      if (e.total) document.getElementById("status").textContent =
+        `loading ${(100 * e.loaded / e.total).toFixed(0)}%`;
+    }, () => { document.getElementById("status").textContent = "failed to load the GLB"; });
+
+    function applyFlat() {
+      const flat = document.getElementById("flat").checked;
+      mats.forEach((m) => { {
+        m.emissive = flat ? new THREE.Color(0xffffff) : new THREE.Color(0x000000);
+        m.emissiveMap = flat ? m.map : null; m.needsUpdate = true; } });
+    }
+    document.getElementById("flat").onchange = applyFlat;
+    document.getElementById("wire").onchange = (e) => mats.forEach((m) => { m.wireframe = e.target.checked; });
+
+    function frame() {
+      const w = innerWidth, h = innerHeight;
+      if (canvas.width !== w * devicePixelRatio) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+      controls.update(); renderer.render(scene, camera); requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

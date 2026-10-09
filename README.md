@@ -50,7 +50,7 @@ Full feature list and notes: [webapp/README.md](webapp/README.md).
 | `scripts/fly_in_court.py` | Flies the drone around a virtual basketball court (PID tour, or the RL hover policy). |
 | `scripts/train_hoop_find.py` | Trains the hoop-finding policy (PPO only, writes to `results/hoop/`). |
 | `scripts/fly_hoop_demo.py` | Watches the trained hoop-finding policy; the hoop moves to a new spot every episode. |
-| `scripts/train_hoop_multi.py` | Same hoop task, with a choice of algorithm and a run-scoped output folder. This is what the webapp itself calls, and it also works standalone from the terminal. |
+| `scripts/train_hoop_multi.py` | Same hoop task, with a choice of algorithm and a run-scoped output folder. This is what the webapp itself calls, and it also works standalone from the terminal. Defaults to the net + ring environment (`--env net`); `--env legacy` trains the original point-reaching task. |
 
 Run these from `scripts/` with `drones` activated. Full walkthroughs and explanations of each are
 in [tutorial/TUTORIAL.md](tutorial/TUTORIAL.md).
@@ -78,7 +78,8 @@ CMS/
 
 | Want to change... | Edit... |
 |---|---|
-| Room size, reward, random hoop/start position, action space | `scripts/hoop_env.py` |
+| Net size, ring size/position/facing and its per-episode jitter, net bounce, reward (the default training env) | `scripts/hoop_net_env.py` (`HoopSpec`) |
+| The original point-reaching task (`--env legacy`) | `scripts/hoop_env.py` |
 | Hover task behaviour | `scripts/quickstart_train.py` (the environment itself, `HoverAviary`, lives in the installed `gym-pybullet-drones` package, not this repo) |
 | Basketball court geometry or markings | `scripts/court.py` |
 | Add or change a training algorithm in the webapp | `webapp/backend/config.py` (the algorithm list) and `scripts/train_hoop_multi.py` (`ALGO_CLASSES`) |
@@ -134,7 +135,17 @@ Evaluated over 20 episodes with fresh random hoop and start positions, not seen 
 | Reached the hoop | 0/20 | **9/20** |
 | Mean final distance to hoop | 0.84 ± 0.34 m | **0.34 ± 0.22 m** |
 
-Still improving, not plateaued yet. The full diagnosis of the `pid` to `vel` fix is in
+Those numbers are for the legacy point-reaching task. 
+
+### Net + ring environment (`scripts/hoop_net_env.py`)
+
+This environment mirrors the real cage. It has a 2×2×2 m net with a vertical ring of 0.30 m opening near the centre. Every episode varies the ring's position, facing and size to cover wind swing and repositioning. The drone always starts on the floor. Success means flying through the opening in the required direction. Touching the net or the rim bounces the drone back with a penalty, and the episode continues. A scripted expert passes through on all test seeds (`scripts/tests/test_hoop_net_env.py`).
+
+A first 300k-step PPO run (`results/hoop/runs/net_ppo_trial`) learned to take off and fly to the approach point in front of the ring, but has not yet passed through (0/10 evals). It needs longer runs or an imitation warm start.
+
+You can preview it in the dashboard's **Environment** tab, which also overlays the phone scan.
+
+The full diagnosis of the `pid` to `vel` fix is in
 [tutorial/TUTORIAL.md](tutorial/TUTORIAL.md) and [PROGRESS.md](PROGRESS.md). Training curves,
 full rollout diagnostics, and video for both policies are in `tutorial/walkthrough.ipynb`.
 

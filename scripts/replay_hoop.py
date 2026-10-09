@@ -52,6 +52,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import court as court_mod  # noqa: E402  (local module, next to this file)
 from hoop_env import HoopFindAviary  # noqa: E402
+from hoop_net_env import HoopNetAviary  # noqa: E402
 from discrete_action_wrapper import HoopFindDiscreteVel  # noqa: E402
 from camera_capture import get_onboard_frame  # noqa: E402
 
@@ -101,12 +102,15 @@ def main():
                      help="1 recommended (see module docstring: BaseAviary restarts its "
                           "video logger on every reset without stopping the previous one)")
     ap.add_argument("--pov", action="store_true")
+    ap.add_argument("--sway-deg", type=float, default=None,
+                    help="net env: largest ring swing about its rope knot (deg; default: the run's own)")
     args = ap.parse_args()
 
     run_dir = args.run_dir.resolve()
     meta = json.loads((run_dir / "meta.json").read_text())
     algo = meta.get("algo", "ppo")
     needs_discrete = meta.get("env_variant") == "discrete_vel"
+    use_net = meta.get("env") == "net"          # runs from before the net env have no "env" key
 
     model_path = resolve_model_path(run_dir, args.variant)
     if not model_path.is_file():
@@ -129,7 +133,9 @@ def main():
     frame_idx = 0
     env = None
     try:
-        env = HoopFindAviary(gui=True, record=True)
+        sway = args.sway_deg if args.sway_deg is not None else meta.get("sway_deg")
+        env = (HoopNetAviary(gui=True, record=True, sway_deg=sway) if use_net
+               else HoopFindAviary(gui=True, record=True))
         if needs_discrete:
             env = HoopFindDiscreteVel(env)
         raw_env = env.unwrapped
@@ -144,6 +150,8 @@ def main():
             # body (drone, ground plane, our floor/hoop), so the whole scene
             # has to be rebuilt after every reset, not just the first one,
             # mirroring fly_hoop_demo.py's own rebuild_scene().
+            if use_net:      # HoopNetAviary builds its own net + ring on every reset
+                return
             p.changeVisualShape(raw_env.PLANE_ID, -1, rgbaColor=[0, 0, 0, 0], physicsClientId=client)
             court_mod.build_room(client, room=tuple(raw_env.ROOM))
             court_mod.build_hoop(client, hoop_pos=tuple(raw_env.TARGET_POS))

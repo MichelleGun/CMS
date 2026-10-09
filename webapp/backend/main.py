@@ -9,10 +9,10 @@ with:
 Then open http://localhost:8000 in a browser.
 """
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from config import ALGORITHMS, FRONTEND_DIR, REACH_RADIUS, ROOM, RUNS_DIR, START_Z, XY_MARGIN, Z_RANGE
+from config import ALGORITHMS, ASSETS_DIR, FRONTEND_DIR, HOOP_SPEC, REACH_RADIUS, ROOM, RUNS_DIR, START_Z, XY_MARGIN, Z_RANGE
 from drone_manager import drone_manager
 from drone_ws import stream_flight
 from imitation_manager import imitation_manager
@@ -20,11 +20,39 @@ from jobs import job_manager
 from run_manager import run_manager
 from schemas import (CameraToggleRequest, DroneCameraToggleRequest, EvaluateRequest,
                      GenerateDemosRequest, LabelDemoRequest, ReplayRequest,
-                     SaveAnswerRequest, StartFlightRequest, StartRunRequest,
+                     RealtimeToggleRequest, SaveAnswerRequest, ShowcaseRequest, StartFlightRequest, StartRunRequest,
                      TrainCloneRequest)
 from telemetry_ws import stream_run
 
 app = FastAPI(title="Hoop-finding drone dashboard")
+
+
+def _jpeg_snapshot(path):
+    """A camera frame read fully into memory first. The trainer replaces these files several
+    times a second; streaming one with FileResponse can be cut short mid-replace, which the
+    browser shows as a broken image."""
+    for _ in range(3):
+        try:
+            data = path.read_bytes()
+            if data:
+                return Response(content=data, media_type="image/jpeg",
+                                headers={"Cache-Control": "no-store"})
+        except OSError:
+            pass
+    raise HTTPException(status_code=503, detail="frame busy, try again")
+
+
+@app.middleware("http")
+async def no_stale_frontend(request: Request, call_next):
+    """Make browsers revalidate the dashboard's own html/js/css on every load, so a
+    restarted backend never runs against an old cached script. Not /assets (the 34 MB scan
+    may stay cached) and not /media (videos)."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".html", ".js", ".css")):
+        if not path.startswith(("/assets/", "/media/")):
+            response.headers["Cache-Control"] = "no-cache"
+    return response
 
 # Real takeoffs and keyboard flying are accepted only from the computer running the
 # backend: someone at that keyboard can see the cage. uvicorn binds to 127.0.0.1 by
@@ -42,6 +70,7 @@ def _is_local(client) -> bool:
 def get_config():
     return {
         "room": ROOM,
+        "hoop": HOOP_SPEC,
         "xy_margin": XY_MARGIN,
         "z_range": Z_RANGE,
         "start_z": START_Z,
@@ -72,6 +101,9 @@ def start_run(req: StartRunRequest):
             target_pos=(req.target_pos.as_list() if req.target_pos else None),
             timesteps=req.timesteps, n_envs=req.n_envs,
             eval_freq=req.eval_freq, n_eval_episodes=req.n_eval_episodes,
+            env=req.env, ring_jitter=req.ring_jitter, radius_start=req.radius_start,
+            sway_deg=req.sway_deg,
+            until_stopped=req.until_stopped,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -104,6 +136,36 @@ def get_replay(run_id: str, replay_id: str, pov: bool = False):
     return run_manager.get_replay_status(run_id, replay_id, pov=pov)
 
 
+@app.post("/api/runs/{run_id}/showcase", status_code=202)
+def start_showcase(run_id: str, req: ShowcaseRequest):
+    try:
+        run_manager.start_showcase(run_id, req.variant, req.seed, req.realtime)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"run_id": run_id, "status": "playing"}
+
+
+@app.post("/api/runs/{run_id}/realtime")
+def set_realtime(run_id: str, req: RealtimeToggleRequest):
+    try:
+        run_manager.set_realtime(run_id, req.enabled)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"run_id": run_id, "realtime": req.enabled}
+
+
+@app.get("/api/runs/{run_id}/showcase/cam.jpg")
+def get_showcase_frame(run_id: str):
+    path = RUNS_DIR / run_id / "showcase_cam.jpg"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="no showcase frame yet")
+    return _jpeg_snapshot(path)
+
+
 @app.post("/api/runs/{run_id}/camera")
 def set_camera(run_id: str, req: CameraToggleRequest):
     try:
@@ -118,7 +180,7 @@ def get_camera_frame(run_id: str):
     path = RUNS_DIR / run_id / "camera_latest.jpg"
     if not path.is_file():
         raise HTTPException(status_code=404, detail="camera has not been enabled for this run yet")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    return _jpeg_snapshot(path)
 
 
 @app.websocket("/ws/runs/{run_id}")
@@ -353,5 +415,6 @@ def stop_job(job_id: str):
 
 # ----------------------------------------------------------------- static
 
+app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
 app.mount("/media", StaticFiles(directory=str(RUNS_DIR)), name="media")
 app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

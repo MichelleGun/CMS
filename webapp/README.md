@@ -29,6 +29,25 @@ First time only:
 & $PY -m pip install fastapi "uvicorn[standard]" psutil pygame
 ```
 
+**Training on the net + ring env (Simulator tab).** To train, set up the **Training** panel and press *Start training*.
+- **Environment:** choose *Net + ring*, the default.
+- **Ring moves / turns a little each episode:** gives the ring per-episode variation.
+- **Wider ring at first:** starts with an easier opening that shrinks to real size.
+
+While a run is live, the main view is a **far view** of training env 0. It shows the net, the ring and the drone, and draws the route as it flies. The last 3 episodes stay as faded trails. Red dots mark net bumps, orange dots mark rim hits and a green dot marks a pass. The **Drone POV** pane shows that drone's onboard camera, and it switches on automatically.
+- **Watch current policy:** plays one real-time episode of the policy saved at the last evaluation. That episode has no exploration, so it shows what has actually been learned.
+- **During that episode:** the drone turns green, and both views follow it.
+- **When it ends:** it reports passed, or missed with the number of net bumps.
+- **Speed:** training and *Watch current policy* both run at full speed. Tick **Real-time** in the run view to slow both to real speed, so you can follow the flight; you can switch it during a run.
+- **Start-up time:** loading the policy takes 10–30 s while training is running.
+- **Evaluations:** training pauses for a few seconds every 20k steps to evaluate the policy, and the run view says so.
+
+**Phone scan overlay (Environment tab).** When loaded, the scan is fitted to the sim net automatically. It's scaled to the 2×2×2 m net, squared to its walls and centred on the floor. The sliders fine-tune that fit, and *Auto-fit again* resets them.
+
+**Environment tab.** The *Environment* button in the header shows the training cage on its own. That covers the net, the ring with an arrow for the pass direction, and the drone on the floor. It has buttons to preview the ring's per-episode variation and play an example take-off-and-fly-through. It can also overlay the phone scan of the real cage, with scale and yaw sliders. Geometry comes from `/api/config` → `hoop`, which is the same `HoopSpec` the env uses.
+
+**Scan viewer.** `http://localhost:8000/scan.html` shows the phone scan in `assets/` in 3D, with a 0.30 m reference ring, to check its scale and that the hoop is open.
+
 ## Flying from the Drone tab
 
 1. Pick **Dry run** or **Real drone**. For a real flight, join the TELLO Wi-Fi first.

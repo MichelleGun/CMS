@@ -98,7 +98,7 @@ const History = (() => {
     } else if (f === "runs") {
       items = [...cache.runs].reverse().map((r) =>
         row(`${(r.algo || "").toUpperCase()} ${when(r.created_at)}`,
-            `${r.current_timestep ?? 0} / ${r.total_timesteps ?? "?"} steps · best ${
+            `${r.current_timestep ?? 0} / ${r.until_stopped ? "\u221e" : (r.total_timesteps ?? "?")} steps · best ${
               r.best_eval_reward === null || r.best_eval_reward === undefined ? "-" : r.best_eval_reward.toFixed(1)}`,
             [[r.status, r.status === "completed" ? "tag-ok" : ""]],
             () => showRun(r.run_id), "r:" + r.run_id));
@@ -186,7 +186,7 @@ const History = (() => {
     d.append(kv([
       ["algorithm", (m.algo || "").toUpperCase()], ["status", m.final_status || ls.status],
       ["started", when(m.created_at)], ["steps", m.final_timesteps || ls.current_timestep],
-      ["requested", m.timesteps_requested], ["best eval reward", ls.best_eval_reward],
+      ["requested", m.until_stopped ? "until stopped" : m.timesteps_requested], ["best eval reward", ls.best_eval_reward],
     ]));
     if (r.curve && r.curve.timesteps.length) {
       const c = chartBox("Evaluation reward");

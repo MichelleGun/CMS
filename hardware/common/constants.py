@@ -22,6 +22,7 @@ CTRL_DT = 1.0 / CTRL_HZ
 ACT_BUFFER = CTRL_HZ // 2            # 15 past actions in the observation
 ACT_DIM = 4                          # [dx, dy, dz, speed_fraction], VEL action type
 OBS_DIM = 12 + ACT_BUFFER * ACT_DIM + 3   # 75
+NET_OBS_DIM = OBS_DIM + 3                 # 78: HoopNetAviary also carries the ring normal
 EPISODE_SEC = 15.0
 TILT_LIMIT = 0.5                     # rad, sim truncation threshold on roll/pitch
 

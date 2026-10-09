@@ -1,4 +1,4 @@
-// Three.js scene: the 2x2x2 m cage, one hoop, and the drone. The simulator
+// Three.js scene: the 2x2x2 m net, the ring (hoop) and the drone. The simulator
 // is Z-up with the room's XY centred at the origin and the floor at z=0;
 // Three.js is Y-up by convention, so every position goes through one
 // conversion helper rather than juggling the axis swap in several places.
@@ -10,7 +10,8 @@ const PALETTE = {
   bg: 0x171721,
   room: 0x4a4a6a,
   floor: 0x262638,
-  hoopRim: 0xff7130,
+  net: 0x6a6a8c,
+  hoopRim: 0x2f6fff,          // the real ring is a blue pool noodle
   hoopBoard: 0xeceef5,
   hoopPole: 0x34344a,
   droneBody: 0x872b97,
@@ -19,10 +20,13 @@ const PALETTE = {
   targetGhost: 0xff3c68,
 };
 
-const Scene3D = (() => {
+// A factory, so the Simulator tab and the Environment tab each get their own scene.
+function createScene3D() {
   let renderer, scene, camera, controls;
   let room = [2, 2, 2];
-  let hoopGroup, droneGroup;
+  let hoopGroup, droneGroup, netGroup;
+  let ringRadius = 0.15;       // inner (clear) radius of the opening, m
+  const RING_TUBE = 0.03;
   let dronePosCurrent = new THREE.Vector3(0, 0.1, 0);
   let dronePosTarget = new THREE.Vector3(0, 0.1, 0);
   let droneRotCurrent = new THREE.Euler(0, 0, 0);
@@ -36,6 +40,7 @@ const Scene3D = (() => {
 
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.03, 0.06), bodyMat);
     g.add(body);
+    g.userData.bodyMat = bodyMat;
 
     const armLen = 0.09;
     const armPositions = [
@@ -65,22 +70,45 @@ const Scene3D = (() => {
   }
 
   function buildHoop() {
+    // A ring whose clear opening is `ringRadius`, with a 3 cm tube, like the real one.
     const g = new THREE.Group();
-    const rimR = 0.12;
     const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(rimR, 0.01, 8, 24),
+      new THREE.TorusGeometry(ringRadius + RING_TUBE, RING_TUBE, 12, 48),
       new THREE.MeshStandardMaterial({ color: PALETTE.hoopRim }),
     );
-    rim.rotation.x = Math.PI / 2;
-    g.add(rim);
+    g.add(rim);          // torus axis = local +Z, which setHoop() turns onto the ring normal
+    const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0),
+      0.3, 0xbcd6ff, 0.07, 0.04);       // shows the direction the drone must pass in
+    g.add(arrow);
+    return g;
+  }
 
-    const board = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.4, 0.25),
-      new THREE.MeshStandardMaterial({ color: PALETTE.hoopBoard, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }),
-    );
-    board.position.set(0, 0.15, -rimR - 0.03);
-    g.add(board);
-
+  function buildNet() {
+    // Four walls + roof drawn as translucent panels with a mesh grid (the physical net).
+    const g = new THREE.Group();
+    const [rx, ry, rz] = room;
+    const mat = new THREE.MeshBasicMaterial({ color: PALETTE.net, transparent: true, opacity: 0.10,
+                                              side: THREE.DoubleSide, depthWrite: false });
+    const lineMat = new THREE.LineBasicMaterial({ color: PALETTE.net, transparent: true, opacity: 0.35 });
+    const panel = (w, h, pos, rot) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+      m.position.set(...pos); m.rotation.set(...rot);
+      g.add(m);
+      const pts = [];
+      const nx = Math.round(w / 0.25), ny = Math.round(h / 0.25);
+      for (let i = 0; i <= nx; i++) pts.push(-w / 2 + (i / nx) * w, -h / 2, 0, -w / 2 + (i / nx) * w, h / 2, 0);
+      for (let j = 0; j <= ny; j++) pts.push(-w / 2, -h / 2 + (j / ny) * h, 0, w / 2, -h / 2 + (j / ny) * h, 0);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      const l = new THREE.LineSegments(geo, lineMat);
+      l.position.set(...pos); l.rotation.set(...rot);
+      g.add(l);
+    };
+    panel(rx, rz, [0, rz / 2, -ry / 2], [0, 0, 0]);
+    panel(rx, rz, [0, rz / 2, ry / 2], [0, 0, 0]);
+    panel(ry, rz, [-rx / 2, rz / 2, 0], [0, Math.PI / 2, 0]);
+    panel(ry, rz, [rx / 2, rz / 2, 0], [0, Math.PI / 2, 0]);
+    panel(rx, ry, [0, rz, 0], [Math.PI / 2, 0, 0]);
     return g;
   }
 
@@ -105,7 +133,7 @@ const Scene3D = (() => {
   function init(canvas, initialRoom) {
     if (initialRoom) room = initialRoom;
     renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(PALETTE.bg);
@@ -124,10 +152,12 @@ const Scene3D = (() => {
     scene.add(dirLight);
 
     scene.add(buildRoom());
+    netGroup = buildNet();
+    scene.add(netGroup);
 
     hoopGroup = buildHoop();
     scene.add(hoopGroup);
-    setHoop([0.5, 0.5, 0.6]);
+    setHoop([0, 0, 1.2]);
 
     droneGroup = buildDrone();
     scene.add(droneGroup);
@@ -138,20 +168,47 @@ const Scene3D = (() => {
     requestAnimationFrame(tick);
   }
 
+  let lastRender = 0;
+  let viewShiftPx = 0;          // shift the picture left so overlays on the right don't hide the cage
+
   function resize() {
     const wrap = renderer.domElement.parentElement;
     const w = wrap.clientWidth, h = wrap.clientHeight;
+    if (!w || !h) return;        // tab hidden: keep the last good size
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
+    if (viewShiftPx) camera.setViewOffset(w, h, viewShiftPx, 0, w, h);
+    else camera.clearViewOffset();
     camera.updateProjectionMatrix();
   }
 
-  function setHoop(pos) {
-    const p = simToThree(pos);
-    hoopGroup.position.copy(p);
-    // face the open side toward the room centre
-    const angle = Math.atan2(-pos[1], -pos[0]);
-    hoopGroup.rotation.y = angle;
+  function setViewShift(px) {
+    viewShiftPx = px;
+    resize();
+  }
+
+  function setTrailVisible(key, visible) {
+    const t = trails[key];
+    if (!t) return;
+    t.line.visible = visible;
+    t.ghosts.forEach((g) => { g.visible = visible; });
+    t.marks.forEach((m) => { m.visible = visible; });
+  }
+
+  // pos: ring centre (sim coords). normal: unit direction the drone must pass in (sim coords,
+  // default +x). radius: clear opening radius in m (rebuilds the torus when it changes).
+  function setHoop(pos, normal, radius) {
+    if (radius && Math.abs(radius - ringRadius) > 1e-4) {
+      ringRadius = radius;
+      const old = hoopGroup;
+      hoopGroup = buildHoop();
+      scene.remove(old);
+      scene.add(hoopGroup);
+      old.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+    hoopGroup.position.copy(simToThree(pos));
+    const n = simToThree(normal || [1, 0, 0]).normalize();
+    hoopGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
   }
 
   function setDroneTarget(pos, rpy, snap = false) {
@@ -165,7 +222,94 @@ const Scene3D = (() => {
     }
   }
 
+  // ---------------------------------------------------------- route trails
+  // One live trail per source ("train" = training env 0, "showcase" = current-policy episode);
+  // finished episodes stay as faded ghosts (the last GHOSTS of them).
+  const TRAIL_MAX = 2000, GHOSTS = 3;
+  const trails = {};
+  const TRAIL_COLORS = { train: 0x3cc6ff, showcase: 0x5cf08a };
+
+  function getTrail(key) {
+    if (trails[key]) return trails[key];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(TRAIL_MAX * 3), 3));
+    geo.setDrawRange(0, 0);
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: TRAIL_COLORS[key] || 0xffffff }));
+    line.frustumCulled = false;
+    scene.add(line);
+    trails[key] = { line, n: 0, ghosts: [], marks: [] };
+    return trails[key];
+  }
+
+  function addTrailPoint(pos, key = "train") {
+    const t = getTrail(key);
+    if (t.n >= TRAIL_MAX) return;
+    const v = simToThree(pos);
+    const arr = t.line.geometry.attributes.position.array;
+    arr[t.n * 3] = v.x; arr[t.n * 3 + 1] = v.y; arr[t.n * 3 + 2] = v.z;
+    t.n += 1;
+    t.line.geometry.attributes.position.needsUpdate = true;
+    t.line.geometry.setDrawRange(0, t.n);
+  }
+
+  // End the current episode's trail: keep it as a faded ghost, start a fresh one.
+  function newEpisode(key = "train", keepGhost = true) {
+    const t = getTrail(key);
+    if (keepGhost && t.n > 1) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(
+        t.line.geometry.attributes.position.array.slice(0, t.n * 3), 3));
+      const ghost = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: TRAIL_COLORS[key] || 0xffffff, transparent: true, opacity: 0.35 }));
+      scene.add(ghost);
+      t.ghosts.push(ghost);
+      while (t.ghosts.length > GHOSTS) {
+        const old = t.ghosts.shift();
+        scene.remove(old); old.geometry.dispose();
+      }
+      t.ghosts.forEach((g, i) => { g.material.opacity = 0.12 + 0.25 * (i + 1) / t.ghosts.length; });
+    }
+    t.marks.forEach((m) => scene.remove(m));
+    t.marks = [];
+    t.n = 0;
+    t.line.geometry.setDrawRange(0, 0);
+  }
+
+  function clearTrail(key) {
+    const keys = key ? [key] : Object.keys(trails);
+    keys.forEach((k) => {
+      const t = trails[k];
+      if (!t) return;
+      newEpisode(k, false);
+      t.ghosts.forEach((g) => { scene.remove(g); g.geometry.dispose(); });
+      t.ghosts = [];
+    });
+  }
+
+  const MARK_COLORS = { net: 0xff3c68, rim: 0xffa040, pass: 0x5cf08a };
+  function markEvent(pos, kind, key = "train") {
+    const t = getTrail(key);
+    const m = new THREE.Mesh(new THREE.SphereGeometry(kind === "pass" ? 0.05 : 0.025, 10, 8),
+      new THREE.MeshBasicMaterial({ color: MARK_COLORS[kind] || 0xffffff }));
+    m.position.copy(simToThree(pos));
+    scene.add(m);
+    t.marks.push(m);
+  }
+
+  function setDroneColor(hex) {
+    if (droneGroup && droneGroup.userData.bodyMat) droneGroup.userData.bodyMat.color.setHex(hex);
+  }
+
   function tick() {
+    // Don't draw a scene nobody can see (its tab is hidden, or the window is in the background):
+    // two scenes at 60 fps would otherwise compete with training for the CPU/GPU.
+    // 30 fps is plenty for telemetry that arrives at ~15 Hz, and halves the drawing cost.
+    const now = performance.now();
+    if (document.hidden || renderer.domElement.offsetParent === null || now - lastRender < 33) {
+      requestAnimationFrame(tick);
+      return;
+    }
+    lastRender = now;
     dronePosCurrent.lerp(dronePosTarget, 0.25);
     droneRotCurrent.x += (droneRotTarget.x - droneRotCurrent.x) * 0.25;
     droneRotCurrent.y += (droneRotTarget.y - droneRotCurrent.y) * 0.25;
@@ -178,5 +322,13 @@ const Scene3D = (() => {
     requestAnimationFrame(tick);
   }
 
-  return { init, setHoop, setDroneTarget, resize };
-})();
+  return {
+    init, setHoop, setDroneTarget, resize,
+    addTrailPoint, newEpisode, clearTrail, markEvent, setDroneColor, setViewShift, setTrailVisible,
+    droneColors: { train: PALETTE.droneBody, showcase: 0x2fbf6a },
+    get scene() { return scene; },
+    setNetVisible: (v) => { netGroup.visible = v; },
+  };
+}
+
+const Scene3D = createScene3D();

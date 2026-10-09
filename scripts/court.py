@@ -24,6 +24,7 @@ RIM_HEIGHT = 3.05
 RIM_RADIUS = 0.23
 BACKBOARD_W, BACKBOARD_H = 1.8, 1.05
 RIM_FROM_BASELINE = 1.2          # rim centre this far inside the baseline
+RING_BLUE = [0.12, 0.38, 0.95, 1]  # every simulated hoop: the real ring is a blue pool noodle
 
 
 # ----------------------------------------------------------------------------- #
@@ -122,9 +123,9 @@ def _hoop(client, rim_x, face_sign, scale, rim_h):
     ids.append(p.createMultiBody(0, bbc, bb, [base_x, 0, rim_h + 0.15 * scale],
                                  physicsClientId=client))
 
-    # rim: a ring of small orange spheres
+    # rim: a ring of small blue spheres (the real ring is a blue pool noodle)
     marker = p.createVisualShape(p.GEOM_SPHERE, radius=0.02 * scale,
-                                 rgbaColor=[0.95, 0.45, 0.1, 1], physicsClientId=client)
+                                 rgbaColor=RING_BLUE, physicsClientId=client)
     for a in np.linspace(0, 2 * np.pi, 18, endpoint=False):
         ids.append(p.createMultiBody(
             0, -1, marker,
@@ -203,7 +204,7 @@ def _hoop_at(client, center, rim_r=0.12, bb_w=0.4, bb_h=0.25, pole_r=0.02, face_
                                  physicsClientId=client))
 
     marker = p.createVisualShape(p.GEOM_SPHERE, radius=0.015,
-                                 rgbaColor=[0.95, 0.45, 0.1, 1], physicsClientId=client)
+                                 rgbaColor=RING_BLUE, physicsClientId=client)
     for a in np.linspace(0, 2 * np.pi, 14, endpoint=False):
         ids.append(p.createMultiBody(
             0, -1, marker,
@@ -250,3 +251,68 @@ def build_mini_hoop(client, room=(2.0, 2.0, 2.0), hoop_pos=(0.5, 0.5, 0.6), rim_
     info["hoop_pos"] = np.array(hoop_pos, dtype=float)
     info["rim_radius"] = rim_r
     return info
+
+
+def build_net(client, room=(2.0, 2.0, 2.0), show_grid=True, spacing=0.25,
+              frame_rgba=(0.92, 0.92, 0.95, 1), net_rgba=(0.55, 0.55, 0.6, 1)):
+    """Visual-only cage like the real one: white frame pipes on the 12 edges and a grey net grid on
+    the four walls and the roof, built from thin bars (not translucent panels: PyBullet's
+    TinyRenderer -- the drone camera -- ignores alpha and would draw solid walls).
+    No collision shapes: net contact is handled geometrically by HoopNetAviary.
+    `show_grid` is kept for API compatibility; the grid is always built so the POV shows it."""
+    rx, ry, rz = np.array(room, dtype=float)
+    hx, hy = rx / 2, ry / 2
+    ids = []
+
+    def bars(half, positions, rgba):
+        if not positions:
+            return
+        vis = p.createVisualShape(p.GEOM_BOX, halfExtents=half, rgbaColor=list(rgba), physicsClientId=client)
+        out = p.createMultiBody(0, -1, vis, batchPositions=[list(map(float, q)) for q in positions],
+                                physicsClientId=client)
+        ids.extend(out if isinstance(out, (list, tuple)) else [out])
+
+    t = 0.0025                     # net cord half-thickness
+    xs = np.arange(-hx, hx + 1e-9, spacing)[1:-1]
+    ys = np.arange(-hy, hy + 1e-9, spacing)[1:-1]
+    zs = np.arange(0, rz + 1e-9, spacing)[1:-1]
+    # vertical cords on the +-y walls (varying x) and the +-x walls (varying y)
+    bars([t, t, rz / 2], [(x, sy * hy, rz / 2) for x in xs for sy in (-1, 1)]
+         + [(sx * hx, y, rz / 2) for y in ys for sx in (-1, 1)], net_rgba)
+    # horizontal cords: along x on the +-y walls and the roof, along y on the +-x walls and the roof
+    bars([hx, t, t], [(0, sy * hy, z) for z in zs for sy in (-1, 1)] + [(0, y, rz) for y in ys], net_rgba)
+    bars([t, hy, t], [(sx * hx, 0, z) for z in zs for sx in (-1, 1)] + [(x, 0, rz) for x in xs], net_rgba)
+    # frame pipes on the 12 edges
+    f = 0.012
+    bars([f, f, rz / 2], [(sx * hx, sy * hy, rz / 2) for sx in (-1, 1) for sy in (-1, 1)], frame_rgba)
+    bars([hx, f, f], [(0, sy * hy, z) for sy in (-1, 1) for z in (0, rz)], frame_rgba)
+    bars([f, hy, f], [(sx * hx, 0, z) for sx in (-1, 1) for z in (0, rz)], frame_rgba)
+    return ids
+
+
+def _ring_points(centre, normal, R, n_beads):
+    """n_beads points on the circle of radius R around `centre`, in the plane perpendicular to `normal`."""
+    centre, n = np.asarray(centre, dtype=float), np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    u = np.cross(n, [0.0, 0.0, 1.0])
+    if np.linalg.norm(u) < 1e-6:
+        u = np.array([1.0, 0.0, 0.0])
+    u /= np.linalg.norm(u)
+    v = np.cross(n, u)
+    return [centre + R * (np.cos(a) * u + np.sin(a) * v)
+            for a in np.linspace(0, 2 * np.pi, n_beads, endpoint=False)]
+
+
+def build_ring(client, centre, normal, inner_radius=0.15, tube_radius=0.03, n_beads=28):
+    """Visual-only ring: a necklace of blue spheres around the circle of radius inner_radius+tube_radius
+    in the plane perpendicular to `normal`. Rebuild every episode (the ring is re-posed on reset)."""
+    vis = p.createVisualShape(p.GEOM_SPHERE, radius=tube_radius, rgbaColor=RING_BLUE,
+                              physicsClientId=client)
+    return [p.createMultiBody(0, -1, vis, pt.tolist(), physicsClientId=client)
+            for pt in _ring_points(centre, normal, inner_radius + tube_radius, n_beads)]
+
+
+def move_ring(client, ids, centre, normal, R):
+    """Move the beads of a ring made by build_ring() to a new pose (the ring sways within an episode)."""
+    for i, pt in zip(ids, _ring_points(centre, normal, R, len(ids))):
+        p.resetBasePositionAndOrientation(i, pt.tolist(), [0, 0, 0, 1], physicsClientId=client)

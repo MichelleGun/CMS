@@ -5,6 +5,8 @@ Layout (HoopFindAviary, ObservationType.KIN, ActionType.VEL, ctrl 30 Hz), shape 
     [ pos(3), rpy(3), vel(3), angvel(3),          12  world frame, rad, m/s, rad/s
       action_buffer(15 x 4, oldest first),        60  last 0.5 s of *executed* actions
       hoop - pos (3) ]                             3
+HoopNetAviary (scripts/hoop_net_env.py) inserts the ring's unit normal (3) before the final
+relative vector -> shape (1, 78); pass `hoop_normal` to ObsBuilder to get that layout.
 No normalisation (the sim training used none). sim_check/obs_parity.py checks this
 against the real environment.
 """
@@ -12,13 +14,19 @@ from collections import deque
 
 import numpy as np
 
-from .constants import ACT_BUFFER, ACT_DIM, CTRL_DT, OBS_DIM
+from .constants import ACT_BUFFER, ACT_DIM, CTRL_DT, NET_OBS_DIM, OBS_DIM
 from .smoothing import wrap_pi
 
 
 class ObsBuilder:
-    def __init__(self, hoop_xyz, lpf_alpha=0.35):
+    def __init__(self, hoop_xyz, lpf_alpha=0.35, hoop_normal=None):
+        """hoop_normal: None -> legacy 75-D layout; a 3-vector -> HoopNetAviary's 78-D layout.
+        On hardware the ring is fixed, so this is the measured facing of the real ring."""
         self.hoop = np.asarray(hoop_xyz, dtype=float).reshape(3)
+        self.normal = None
+        if hoop_normal is not None:
+            n = np.asarray(hoop_normal, dtype=float).reshape(3)
+            self.normal = n / np.linalg.norm(n)
         self.alpha = lpf_alpha
         self.reset()
 
@@ -53,5 +61,6 @@ class ObsBuilder:
         kin = np.hstack([pos, rpy, vel, np.asarray(angvel, dtype=float)])
         buf = np.hstack(list(self.buffer))
         rel = self.hoop - pos
-        obs = np.hstack([kin, buf, rel]).astype(np.float32).reshape(1, OBS_DIM)
-        return obs
+        if self.normal is None:
+            return np.hstack([kin, buf, rel]).astype(np.float32).reshape(1, OBS_DIM)
+        return np.hstack([kin, buf, self.normal, rel]).astype(np.float32).reshape(1, NET_OBS_DIM)

@@ -33,6 +33,7 @@ class RunManager:
     def __init__(self):
         self._training_procs: dict[str, subprocess.Popen] = {}
         self._replay_procs: dict[str, subprocess.Popen] = {}
+        self._showcase_procs: dict[str, subprocess.Popen] = {}   # run_id -> proc
 
     # ---------------------------------------------------------------- runs
 
@@ -47,7 +48,9 @@ class RunManager:
         return proc.poll() is None
 
     def start_run(self, algo: str, seed: Optional[int], start_pos, target_pos,
-                  timesteps: int, n_envs: int, eval_freq: int, n_eval_episodes: int) -> str:
+                  timesteps: int, n_envs: int, eval_freq: int, n_eval_episodes: int,
+                  env: str = "net", ring_jitter: float = 1.0, radius_start: float = 1.5,
+                  sway_deg: float = 20.0, until_stopped: bool = False) -> str:
         if algo not in ALGORITHM_IDS:
             raise ValueError(f"unknown algo '{algo}'")
         if not bounds_ok(start_pos) or not bounds_ok(target_pos):
@@ -68,7 +71,13 @@ class RunManager:
             "--n-eval-episodes", str(n_eval_episodes),
             "--run-id", run_id,
             "--out", str(run_dir),
+            "--env", env,
         ]
+        if env == "net":
+            argv += ["--ring-jitter", str(ring_jitter), "--radius-start", str(radius_start),
+                     "--sway-deg", str(sway_deg)]
+        if until_stopped:
+            argv.append("--until-stopped")
         if seed is not None:
             argv += ["--seed", str(seed)]
         if start_pos is not None:
@@ -128,14 +137,20 @@ class RunManager:
             if meta is None:
                 continue
             status_doc = _read_json(d / "live_status.json") or {}
-            status = meta.get("final_status") or status_doc.get("status") or "unknown"
+            status = self._status(d.name, meta, status_doc)
             best = status_doc.get("best_eval_reward")
             runs.append({
                 "run_id": meta.get("run_id", d.name),
                 "algo": meta.get("algo"),
+                "env": meta.get("env", "legacy"),
+                "has_model": any((d / n).is_file() for n in
+                                 ("latest_model.zip", "best_model.zip", "final_model.zip")),
                 "status": status,
-                "current_timestep": status_doc.get("current_timestep", meta.get("final_timesteps", 0)),
+                "current_timestep": (status_doc.get("current_timestep")
+                                     or meta.get("final_timesteps") or 0),
                 "total_timesteps": meta.get("timesteps_requested"),
+                "until_stopped": bool(meta.get("until_stopped")),
+                "elapsed_sec": status_doc.get("elapsed_sec"),
                 "best_eval_reward": best,
                 "created_at": meta.get("created_at"),
             })
@@ -151,7 +166,25 @@ class RunManager:
             return None
         live_status = _read_json(d / "live_status.json")
         curve = _read_curve(d / "evaluations.npz")
-        return {"meta": meta, "live_status": live_status, "curve": curve}
+        return {"meta": meta, "live_status": live_status, "curve": curve,
+                "status": self._status(run_id, meta, live_status or {})}
+
+    def _status(self, run_id: str, meta: dict, status_doc: dict) -> str:
+        """final_status once the run has ended; otherwise "training" while its process is alive,
+        even before the first evaluation has written live_status.json (~40 s into a run)."""
+        if meta.get("final_status"):
+            return meta["final_status"]
+        proc = self._training_procs.get(run_id)
+        if proc is not None:
+            return "training" if self._proc_alive(proc) else (status_doc.get("status") or "unknown")
+        pid = meta.get("pid")
+        if pid:
+            if psutil.pid_exists(pid):
+                return "training"
+            # process gone without writing final_status: don't leave a stale "training" behind,
+            # it would keep the Training panel locked
+            return "crashed" if status_doc.get("status") in (None, "training") else status_doc["status"]
+        return status_doc.get("status") or "unknown"
 
     # ------------------------------------------------------------- replay
 
@@ -197,6 +230,54 @@ class RunManager:
         if still_running:
             return {"status": "rendering"}
         return {"status": "failed"}
+
+    # ------------------------------------------------------------- showcase
+    # One real-time episode of the run's current policy (scripts/showcase_hoop.py), allowed
+    # while training is running: it is a separate process with its own simulator.
+
+    def is_showcase_active(self, run_id: str) -> bool:
+        proc = self._showcase_procs.get(run_id)
+        return proc is not None and self._proc_alive(proc)
+
+    def start_showcase(self, run_id: str, variant: str = "latest", seed: Optional[int] = None,
+                       realtime: bool = False):
+        run_dir = RUNS_DIR / run_id
+        if not (run_dir / "meta.json").is_file():
+            raise ValueError(f"unknown run '{run_id}'")
+        if self.is_showcase_active(run_id):
+            raise RuntimeError("a showcase is already playing for this run")
+        names = ["latest_model.zip", "best_model.zip", "final_model.zip"]
+        if variant == "best":
+            names = ["best_model.zip", "latest_model.zip", "final_model.zip"]
+        if not any((run_dir / n).is_file() for n in names):
+            raise FileNotFoundError("no model saved yet: wait for the first evaluation")
+        # Truncate first, so a connected socket (which tails from its last offset) sees the
+        # file shrink and restarts from the top of this new showcase.
+        (run_dir / "showcase.jsonl").write_text("")
+        argv = [PYTHON_EXE, str(SCRIPTS_DIR / "showcase_hoop.py"),
+                "--run-dir", str(run_dir), "--variant", variant]
+        if seed is not None:
+            argv += ["--seed", str(seed)]
+        if realtime:
+            argv.append("--realtime")
+        kwargs = _popen_kwargs(run_dir / "showcase.log")
+        proc = subprocess.Popen(argv, **kwargs)
+        kwargs["stdout"].close()
+        self._showcase_procs[run_id] = proc
+
+    # ------------------------------------------------------------- realtime
+    # realtime.flag paces the training run so env 0 flies at real speed (PaceCallback in
+    # scripts/telemetry_callback.py); switchable mid-run, like the camera flag.
+
+    def set_realtime(self, run_id: str, enabled: bool):
+        run_dir = RUNS_DIR / run_id
+        if not run_dir.is_dir():
+            raise ValueError(f"unknown run '{run_id}'")
+        flag = run_dir / "realtime.flag"
+        if enabled:
+            flag.touch(exist_ok=True)
+        else:
+            flag.unlink(missing_ok=True)
 
     # --------------------------------------------------------------- camera
 
