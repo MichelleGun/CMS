@@ -68,6 +68,14 @@
   const showcaseStatus = document.getElementById("showcase-status");
   const povSource = document.getElementById("pov-source");
   const realtimeToggle = document.getElementById("realtime-toggle");
+  const initSelect = document.getElementById("init-select");
+  const onboardOptions = document.getElementById("onboard-options");
+  const onboardDemoList = document.getElementById("onboard-demo-list");
+  const teacherRunSelect = document.getElementById("teacher-run-select");
+  const teacherNote = document.getElementById("teacher-note");
+  const capacityNote = document.getElementById("capacity-note");
+  let capacity = null;          // {live_runs, max_runs, cpu_used, cpu_budget} from GET /api/runs
+  let onboardModels = [];       // clones + onboard RL runs (GET /api/imitation/models)
 
   // Live far-view state for the run in view
   const live = { lastMsgAt: 0, simT: 0, ep: null, epStart: null, episodes: 0, passes: 0, lastT: 0, evalSuccess: null,
@@ -133,11 +141,124 @@
     return `${n} / ${r.total_timesteps === null || r.total_timesteps === undefined ? "?" : r.total_timesteps.toLocaleString()}`;
   }
 
+  // Up to capacity.max_runs runs train side by side, so the Training panel stays usable while
+  // one runs; the backend also refuses a run that would need more cores than are free.
+  function atCapacity() { return !!capacity && capacity.live_runs >= capacity.max_runs; }
+
   function applyPanelState() {
-    const activeRun = runs.find((r) => r.status === "training");
-    Controls.setPanelActive(uiMode === "setup" && !activeRun, !activeRun && uiMode !== "starting");
-    startBtn.disabled = !!activeRun || uiMode === "starting";
+    Controls.setPanelActive(uiMode === "setup", !atCapacity() && uiMode !== "starting");
+    startBtn.disabled = atCapacity() || uiMode === "starting";
     applyDuration();
+    renderCapacity();
+  }
+
+  function renderCapacity() {
+    if (!capacity) { capacityNote.textContent = ""; return; }
+    capacityNote.className = "note" + (atCapacity() ? " bad" : "");
+    capacityNote.textContent =
+      `${capacity.live_runs} of ${capacity.max_runs} runs training · ` +
+      `${capacity.cpu_used} of ${capacity.cpu_budget} cores in use` +
+      (atCapacity() ? " — stop one to start another" : "");
+  }
+
+  // ------------------------------------------------- start-from / onboard options
+
+  function fillSelect(sel, items, keep) {
+    sel.replaceChildren();
+    items.forEach(([value, label]) => {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      sel.appendChild(opt);
+    });
+    if (keep !== undefined && items.some(([v]) => v === keep)) sel.value = keep;
+  }
+
+  function runLabel(r) {
+    const best = r.best_eval_reward !== null && r.best_eval_reward !== undefined
+      ? `best ${r.best_eval_reward.toFixed(1)}` : "no eval yet";
+    return `run ${r.run_id} (${(r.current_timestep || 0).toLocaleString()} steps, ${best})`;
+  }
+
+  function renderInitOptions() {
+    const env = envSelect.value;
+    const items = [["", "a new policy"]];
+    if (env === "onboard") {
+      onboardModels.filter((m) => m.kind === "clone" && m.flyable).forEach((m) => {
+        const ev = m.train_eval;
+        items.push([`clone:${m.name}`, `clone ${m.name}` +
+          (ev && ev.pass_rate !== undefined && ev.pass_rate !== null ? ` (${Math.round(ev.pass_rate * 100)}% in sim)` : "")]);
+      });
+    }
+    runs.slice().reverse()
+      .filter((r) => r.has_model && (r.env || "legacy") === env &&
+                     (env === "onboard" || r.algo === algoSelect.value))
+      .forEach((r) => items.push([`run:${r.run_id}`, runLabel(r)]));
+    fillSelect(initSelect, items, initSelect.value);
+    // teacher candidates: PyBullet net runs with continuous actions
+    const teachers = runs.slice().reverse()
+      .filter((r) => r.has_model && r.env === "net" && r.algo !== "dqn")
+      .map((r) => [r.run_id, runLabel(r)]);
+    fillSelect(teacherRunSelect, teachers.length ? teachers : [["", "no PyBullet net run with a model"]],
+               teacherRunSelect.value);
+  }
+
+  async function loadOnboardLists() {
+    try {
+      const [{ models }, { demos }] = await Promise.all([Api.getModels(), Api.getDemos()]);
+      onboardModels = models;
+      const usable = demos.filter((d) => d.task === "onboard_hoop" && !d.error);
+      onboardDemoList.replaceChildren();
+      if (!usable.length) onboardDemoList.textContent = "no onboard-task demos yet";
+      usable.forEach((d) => {
+        const row = document.createElement("label");
+        row.className = "checkbox-row";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.value = d.id;
+        // your passed flights and teacher demos are ticked by default; misses never are
+        box.checked = (d.source === "human" && d.label === "pass") || d.source === "sim_teacher";
+        row.append(box, ` ${d.id} (${d.source || "?"}, ${d.samples} samples)`);
+        onboardDemoList.appendChild(row);
+      });
+    } catch (e) {
+      onboardDemoList.textContent = "could not load demos: " + e.message;
+    }
+    renderInitOptions();
+  }
+
+  function applyEnvChoice() {
+    const env = envSelect.value;
+    netOptions.hidden = env !== "net";
+    onboardOptions.hidden = env !== "onboard";
+    document.getElementById("algo-block").hidden = env === "onboard";
+    if (env !== "onboard") Controls.setEnvMode(env);
+    if (env === "onboard") loadOnboardLists(); else renderInitOptions();
+  }
+
+  async function makeTeacherDemos() {
+    const runId = teacherRunSelect.value;
+    if (!runId) return;
+    const name = ("teacher_" + runId).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
+    teacherNote.className = "note";
+    teacherNote.textContent = "starting…";
+    try {
+      const { job_id } = await Api.teacherDemos({ run_id: runId, name, episodes: 150 });
+      teacherNote.textContent = `flying ${runId} as the teacher (150 episodes)…`;
+      const timer = setInterval(async () => {
+        const job = await Api.getJob(job_id).catch(() => null);
+        if (!job || job.status === "running") return;
+        clearInterval(timer);
+        teacherNote.className = "note" + (job.status === "done" ? "" : " bad");
+        teacherNote.textContent = job.status === "done"
+          ? `saved demos/${name}.npz (see the job log in the Imitation tab for its pass rate)`
+          : "failed: no episode passed, or see the job log in the Imitation tab";
+        loadOnboardLists();
+      }, 3000);
+    } catch (e) {
+      teacherNote.className = "note bad";
+      teacherNote.textContent = "could not start: " + e.message;
+    }
   }
 
   function setUiMode(mode) {
@@ -248,7 +369,11 @@
     runs = data.runs;
     currentRunId = data.current_run_id;
     bestRunId = data.best_run_id;
+    capacity = data.capacity || null;
     renderRunList();
+    if (document.activeElement !== initSelect && document.activeElement !== teacherRunSelect) {
+      renderInitOptions();
+    }
 
     stopBtn.disabled = !(viewedRunId && runs.find((r) => r.run_id === viewedRunId && r.status === "training"));
     viewBestBtn.disabled = !bestRunId;
@@ -399,6 +524,7 @@
     const sr = live.evalSuccess === null ? "-" : `${Math.round(live.evalSuccess * 100)}%`;
     hudLine.textContent =
       `episode ${live.ep === null ? "-" : live.ep + 1}  \u00b7  ${t} s  \u00b7  ` +
+      `${live.reversed ? "back\u2192front  \u00b7  " : ""}` +
       `passes seen ${live.passes}/${live.episodes}  \u00b7  eval success ${sr}  \u00b7  step ${live.lastT}` +
       (extra ? `  \u00b7  ${extra}` : "");
   }
@@ -414,6 +540,7 @@
     live.lastMsgAt = Date.now();
     live.lastT = msg.t || live.lastT;
     if (msg.step !== undefined) live.simT = msg.step / 30;
+    if (msg.reversed !== undefined) live.reversed = msg.reversed;
     if (msg.ep !== undefined && msg.ep !== live.ep) {
       if (live.ep !== null) Scene3D.newEpisode("train");
       live.ep = msg.ep;
@@ -475,7 +602,7 @@
       const passed = msg.success;
       showcaseStatus.className = passed ? "note ok" : "note bad";
       showcaseStatus.textContent = passed
-        ? `Passed through the ring in ${msg.duration_s} s (net bumps: ${msg.net_hits}, rim hits: ${msg.rim_hits}).`
+        ? `Passed through the ring${msg.reversed ? " back to front" : ""} in ${msg.duration_s} s (net bumps: ${msg.net_hits}, rim hits: ${msg.rim_hits}).`
         : `Did not pass (${msg.ended} after ${msg.duration_s} s; net bumps: ${msg.net_hits}, rim hits: ${msg.rim_hits}).`;
       if (passed && live.showcaseTarget) Scene3D.markEvent(live.showcaseTarget, "pass", "showcase");
       hudLine.textContent = showcaseStatus.textContent;
@@ -512,9 +639,13 @@
   // ------------------------------------------------------------- training
 
   async function startTraining() {
-    const algo = algoSelect.value;
+    const onboard = envSelect.value === "onboard";
+    const algo = onboard ? "ppo" : algoSelect.value;
+    const init = initSelect.value;
     const payload = {
       algo,
+      init_run: init.startsWith("run:") ? init.slice(4) : null,
+      init_clone: init.startsWith("clone:") ? init.slice(6) : null,
       timesteps: parseInt(document.getElementById("timesteps-input").value, 10) || 1000000,
       until_stopped: untilStopped(),
       n_envs: parseInt(document.getElementById("nenvs-input").value, 10) || 4,
@@ -522,8 +653,17 @@
       ring_jitter: document.getElementById("ring-jitter-toggle").checked ? 1.0 : 0.0,
       radius_start: document.getElementById("radius-curriculum-toggle").checked ? 1.5 : 1.0,
       sway_deg: parseFloat(document.getElementById("train-sway-deg").value),
+      carry_start: document.getElementById("carry-start-toggle").checked ? 0.7 : 0.0,
+      reverse_prob: document.getElementById("reverse-toggle").checked ? 0.5 : 0.0,
+      lean_flip_prob: document.getElementById("lean-flip-toggle").checked ? 0.3 : 0.0,
     };
-    if (randomizeToggle.checked) {
+    if (onboard) {
+      payload.demo_ids = Array.from(onboardDemoList.querySelectorAll("input:checked")).map((b) => b.value);
+      payload.human_weight = parseFloat(document.getElementById("human-weight").value) || 0;
+      payload.bc_coef = parseFloat(document.getElementById("bc-coef").value) || 0;
+      payload.profile = document.getElementById("onboard-profile").value;
+      payload.seed = parseInt(seedInput.value, 10) || 0;       // the onboard sim draws its own layouts
+    } else if (randomizeToggle.checked) {
       payload.seed = parseInt(seedInput.value, 10) || 0;
     } else {
       const { start, target } = Controls.getDraft();
@@ -652,7 +792,9 @@
     });
     algoSelect.addEventListener("change", () => {
       dqnNote.hidden = algoSelect.value !== "dqn";
+      renderInitOptions();
     });
+    document.getElementById("teacher-btn").addEventListener("click", makeTeacherDemos);
 
     Scene3D.init(document.getElementById("scene-canvas"), config.room);
     Controls.init(config);
@@ -714,10 +856,7 @@
     document.getElementById("overlay-terminal-toggle").addEventListener("click", () => {
       document.getElementById("overlay-terminal-card").classList.toggle("collapsed");
     });
-    envSelect.addEventListener("change", () => {
-      netOptions.hidden = envSelect.value !== "net";
-      Controls.setEnvMode(envSelect.value);
-    });
+    envSelect.addEventListener("change", applyEnvChoice);
     stopBtn.addEventListener("click", stopTraining);
     document.querySelectorAll('input[name="duration"]').forEach((el) => el.addEventListener("change", applyDuration));
     cameraToggle.addEventListener("change", onCameraToggle);

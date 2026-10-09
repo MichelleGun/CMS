@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from config import ALGORITHMS, ASSETS_DIR, FRONTEND_DIR, HOOP_SPEC, REACH_RADIUS, ROOM, RUNS_DIR, START_Z, XY_MARGIN, Z_RANGE
+from config import ALGORITHMS, ASSETS_DIR, FRONTEND_DIR, HOOP_SPEC, REACH_RADIUS, ROOM, RUNS_DIR, START_MARGIN, START_Z, XY_MARGIN, Z_RANGE
 from drone_manager import drone_manager
 from drone_ws import stream_flight
 from imitation_manager import imitation_manager
@@ -21,7 +21,7 @@ from run_manager import run_manager
 from schemas import (CameraToggleRequest, DroneCameraToggleRequest, EvaluateRequest,
                      GenerateDemosRequest, LabelDemoRequest, ReplayRequest,
                      RealtimeToggleRequest, SaveAnswerRequest, ShowcaseRequest, StartFlightRequest, StartRunRequest,
-                     TrainCloneRequest)
+                     TeacherDemosRequest, TrainCloneRequest)
 from telemetry_ws import stream_run
 
 app = FastAPI(title="Hoop-finding drone dashboard")
@@ -72,6 +72,7 @@ def get_config():
         "room": ROOM,
         "hoop": HOOP_SPEC,
         "xy_margin": XY_MARGIN,
+        "start_margin": START_MARGIN,
         "z_range": Z_RANGE,
         "start_z": START_Z,
         "reach_radius": REACH_RADIUS,
@@ -102,8 +103,11 @@ def start_run(req: StartRunRequest):
             timesteps=req.timesteps, n_envs=req.n_envs,
             eval_freq=req.eval_freq, n_eval_episodes=req.n_eval_episodes,
             env=req.env, ring_jitter=req.ring_jitter, radius_start=req.radius_start,
-            sway_deg=req.sway_deg,
-            until_stopped=req.until_stopped,
+            sway_deg=req.sway_deg, carry_start=req.carry_start,
+            reverse_prob=req.reverse_prob, lean_flip_prob=req.lean_flip_prob,
+            until_stopped=req.until_stopped, vec=req.vec,
+            init_run=req.init_run, init_clone=req.init_clone, demo_ids=req.demo_ids,
+            human_weight=req.human_weight, bc_coef=req.bc_coef, profile=req.profile,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -352,6 +356,13 @@ def list_demos():
 def generate_demos(req: GenerateDemosRequest):
     return _job_errors(lambda: imitation_manager.generate_demos(
         req.name, req.episodes, req.profile, req.seed, req.render))
+
+
+@app.post("/api/imitation/demos/teacher", status_code=202)
+def generate_teacher_demos(req: TeacherDemosRequest):
+    """A PyBullet run flies the onboard simulator as a teacher (make_teacher_demos.py)."""
+    return _job_errors(lambda: imitation_manager.generate_teacher_demos(
+        req.run_id, req.name, req.episodes, req.profile, req.seed))
 
 
 @app.post("/api/imitation/demos/label")

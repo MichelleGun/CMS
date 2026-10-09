@@ -98,6 +98,8 @@ class TelemetryCallback(BaseCallback):
         self._net_hit = self._rim_hit = False
         if "passes" in info:
             record["passes"] = int(info["passes"])
+        if "reversed" in info:
+            record["reversed"] = bool(info["reversed"])
         if done:
             record["done"] = True
             record["success"] = bool(info.get("is_success", False))
@@ -223,12 +225,15 @@ class CameraCallback(BaseCallback):
         # must never take down the training run, it should just mean no
         # fresh frame this tick.
         try:
-            # self.training_env is a DummyVecEnv; get_attr("unwrapped", ...)
-            # walks each sub-env's wrapper stack (Monitor, and for DQN also
-            # HoopFindDiscreteVel) down to the raw HoopFindAviary instance,
-            # which is what _getDroneImages lives on.
-            env = self.training_env.get_attr("unwrapped", indices=[self.env_index])[0]
-            frame = get_onboard_frame(env, nth_drone=0, res=(200, 150))
+            # env_method runs onboard_frame() where the env lives, which works for both a
+            # DummyVecEnv and a SubprocVecEnv (whose PyBullet env cannot be pickled across);
+            # env_method also looks through the wrappers (Monitor, DQN's discrete wrapper).
+            try:
+                frame = self.training_env.env_method("onboard_frame", (200, 150),
+                                                     indices=[self.env_index])[0]
+            except AttributeError:           # an env class without onboard_frame()
+                env = self.training_env.get_attr("unwrapped", indices=[self.env_index])[0]
+                frame = get_onboard_frame(env, nth_drone=0, res=(200, 150))
             from PIL import Image
             import io
             buf = io.BytesIO()

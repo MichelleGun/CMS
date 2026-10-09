@@ -52,6 +52,11 @@ dashboard can fly a real drone and should only be reachable from your own comput
    (for overnight runs), then **Start training**. The run view shows the far view with the drone's
    route, the drone's camera, and **Watch current policy** plays one episode with what it has
    learned so far. A *Real-time* checkbox slows everything to real speed so you can follow it.
+   By default episodes are varied so the policy gets robust. About 70% start where the previous
+   episode ended (as if the drone landed there), the rest anywhere on the floor. Half are flown back
+   to front, and about 30% have the ring leaning the other way, as if the wind held it over. Each has a
+   checkbox in the Training panel (and `--carry-start`, `--reverse-prob`, `--lean-flip-prob` on
+   `scripts/train_hoop_multi.py`).
 3. Training saves into `results/hoop/runs/<run id>/` (not committed to git). `latest_model.zip` is
    updated at every evaluation and `best_model.zip` on each new best, so an interrupted run keeps
    its progress.

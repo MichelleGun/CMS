@@ -70,6 +70,7 @@ const Api = {
   // --- imitation learning and jobs
   getDemos: () => apiGet("/api/imitation/demos"),
   generateDemos: (payload) => apiPost("/api/imitation/demos/generate", payload),
+  teacherDemos: (payload) => apiPost("/api/imitation/demos/teacher", payload),
   labelDemo: (demo_id, passed) => apiPost("/api/imitation/demos/label", { demo_id, passed }),
   getModels: () => apiGet("/api/imitation/models"),
   trainClone: (payload) => apiPost("/api/imitation/train", payload),

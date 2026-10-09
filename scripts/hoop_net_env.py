@@ -37,7 +37,9 @@ from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, Obs
 
 # Names the dashboard backend (webapp/backend/config.py) imports from the env module.
 ROOM = np.array([2.0, 2.0, 2.0])   # x, y, z (m) -- the net, floor at z=0
-XY_MARGIN = 0.25                   # keep ring / start this far from the side nets
+XY_MARGIN = 0.25                   # keep the ring this far from the side nets
+START_MARGIN = 0.12                # drone starts anywhere on the floor this far from the nets
+                                   # (drone radius 0.07 + a little: clear of the net-contact zone)
 START_Z = 0.03                     # resting height on the floor
 REACH_RADIUS = 0.15                # kept for dashboard compatibility (not used for success)
 
@@ -120,14 +122,20 @@ class HoopNetAviary(BaseRLAviary):
                  hoop_radius_scale: float = 1.0,
                  laps: int = 1,
                  wind: float = 1.0,
-                 sway_deg: float = None):
+                 sway_deg: float = None,
+                 carry_start: float = 0.7,
+                 reverse_prob: float = 0.5,
+                 lean_flip_prob: float = 0.3):
         """start_pos: optional (x, y[, z]) -- only x/y are used, the drone always starts on the
         floor. target_pos: optional ring centre override (jitter on the centre is then off).
         ring_jitter: 0 disables per-episode ring jitter, 1 = full. hoop_radius_scale > 1 widens
         the opening (training curriculum). wind: 0 keeps the ring still within an episode (no
         sway, no shove), 1 = full live wind. sway_deg: largest swing of the ring about its top knot at
         full gust (deg, default spec.sway_tilt_deg). laps > 1 flips the required crossing direction after
-        each pass, so the drone has to fly round and re-enter."""
+        each pass, so the drone has to fly round and re-enter.
+        carry_start: chance an episode starts where the previous one ended (as if the drone landed
+        there), otherwise anywhere on the floor. reverse_prob: chance the ring must be flown through
+        back to front. lean_flip_prob: chance the ring leans the other way (wind holding it over)."""
         self.ROOM = np.array(room, dtype=float)
         self.EPISODE_LEN_SEC = 20
         self.spec = spec
@@ -136,6 +144,11 @@ class HoopNetAviary(BaseRLAviary):
         self.laps = int(laps)
         self.wind = float(wind)
         self.sway_deg = float(spec.sway_tilt_deg if sway_deg is None else sway_deg)
+        self.carry_start = float(carry_start)
+        self.reverse_prob = float(reverse_prob)
+        self.lean_flip_prob = float(lean_flip_prob)
+        self._has_landing = False      # no previous episode yet to carry the start from
+        self._lean_flipped = False
         self._ring_ids = []
         self._rng = np.random.default_rng(seed)
         self._start_override = None if start_pos is None else np.asarray(start_pos, dtype=float)
@@ -170,9 +183,24 @@ class HoopNetAviary(BaseRLAviary):
         """Curriculum hook (callable through VecEnv.env_method): live wind strength, 0..1."""
         self.wind = float(scale)
 
+    def set_variety(self, carry_start=None, reverse_prob=None, lean_flip_prob=None):
+        """Curriculum hook (callable through VecEnv.env_method): change the episode mix."""
+        if carry_start is not None:
+            self.carry_start = float(carry_start)
+        if reverse_prob is not None:
+            self.reverse_prob = float(reverse_prob)
+        if lean_flip_prob is not None:
+            self.lean_flip_prob = float(lean_flip_prob)
+
     def set_sway_deg(self, deg):
         """Curriculum hook (callable through VecEnv.env_method): largest swing about the top knot."""
         self.sway_deg = float(deg)
+
+    def onboard_frame(self, res=(200, 150)):
+        """The drone's camera frame (uint8 RGB). Callable through VecEnv.env_method, so the
+        dashboard's live camera also works when this env runs in a SubprocVecEnv worker."""
+        from camera_capture import get_onboard_frame
+        return get_onboard_frame(self, nth_drone=0, res=res)
 
     @property
     def sway_top_amp(self):
@@ -192,7 +220,10 @@ class HoopNetAviary(BaseRLAviary):
         else:
             centre = centre + j * rng.uniform(-1, 1, 3) * np.array(s.centre_jitter)
         yaw = s.normal_yaw_deg + j * rng.uniform(-1, 1) * s.yaw_jitter_deg
-        tilt = s.normal_tilt_deg + j * rng.uniform(-1, 1) * s.tilt_jitter_deg
+        # sometimes the wind holds the hanging ring over the other way: mirror its lean
+        self._lean_flipped = bool(rng.uniform() < self.lean_flip_prob)
+        lean = -s.normal_tilt_deg if self._lean_flipped else s.normal_tilt_deg
+        tilt = lean + j * rng.uniform(-1, 1) * s.tilt_jitter_deg
         self.ring_c0 = centre                 # this episode's resting pose
         self.ring_n0 = ring_normal(yaw, tilt)
         self.ring_r_factor = 1.0 + j * rng.uniform(-1, 1) * s.radius_jitter_frac
@@ -232,27 +263,38 @@ class HoopNetAviary(BaseRLAviary):
         # kept so the dashboard / legacy code can read the "target" like HoopFindAviary
         self.TARGET_POS = self.ring_c
 
-    def _sample_start(self, rng):
+    def _sample_start(self, rng, landing=None):
+        """Always on the floor. A pinned start_pos wins; otherwise, with probability carry_start,
+        where the previous episode ended (`landing`, as if the drone landed straight down there);
+        otherwise anywhere on the floor, including the corners, beside and under the ring (its
+        bottom is ~1 m up)."""
+        half = self.ROOM[:2] / 2 - START_MARGIN
+        self.carried_start = False
         if self._start_override is not None:
             xy = self._start_override[:2]
+        elif landing is not None and rng.uniform() < self.carry_start:
+            xy = np.clip(np.asarray(landing, dtype=float)[:2], -half, half)
+            self.carried_start = True
         else:
-            half = self.ROOM[:2] / 2 - XY_MARGIN
-            for _ in range(100):
-                xy = rng.uniform(-half, half)
-                if np.linalg.norm(xy - self.ring_c0[:2]) > 0.25:   # not under the ring
-                    break
+            xy = rng.uniform(-half, half)
         return np.array([xy[0], xy[1], START_Z])
 
     def reset(self, seed=None, options=None):
         rng = np.random.default_rng(seed) if seed is not None else self._rng
         self._rng = rng
+        # where the episode that just finished left the drone (before the simulation is reset)
+        landing = self.pos[0].copy() if self._has_landing else None
         self._sample_ring(rng)
         self._reset_episode_state()
-        self.INIT_XYZS = self._sample_start(rng).reshape(1, 3)
+        self._dir = -1.0 if rng.uniform() < self.reverse_prob else 1.0   # back -> front this time
+        self._start_dir = self._dir
+        self.INIT_XYZS = self._sample_start(rng, landing).reshape(1, 3)
+        self._has_landing = True
         return super().reset(seed=seed, options=options)
 
     def _reset_episode_state(self):
         self._dir = 1.0              # required crossing direction along ring_n (flips each lap)
+        self._start_dir = 1.0
         self.passes = 0
         self.net_contacts = 0
         self.rim_contacts = 0
@@ -450,4 +492,6 @@ class HoopNetAviary(BaseRLAviary):
                 "wrong_way": self.wrong_way, "phase": self.phase,
                 "hoop_centre": self.ring_c.tolist(), "hoop_normal": (self.ring_n * self._dir).tolist(),
                 "hoop_radius": float(self.inner_radius),
-                "wind": float(self.wind * self._gust), "push_offset": float(np.linalg.norm(self.push_off))}
+                "wind": float(self.wind * self._gust), "push_offset": float(np.linalg.norm(self.push_off)),
+                "reversed": bool(self._start_dir < 0), "lean_flipped": bool(self._lean_flipped),
+                "carried_start": bool(getattr(self, "carried_start", False))}

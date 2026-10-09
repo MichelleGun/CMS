@@ -21,7 +21,9 @@ const Controls = (() => {
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
   function clampStart(p) {
-    const [hx, hy] = halfXY();
+    // the drone may start almost anywhere on the floor (bounds.startMargin), the ring is kept further in
+    const m = envMode === "net" && bounds.startMargin !== undefined ? bounds.startMargin : bounds.xyMargin;
+    const hx = bounds.room[0] / 2 - m, hy = bounds.room[1] / 2 - m;
     const z = envMode === "net" ? bounds.startZ : clamp(p[2], 0.05, bounds.room[2] - 0.05);
     return [clamp(p[0], -hx, hx), clamp(p[1], -hy, hy), z];
   }
@@ -65,7 +67,8 @@ const Controls = (() => {
   }
 
   function setBounds(cfg) {
-    bounds = { room: cfg.room, xyMargin: cfg.xy_margin, zRange: cfg.z_range, startZ: cfg.start_z,
+    bounds = { room: cfg.room, xyMargin: cfg.xy_margin, startMargin: cfg.start_margin,
+               zRange: cfg.z_range, startZ: cfg.start_z,
                hoopCentre: cfg.hoop ? cfg.hoop.centre : null };
     legacyZRange = [0.3, 1.6];
     netZRange = cfg.z_range;

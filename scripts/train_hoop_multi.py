@@ -17,6 +17,9 @@ Usage:
         --run-id dqn_test --out ../results/hoop/runs/dqn_test
     python train_hoop_multi.py --algo sac --start-pos 0.3 -0.2 0.1 \
         --target-pos -0.4 0.5 0.9 --run-id sac_fixed --out ../results/hoop/runs/sac_fixed
+    # continue an earlier run's policy (its latest -> best -> final model) in a new run dir
+    python train_hoop_multi.py --algo ppo --init ../results/hoop/runs/ppo_20261010-023538 \
+        --run-id ppo_more --out ../results/hoop/runs/ppo_more
 """
 import argparse
 import json
@@ -29,7 +32,6 @@ from pathlib import Path
 
 from stable_baselines3 import PPO, A2C, SAC, TD3, DQN
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList
-from stable_baselines3.common.env_util import make_vec_env
 
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 
@@ -40,6 +42,8 @@ from hoop_net_env import HoopNetAviary  # noqa: E402
 from discrete_action_wrapper import HoopFindDiscreteVel  # noqa: E402
 from telemetry_callback import (TelemetryCallback, DashboardEvalCallback, CameraCallback,  # noqa: E402
                                 PaceCallback)
+from vec_util import (VEC_CHOICES, load_for_resume, make_train_vec_env, resolve_model_path,  # noqa: E402
+                      resolve_vec)
 
 OBS = ObservationType.KIN
 
@@ -76,6 +80,11 @@ class RadiusCurriculumCallback(BaseCallback):
     def _scale(self):
         k = min(1.0, self.num_timesteps / max(1.0, self.horizon))
         return round(self.start + (1.0 - self.start) * k, 3)
+
+    def _on_training_start(self):
+        # A continued run starts mid-curriculum: set the right size now, not at the next boundary.
+        self._last = self._scale()
+        self.training_env.env_method("set_hoop_radius_scale", self._last)
 
     def _on_step(self) -> bool:
         if self.num_timesteps % self.every < self.training_env.num_envs:
@@ -120,6 +129,9 @@ def _make_env_kwargs(args):
         kwargs["ring_jitter"] = args.ring_jitter
         kwargs["hoop_radius_scale"] = args.radius_start
         kwargs["sway_deg"] = args.sway_deg
+        kwargs["carry_start"] = args.carry_start
+        kwargs["reverse_prob"] = args.reverse_prob
+        kwargs["lean_flip_prob"] = args.lean_flip_prob
     if args.seed is not None:
         kwargs["seed"] = args.seed
     if args.start_pos is not None:
@@ -142,6 +154,13 @@ def main():
                           "the first half (1.0 disables the curriculum)")
     ap.add_argument("--sway-deg", type=float, default=20.0,
                      help="net env: largest swing of the ring about its rope knot at full gust (deg)")
+    ap.add_argument("--carry-start", type=float, default=0.7,
+                     help="net env: chance an episode starts where the previous one ended "
+                          "(else anywhere on the floor)")
+    ap.add_argument("--reverse-prob", type=float, default=0.5,
+                     help="net env: chance an episode must fly through the ring back to front")
+    ap.add_argument("--lean-flip-prob", type=float, default=0.3,
+                     help="net env: chance the ring leans the other way (wind holding it over)")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--start-pos", type=float, nargs=3, default=None, metavar=("X", "Y", "Z"))
     ap.add_argument("--target-pos", type=float, nargs=3, default=None, metavar=("X", "Y", "Z"))
@@ -152,10 +171,15 @@ def main():
     ap.add_argument("--curriculum-steps", type=int, default=None,
                      help="net env: timesteps over which the wider ring shrinks to real size "
                           "(default: half of --timesteps, or 500k with --until-stopped)")
-    ap.add_argument("--n-envs", type=int, default=4,
-                     help="parallel env copies. Note: stable_baselines3's make_vec_env "
-                          "defaults to DummyVecEnv, which steps these sequentially in "
-                          "this one process, not across separate CPU cores.")
+    ap.add_argument("--n-envs", type=int, default=4, help="parallel env copies")
+    ap.add_argument("--vec", choices=VEC_CHOICES, default="auto",
+                     help="subproc = each env copy in its own process (uses n_envs cores); "
+                          "dummy = all copies stepped in turn in this process (one core); "
+                          "auto = subproc whenever n_envs > 1. Same learning either way, "
+                          "only the wall-clock speed differs.")
+    ap.add_argument("--init", type=Path, default=None,
+                     help="continue from a saved policy: a .zip, or a run directory "
+                          "(latest -> best -> final model). Its step count carries on.")
     ap.add_argument("--eval-freq", type=int, default=2000)
     ap.add_argument("--n-eval-episodes", type=int, default=10)
     ap.add_argument("--run-id", type=str, required=True)
@@ -174,6 +198,21 @@ def main():
 
     algo_cls, needs_discrete = ALGO_CLASSES[args.algo]
     env_variant = "discrete_vel" if needs_discrete else "continuous_vel"
+    vec = resolve_vec(args.vec, args.n_envs)
+
+    init_path, init_parent = None, None
+    if args.init is not None:
+        init_path = resolve_model_path(args.init)
+        parent_meta = init_path.parent / "meta.json"
+        if parent_meta.is_file():
+            pm = json.loads(parent_meta.read_text())
+            init_parent = pm.get("run_id", init_path.parent.name)
+            if pm.get("algo") and pm["algo"] != args.algo:
+                sys.exit(f"[ERROR] --init {init_path} is a {pm['algo']} model; "
+                         f"pass --algo {pm['algo']} to continue it")
+            if pm.get("env", "legacy") != args.env and pm.get("source") != "bc":
+                sys.exit(f"[ERROR] --init {init_path} was trained on env "
+                         f"'{pm.get('env', 'legacy')}', not '{args.env}'")
 
     meta = {
         "run_id": args.run_id,
@@ -187,8 +226,16 @@ def main():
         "until_stopped": bool(args.until_stopped),
         "curriculum_steps": curriculum_steps if args.env == "net" else None,
         "sway_deg": args.sway_deg if args.env == "net" else None,
+        "carry_start": args.carry_start if args.env == "net" else None,
+        "reverse_prob": args.reverse_prob if args.env == "net" else None,
+        "lean_flip_prob": args.lean_flip_prob if args.env == "net" else None,
         "n_envs": args.n_envs,
+        "vec": vec,
+        "init_from": str(init_path) if init_path else None,
+        "init_parent": init_parent,
+        "init_timesteps": None,
         "eval_freq": args.eval_freq,
+        "eval_every_timesteps": args.eval_freq * args.n_envs,   # SB3 counts eval_freq per vec step
         "n_eval_episodes": args.n_eval_episodes,
         "pid": os.getpid(),
         "created_at": datetime.now().isoformat(),
@@ -202,17 +249,18 @@ def main():
     env_kwargs = _make_env_kwargs(args)
     wrapper_class = HoopFindDiscreteVel if needs_discrete else None
 
-    train_env = make_vec_env(env_cls, env_kwargs=env_kwargs, n_envs=args.n_envs,
-                              seed=(args.seed if args.seed is not None else 0),
-                              wrapper_class=wrapper_class)
+    train_env = make_train_vec_env(env_cls, env_kwargs, args.n_envs,
+                                   seed=(args.seed if args.seed is not None else 0),
+                                   wrapper_class=wrapper_class, vec=vec)
     eval_env_kwargs = dict(env_kwargs)
     if args.env == "net":
         eval_env_kwargs["hoop_radius_scale"] = 1.0     # always evaluate on the real-size ring
     eval_env_kwargs["seed"] = (args.seed + 1) if args.seed is not None else 1
-    eval_env = make_vec_env(env_cls, env_kwargs=eval_env_kwargs, n_envs=1,
-                             seed=eval_env_kwargs["seed"], wrapper_class=wrapper_class)
+    eval_env = make_train_vec_env(env_cls, eval_env_kwargs, 1, seed=eval_env_kwargs["seed"],
+                                  wrapper_class=wrapper_class, vec="dummy")
 
     print(f"[INFO] algo:             {args.algo} ({env_variant})")
+    print(f"[INFO] envs:             {args.n_envs} ({vec})")
     print("[INFO] action space:     ", train_env.action_space)
     print("[INFO] observation space:", train_env.observation_space)
 
@@ -221,7 +269,22 @@ def main():
     # training several-fold. One thread is as fast here and far more robust.
     import torch
     torch.set_num_threads(1)
-    model = algo_cls("MlpPolicy", train_env, verbose=1)
+    if init_path is not None:
+        try:
+            model, _ = load_for_resume(algo_cls, init_path, train_env)
+        except ValueError as e:
+            train_env.close()
+            eval_env.close()
+            sys.exit(f"[ERROR] {e}")
+        model.verbose = 1
+        meta["init_timesteps"] = int(model.num_timesteps)
+        if not args.until_stopped:          # the dashboard's progress bar counts the parent's steps too
+            meta["timesteps_requested"] = int(model.num_timesteps) + args.timesteps
+        _atomic_write_json(run_dir / "meta.json", meta)
+        print(f"[INFO] continuing from {init_path} at {model.num_timesteps} steps")
+    else:
+        model = algo_cls("MlpPolicy", train_env, verbose=1)
+    start_steps = int(model.num_timesteps)
 
     t0 = time.time()
     telemetry_cb = TelemetryCallback(run_dir=run_dir, env_index=0)
@@ -229,7 +292,7 @@ def main():
     eval_cb = DashboardEvalCallback(
         eval_env,
         run_dir=run_dir,
-        total_timesteps=None if args.until_stopped else args.timesteps,
+        total_timesteps=None if args.until_stopped else start_steps + args.timesteps,
         t0=t0,
         best_model_save_path=str(run_dir),
         log_path=str(run_dir),
@@ -249,7 +312,10 @@ def main():
         _keep_awake(True)
         print("[INFO] training until stopped (dashboard Stop, or Ctrl+Break); PC kept awake")
     try:
-        model.learn(total_timesteps=budget, callback=callback, log_interval=10)
+        # reset_num_timesteps=False: a continued run's step count (and with it the curriculum
+        # and the eval curve's x axis) carries on from the parent's; `budget` more steps are trained.
+        model.learn(total_timesteps=budget, callback=callback, log_interval=10,
+                    reset_num_timesteps=init_path is None)
         final_timesteps = model.num_timesteps
         final_status = "stopped" if _stop_requested["flag"] else "completed"
     except KeyboardInterrupt:

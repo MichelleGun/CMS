@@ -282,6 +282,37 @@ peaks at 120–129 cm), `--max-airborne` (default 40 s), `--ring-opening`, `--ri
 `--drone-width` (default 14 cm, no prop guards; use 0.18 with them, which cuts the clearance from
 8 cm to 6 cm), `--hfov`, `--commit-range`.
 
+**Step 8 (optional) — mix your flights with a PyBullet run, then improve the mix with RL.**
+Your flights and the PyBullet runs (`results/hoop/runs/`) are different tasks: the PyBullet policy
+reads 78 numbers of true state, this task 33 camera numbers, and a flight records no true state.
+So the bridge goes the other way: `make_teacher_demos.py` lets a PyBullet policy fly the onboard
+simulator (which does know the true state) and records what the camera would have seen. The
+scene is first rotated so the ring sits where the PyBullet ring always hangs (`--frame canonical`,
+the default): measured with `ppo_20261010-011316`, that took the teacher from 0/20 passes (aiming
+~15 cm low and to one side) to 13/20. Only passed episodes are kept.
+
+```powershell
+# 1. teacher demos from your best PyBullet run (prints its pass rate)
+& $PY hardware/onboard/make_teacher_demos.py --run results/hoop/runs/ppo_20261010-011316 --episodes 150
+# 2. one clone on both; your flights count x3 per sample (--source-weight human=3, the default)
+& $PY hardware/imitation/bc_train.py --demos hardware/flights/tello_*/demo.npz `
+      hardware/flights/demos/teacher_*.npz --out hardware/flights/bc/mixed --eval-episodes 20
+# 3. RL from that clone, the same demos still pulling it towards them (fading 1.0 -> 0.1)
+& $PY hardware/onboard/train_onboard.py --init hardware/flights/bc/mixed `
+      --demos hardware/flights/tello_*/demo.npz hardware/flights/demos/teacher_*.npz `
+      --timesteps 500000 --run-id onboard_mixed --out results/hoop/runs/onboard_mixed
+# continue it later: --init results/hoop/runs/onboard_mixed (steps carry on)
+```
+
+`train_onboard.py` freezes the actor for the first 20k steps while the critic learns
+(`--critic-warmup-steps`), then after every PPO update takes as many steps on the demo loss
+(`--bc-coef`, `--bc-coef-min`, `--bc-decay-steps`). Measured on the typical profile, 20 fixed
+evaluation layouts, 150k steps each: the guided run went 15% → 55% → 75% steadily; PPO from
+scratch reached 90% at 60k but then collapsed to 0% for 40k steps before recovering to 70%.
+The simulator cannot tell you whether your style transfers better to the real Tello; `--bc-coef`
+is how much you bet on it. The run's `best_model.zip` flies with `fly_hoop.py --mode policy`
+like a clone, and the dashboard lists it (Training panel: Environment "Onboard camera").
+
 ## If something goes wrong
 
 | What you see | What it means |

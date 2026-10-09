@@ -23,10 +23,22 @@ class StartRunRequest(BaseModel):
     n_envs: int = 4
     eval_freq: int = 5000           # per env: with 4 envs, one evaluation every 20k timesteps
     n_eval_episodes: int = 10
-    env: Literal["net", "legacy"] = "net"     # net = 2x2x2 net + ring (hoop_net_env.py)
+    # net = 2x2x2 net + ring (hoop_net_env.py); onboard = the Tello camera task
+    # (hardware/onboard/train_onboard.py: PPO, optionally from a clone and guided by demos)
+    env: Literal["net", "legacy", "onboard"] = "net"
+    vec: Literal["auto", "subproc", "dummy"] = "auto"   # auto: env copies in their own processes
+    init_run: Optional[str] = None      # continue from this run's latest -> best -> final model
+    init_clone: Optional[str] = None    # onboard: start from this behaviour clone (hardware/flights/bc)
+    demo_ids: List[str] = []            # onboard: demos for the behaviour-cloning term
+    human_weight: float = Field(3.0, ge=0.0, le=20.0)  # onboard: weight of human vs simulated demos
+    bc_coef: float = Field(1.0, ge=0.0, le=10.0)       # onboard: strength of the demo term at the start
+    profile: Literal["ideal", "typical", "harsh"] = "typical"   # onboard: simulated drone behaviour
     ring_jitter: float = Field(1.0, ge=0.0, le=2.0)
     radius_start: float = Field(1.5, ge=1.0, le=3.0)
     sway_deg: float = Field(20.0, ge=0.0, le=45.0)   # net env: largest ring swing about its rope knot
+    carry_start: float = Field(0.7, ge=0.0, le=1.0)  # net env: start where the last episode ended
+    reverse_prob: float = Field(0.5, ge=0.0, le=1.0) # net env: fly through back to front
+    lean_flip_prob: float = Field(0.3, ge=0.0, le=1.0)  # net env: ring leans the other way
 
 
 class StartRunResponse(BaseModel):
@@ -92,6 +104,14 @@ class GenerateDemosRequest(BaseModel):
     profile: Literal["ideal", "typical", "harsh"] = "typical"
     seed: int = 0
     render: bool = False
+
+
+class TeacherDemosRequest(BaseModel):
+    run_id: str                         # a net-env (PyBullet) training run
+    name: str
+    episodes: int = 150
+    profile: Literal["ideal", "typical", "harsh"] = "typical"
+    seed: int = 0
 
 
 class LabelDemoRequest(BaseModel):

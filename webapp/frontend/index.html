@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hoop Finder Dashboard</title>
-  <link rel="stylesheet" href="css/style.css?v=11">
+  <link rel="stylesheet" href="css/style.css?v=13">
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
@@ -134,17 +134,50 @@
         <select id="env-select">
           <option value="net" selected>Net + ring (real cage)</option>
           <option value="legacy">Legacy: reach a point</option>
+          <option value="onboard">Onboard camera (the Tello task, can learn from demos)</option>
         </select>
+        <label for="init-select">Start from</label>
+        <select id="init-select" title="Continue an earlier run's policy (its latest save; its step count carries on), or for the onboard task start from a behaviour clone">
+          <option value="">a new policy</option>
+        </select>
+        <div id="onboard-options" hidden>
+          <div class="note">PPO on the camera task. Ticked demos keep pulling the policy towards
+            them (strongly at first, then less), so your flying guides it while RL improves on it.
+            Teacher demos are a PyBullet run flying this task (button below).</div>
+          <div class="duration-label">Guide with demos</div>
+          <div id="onboard-demo-list" class="note">loading&hellip;</div>
+          <div class="field-row" title="How much one of your own flights counts against one simulated (teacher / scripted) sample">
+            <label for="human-weight">Your demos count &times;</label>
+            <input type="number" id="human-weight" value="3" min="0" max="20" step="0.5"></div>
+          <div class="field-row" title="Strength of the demo term at the start; it fades to a tenth over 300k steps. 0 = plain PPO">
+            <label for="bc-coef">Demo guidance</label>
+            <input type="number" id="bc-coef" value="1" min="0" max="10" step="0.1"></div>
+          <div class="field-row"><label for="onboard-profile">Simulated drone</label>
+            <select id="onboard-profile"><option value="ideal">ideal</option>
+              <option value="typical" selected>typical</option><option value="harsh">harsh</option></select></div>
+          <div class="duration-label">Teacher demos from a PyBullet run</div>
+          <div class="field-row"><select id="teacher-run-select"></select>
+            <button id="teacher-btn" class="secondary-btn" type="button">Make</button></div>
+          <div id="teacher-note" class="note"></div>
+        </div>
         <div id="net-options">
           <label class="checkbox-row"><input type="checkbox" id="ring-jitter-toggle" checked>
             Ring moves / turns a little each episode</label>
           <label class="checkbox-row"><input type="checkbox" id="radius-curriculum-toggle" checked>
             Wider ring at first (shrinks to real size)</label>
+          <label class="checkbox-row" title="70% of episodes start where the previous one ended, as if the drone landed there; the rest anywhere on the floor (corners, beside and under the ring)">
+            <input type="checkbox" id="carry-start-toggle" checked> Start where the last episode ended (70%)</label>
+          <label class="checkbox-row" title="Half the episodes must fly through the ring back to front">
+            <input type="checkbox" id="reverse-toggle" checked> Fly through from both sides (50%)</label>
+          <label class="checkbox-row" title="30% of episodes the ring leans the other way, as if the wind held it over">
+            <input type="checkbox" id="lean-flip-toggle" checked> Ring sometimes leans the other way (30%)</label>
           <div class="field-row"><label>Ring swing (max) <span class="sway-deg-val">20&deg;</span></label>
             <input type="range" id="train-sway-deg" class="sway-deg-input" min="0" max="45" step="1" value="20"></div>
         </div>
+        <div id="algo-block">
         <label for="algo-select">Algorithm</label>
         <select id="algo-select"></select>
+        </div>
         <div id="dqn-note" class="note" hidden>
           DQN uses 6 fixed directions plus hover instead of continuous velocity,
           may need more timesteps and cap out at a lower reward than PPO, SAC or TD3.
@@ -163,11 +196,14 @@
           awake while it trains. Keep the dashboard server window open: closing it ends training.</div>
         <div class="field-row">
           <label for="nenvs-input">Parallel envs</label>
-          <input type="number" id="nenvs-input" value="4">
+          <input type="number" id="nenvs-input" value="4" min="1" max="16">
         </div>
+        <div class="note">Each env copy runs in its own process (one CPU core), so more envs
+          collect experience faster without changing what is learned.</div>
         <div class="button-row">
           <button id="start-btn" class="primary-btn">Start training</button>
         </div>
+        <div id="capacity-note" class="note"></div>
       </div>
 
       <div class="panel" id="panel-chart">
@@ -449,16 +485,16 @@
     </section>
   </main>
 
-  <script src="js/api.js?v=11"></script>
-  <script src="js/scene3d.js?v=11"></script>
-  <script src="js/controls.js?v=11"></script>
-  <script src="js/chart.js?v=11"></script>
-  <script src="js/tabs.js?v=11"></script>
-  <script src="js/keys.js?v=11"></script>
-  <script src="js/drone.js?v=11"></script>
-  <script src="js/imitation.js?v=11"></script>
-  <script src="js/history.js?v=11"></script>
-  <script src="js/envview.js?v=11"></script>
-  <script src="js/app.js?v=11"></script>
+  <script src="js/api.js?v=13"></script>
+  <script src="js/scene3d.js?v=13"></script>
+  <script src="js/controls.js?v=13"></script>
+  <script src="js/chart.js?v=13"></script>
+  <script src="js/tabs.js?v=13"></script>
+  <script src="js/keys.js?v=13"></script>
+  <script src="js/drone.js?v=13"></script>
+  <script src="js/imitation.js?v=13"></script>
+  <script src="js/history.js?v=13"></script>
+  <script src="js/envview.js?v=13"></script>
+  <script src="js/app.js?v=13"></script>
 </body>
 </html>

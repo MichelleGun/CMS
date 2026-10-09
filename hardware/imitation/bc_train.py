@@ -43,7 +43,12 @@ for p in (HW, HW.parent / "scripts"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from imitation.record_demo import SIM_OBS_DIM, SIM_TASK, load_demos, mc_returns  # noqa: E402
+from imitation.record_demo import (SIM_OBS_DIM, SIM_TASK, load_demos, mc_returns,  # noqa: E402
+                                   parse_source_weights, sample_weights)
+
+# Mixed demos: a human flight is worth more than a simulated one, because the human style is
+# what the clone should end up with where the sources disagree. Mean-normalised per sample.
+DEFAULT_SOURCE_WEIGHTS = {"human": 3.0}
 
 SIM_OBS_SHAPE = (1, SIM_OBS_DIM)
 SIM_ACT_SHAPE = (1, 4)
@@ -90,7 +95,8 @@ def targets_from_demo(intent: np.ndarray):
 
 
 def train_actor(model, obs, intent, epochs=200, lr=3e-3, batch=256, val_frac=0.15, seed=0,
-                verbose=True, loss="sim_vel", obs_shape=SIM_OBS_SHAPE):
+                verbose=True, loss="sim_vel", obs_shape=SIM_OBS_SHAPE, weights=None):
+    """`weights` (per sample, mean 1) scale each sample's share of the "mse" loss."""
     import torch
     rng = np.random.default_rng(seed)
     unit, speed, moving = targets_from_demo(intent)
@@ -105,6 +111,8 @@ def train_actor(model, obs, intent, epochs=200, lr=3e-3, batch=256, val_frac=0.1
     O = torch.as_tensor(obs.reshape(-1, *tuple(obs_shape)), dtype=torch.float32)
     U, S, M = torch.as_tensor(unit), torch.as_tensor(speed), torch.as_tensor(moving)
     A = torch.as_tensor(np.asarray(intent, dtype=np.float32))
+    W = torch.as_tensor(np.ones(n, dtype=np.float32) if weights is None
+                        else np.asarray(weights, dtype=np.float32))
 
     def mean_action(o):
         return pol.get_distribution(o).distribution.mean.reshape(-1, 4)
@@ -116,8 +124,8 @@ def train_actor(model, obs, intent, epochs=200, lr=3e-3, batch=256, val_frac=0.1
         if loss == "mse":
             # Four independent rc channels: every sign and magnitude matters, and a zero
             # action is a real command, so there is nothing to mask or normalise.
-            err = ((mean - A[ids]) ** 2).mean(dim=0)
-            l_all = err.mean()
+            w = W[ids]
+            l_all = (((mean - A[ids]) ** 2).mean(dim=1) * w).sum() / w.sum().clamp_min(1e-8)
             cos = torch.nn.functional.cosine_similarity(
                 mean, A[ids], dim=1, eps=1e-6)
             return l_all, torch.zeros((), device=l_all.device), \
@@ -227,6 +235,10 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--loss", choices=["auto", "sim_vel", "mse"], default="auto",
                     help="auto picks sim_vel for simulator demos and mse for onboard-camera demos")
+    ap.add_argument("--source-weight", nargs="*", default=None, metavar="SOURCE=W",
+                    help="weight per demo source when mixing, e.g. human=3 sim_teacher=1 "
+                         "(default human=3, everything else 1). Sources: human, sim_teacher, "
+                         "onboard_scripted_expert, onboard_expert, ...")
     ap.add_argument("--as-run", action="store_true",
                     help="also save as results/hoop/runs/bc_<ts>/ so replay_hoop.py / the dashboard can load it")
     a = ap.parse_args(argv)
@@ -261,11 +273,18 @@ def main(argv=None):
         # perfectly good samples (and keep ones chosen by an unrelated criterion).
         keep = np.ones(len(d["obs"]), dtype=bool)
     obs, act, ep = d["obs"][keep], d[a.use][keep], d["episode"][keep]
+    src = d["source"][keep]
+    sw = dict(DEFAULT_SOURCE_WEIGHTS, **parse_source_weights(a.source_weight))
+    weights = sample_weights(src, sw)
+    counts = {s: int((src == s).sum()) for s in sorted(set(src.tolist()))}
+    print(f"[bc] samples per source {counts}, weights {sw}")
+    if loss != "mse" and len(counts) > 1:
+        print("[bc] note: source weights apply to the onboard ('mse') loss only")
     print(f"[bc] {len(files)} file(s), {len(d['obs'])} samples, {len(obs)} after filtering")
 
     model = build_model(a.algo, a.seed, obs_shape=obs_shape, act_shape=act_shape)
     stats = train_actor(model, obs, act, epochs=a.epochs, lr=a.lr, seed=a.seed,
-                        loss=loss, obs_shape=obs_shape)
+                        loss=loss, obs_shape=obs_shape, weights=weights)
     if a.warm_critic:
         if task != SIM_TASK:
             sys.exit("[bc] --warm-critic needs the simulator's reward (mc_returns reads "
@@ -279,7 +298,8 @@ def main(argv=None):
     zip_path = a.out / "bc_model.zip"
     model.save(str(zip_path))
     meta = dict(algo=a.algo, env_variant="continuous_vel", source="bc", demos=[Path(f).name for f in files],
-                task=task, obs_shape=list(obs_shape),
+                task=task, obs_shape=list(obs_shape), sources=counts,
+                source_weights={k: v for k, v in sw.items() if k in counts},
                 n_samples=int(len(obs)), final_status="bc", saved=time.strftime("%Y-%m-%d %H:%M:%S"), **{
                     k: v for k, v in stats.items() if k != "history"})
     if a.eval_episodes:

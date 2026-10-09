@@ -4,6 +4,12 @@
 const EnvView = (() => {
   let view, spec, room;
   let ringC, ringN, ringR;
+  let dirSign = 1;                 // -1: this episode goes through back -> front (arrow flipped)
+  let leanFlipped = false;         // the ring leans the other way this episode
+  // same mix as HoopNetAviary's defaults (carry_start is about consecutive episodes, so the
+  // preview shows its fresh-start alternative: anywhere on the floor)
+  const REVERSE_PROB = 0.5, LEAN_FLIP_PROB = 0.3, START_MARGIN = 0.12;
+  const shownN = (n) => n.map((x) => x * dirSign);   // normal pointing the way to fly through
   let wind = null;                 // live sway preview: {dir, axis, gust, w, phase, t0}
   let swayDeg = 20;                // largest swing about the rope knot (the "Max swing" sliders)
   let flying = null;               // {t0, pts, seg, total, speed}
@@ -49,14 +55,14 @@ const EnvView = (() => {
   // The ring's live pose in the wind (hoop_net_env._update_ring): it hangs from a rope tied to its
   // top, so the knot drifts a little downwind and the ring swings about it, bottom furthest.
   function swayRing() {
-    if (!wind) { view.setHoop(ringC, ringN, ringR); return; }
+    if (!wind) { view.setHoop(ringC, shownN(ringN), ringR); return; }
     const t = (performance.now() - wind.t0) / 1000;
     const swing = wind.gust * Math.sin(wind.w * t + wind.phase);
     const top0 = add(ringC, ringUp(ringN), rOut());
     const knot = add(top0, wind.dir, swing * topAmp());
     const ang = -swing * swayDeg * Math.PI / 180;
     view.setHoop(add(knot, rotate(add(ringC, top0, -1), wind.axis, ang)),
-                 rotate(ringN, wind.axis, ang), ringR);
+                 shownN(rotate(ringN, wind.axis, ang)), ringR);
   }
 
   // Both "Max swing" sliders (Environment preview + Training panel) hold the same value.
@@ -73,9 +79,13 @@ const EnvView = (() => {
 
   function setRing(jitter) {
     const j = jitter ? 1 : 0;
+    // like HoopNetAviary: sometimes flown back to front, sometimes leaning the other way
+    dirSign = jitter && Math.random() < REVERSE_PROB ? -1 : 1;
+    leanFlipped = !!jitter && Math.random() < LEAN_FLIP_PROB;
+    const lean = (spec.normal_tilt_deg || 0) * (leanFlipped ? -1 : 1);
     ringC = spec.centre.map((c, i) => c + j * rnd() * spec.centre_jitter[i]);
     ringN = ringNormal(spec.normal_yaw_deg + j * rnd() * spec.yaw_jitter_deg,
-                       (spec.normal_tilt_deg || 0) + j * rnd() * spec.tilt_jitter_deg);
+                       lean + j * rnd() * spec.tilt_jitter_deg);
     ringR = spec.inner_radius * (1 + j * rnd() * spec.radius_jitter_frac);
     if (wind) newWind();
     swayRing();
@@ -93,17 +103,16 @@ const EnvView = (() => {
       `ring opening   ${(2 * ringR * 100).toFixed(0)} cm (drone width ${(2 * spec.drone_radius * 100).toFixed(0)} cm)\n` +
       `wind           swings up to ${swayDeg} deg about the rope knot at its top ` +
       `(knot ${(topAmp() * 100).toFixed(0)} cm), shoved by rim hits\n` +
-      `start          on the floor, anywhere inside the net\n` +
+      `lean           ${leanFlipped ? "mirrored (wind holds it over)" : "as hung"}\n` +
+      `direction      ${dirSign > 0 ? "front -> back" : "back -> front"}\n` +
+      `start          floor: mostly where last run landed\n` +
       `success        through, along the arrow`;
   }
 
   function startPoint() {
-    const half = [room[0] / 2 - 0.25, room[1] / 2 - 0.25];
-    for (let i = 0; i < 100; i++) {
-      const p = [rnd() * half[0], rnd() * half[1], 0.03];
-      if (Math.hypot(p[0] - ringC[0], p[1] - ringC[1]) > 0.35) return p;
-    }
-    return [-0.6, -0.5, 0.03];
+    // anywhere on the floor clear of the net: corners, beside and under the ring (~1 m up)
+    const half = [room[0] / 2 - START_MARGIN, room[1] / 2 - START_MARGIN];
+    return [rnd() * half[0], rnd() * half[1], 0.03];
   }
 
   function placeDrone() {
@@ -113,8 +122,9 @@ const EnvView = (() => {
   }
 
   function play() {
-    const approach = add(ringC, ringN, -spec.approach_dist);
-    const exit = add(ringC, ringN, 0.6);
+    const n = shownN(ringN);                     // the way this episode goes through
+    const approach = add(ringC, n, -spec.approach_dist);
+    const exit = add(ringC, n, 0.6);
     const pts = [start, [start[0], start[1], 0.6], approach, ringC, exit];
     const seg = [];
     let total = 0;

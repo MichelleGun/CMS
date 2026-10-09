@@ -27,6 +27,7 @@ import hoop_net_env as hoop_env  # noqa: E402  (local module, path set above)
 
 ROOM = hoop_env.ROOM.tolist()
 XY_MARGIN = hoop_env.XY_MARGIN
+START_MARGIN = getattr(hoop_env, "START_MARGIN", XY_MARGIN)   # drone starts: almost the whole floor
 Z_RANGE = list(hoop_env.Z_RANGE)
 START_Z = hoop_env.START_Z
 REACH_RADIUS = hoop_env.REACH_RADIUS
@@ -66,13 +67,14 @@ RUNS_DIR.mkdir(parents=True, exist_ok=True)
 FLIGHTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def bounds_ok(pos):
+def bounds_ok(pos, margin=None):
     """True if a (x, y, z) position is inside the room, respecting the same
     margins hoop_env.py itself samples within."""
     if pos is None:
         return True
     x, y, z = pos
-    half_xy = (ROOM[0] / 2 - XY_MARGIN, ROOM[1] / 2 - XY_MARGIN)
+    m = XY_MARGIN if margin is None else margin
+    half_xy = (ROOM[0] / 2 - m, ROOM[1] / 2 - m)
     return (-half_xy[0] <= x <= half_xy[0]
             and -half_xy[1] <= y <= half_xy[1]
             and 0.0 <= z <= ROOM[2])

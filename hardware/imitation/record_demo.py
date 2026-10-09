@@ -103,7 +103,32 @@ def load_demos(paths: List) -> dict:
         off += int(p["episode"].max()) + 1
     res = {k: np.concatenate(v) for k, v in out.items()}
     res["meta"] = [p["meta"] for p in parts]
+    # Who demonstrated each sample ("human", "sim_teacher", "onboard_scripted_expert", ...),
+    # so a trainer can weight sources differently when they are mixed.
+    res["source"] = np.concatenate([np.full(len(p["obs"]), str(p["meta"].get("source", "unknown")))
+                                    for p in parts])
     return res
+
+
+def parse_source_weights(items) -> dict:
+    """["human=3", "sim_teacher=1"] -> {"human": 3.0, "sim_teacher": 1.0}."""
+    out = {}
+    for it in items or []:
+        name, sep, val = str(it).partition("=")
+        if not sep or not name:
+            raise ValueError(f"source weight '{it}' should look like name=number")
+        out[name.strip()] = float(val)
+    return out
+
+
+def sample_weights(source: np.ndarray, weights: dict, default=1.0) -> np.ndarray:
+    """Per-sample weights, normalised to mean 1 so the loss scale (and learning rate) is
+    unchanged by the weighting itself; only the balance between sources moves."""
+    w = np.array([weights.get(str(s), default) for s in source], dtype=np.float32)
+    if np.any(w < 0):
+        raise ValueError("source weights must be >= 0")
+    m = float(w.mean()) if len(w) else 1.0
+    return w / m if m > 0 else w
 
 
 def mc_returns(obs: np.ndarray, episode: np.ndarray, gamma=0.99, reach_radius=0.15) -> np.ndarray:

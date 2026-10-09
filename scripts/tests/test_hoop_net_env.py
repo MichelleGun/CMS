@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from hoop_net_env import HoopNetAviary, HoopSpec, START_Z, ring_normal  # noqa: E402
+from hoop_net_env import START_MARGIN, HoopNetAviary, HoopSpec, START_Z, ring_normal  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -50,8 +50,10 @@ def test_always_starts_on_floor_and_ring_jitter_in_range(env, seed):
     sp = env.spec
     assert np.all(np.abs(env.ring_c0 - np.array(sp.centre)) <= np.array(sp.centre_jitter) + 1e-9)
     assert 1 - sp.radius_jitter_frac - 1e-9 <= env.ring_r_factor <= 1 + sp.radius_jitter_frac + 1e-9
-    # episode facing within the yaw/tilt jitter of the nominal (scan-measured) facing
-    nominal = ring_normal(sp.normal_yaw_deg, sp.normal_tilt_deg)
+    # episode facing within the yaw/tilt jitter of the nominal (scan-measured) facing, or of its
+    # mirrored lean when the wind holds the ring over the other way this episode
+    lean = -sp.normal_tilt_deg if env._lean_flipped else sp.normal_tilt_deg
+    nominal = ring_normal(sp.normal_yaw_deg, lean)
     max_dev = np.radians(sp.yaw_jitter_deg + sp.tilt_jitter_deg)
     assert np.degrees(np.arccos(np.clip(env.ring_n0 @ nominal, -1, 1))) <= np.degrees(max_dev) + 1e-6
     # live pose stays within the wind sway of the episode pose
@@ -103,6 +105,7 @@ def test_pass_geometry_synthetic(env):
 
     def cross(from_s, to_s, lateral):
         env.reset(seed=0)
+        env._dir = 1.0                 # this episode is front -> back (along +ring_n)
         n, c = env.ring_n, env.ring_c
         u = np.cross(n, [0, 0, 1.0]); u /= np.linalg.norm(u)
         env._prev_pos = c + n * from_s + u * lateral
@@ -235,10 +238,85 @@ def test_rim_hit_shoves_ring_and_it_swings_back(env):
 
 
 def test_lap_mode_requires_return_pass():
-    e = HoopNetAviary(seed=0, laps=2)
+    e = HoopNetAviary(seed=0, laps=2, reverse_prob=0.0)
     e.reset(seed=0)
     info, te, tr = _fly(e, _expert, 700)
     assert info["passes"] >= 1
     assert (te and info["passes"] == 2) or (not te and info["passes"] == 1)
     assert np.allclose(info["hoop_normal"], -e.ring_n)       # required direction flipped after lap 1
+    e.close()
+
+
+# ---------------------------------------------------------------- episode variety
+
+def test_fresh_starts_cover_the_whole_floor():
+    e = HoopNetAviary(seed=0, carry_start=0.0)
+    xs = []
+    for i in range(300):
+        e.reset(seed=1000 + i)
+        xs.append(e.INIT_XYZS[0].copy())
+    xs = np.array(xs)
+    lim = e.ROOM[0] / 2 - START_MARGIN
+    assert np.all(np.abs(xs[:, :2]) <= lim + 1e-9) and np.all(xs[:, 2] < 0.1)
+    for sx in (-1, 1):                                   # every quadrant, out near the corners
+        for sy in (-1, 1):
+            q = xs[(np.sign(xs[:, 0]) == sx) & (np.sign(xs[:, 1]) == sy)]
+            assert len(q) > 30
+    assert (np.abs(xs[:, 0]) > 0.8).any() and (np.abs(xs[:, 1]) > 0.8).any()
+    under = np.linalg.norm(xs[:, :2] - e.ring_c0[:2], axis=1) < 0.25
+    assert under.any()                                   # under the ring is allowed now
+    e.close()
+
+
+def test_carry_start_begins_where_the_last_episode_ended():
+    e = HoopNetAviary(seed=0, carry_start=1.0)
+    e.reset(seed=1)
+    for _ in range(3):
+        for _ in range(40):                              # fly somewhere for a bit
+            e.step(np.array([[0.6, -0.8, 1.0, 1.0]], dtype=np.float32))
+        end = e._getDroneStateVector(0)[:3].copy()
+        e.reset()
+        lim = e.ROOM[0] / 2 - START_MARGIN
+        assert np.allclose(e.INIT_XYZS[0][:2], np.clip(end[:2], -lim, lim))
+        assert e.INIT_XYZS[0][2] < 0.1 and e.carried_start
+        assert np.allclose(e._getDroneStateVector(0)[:2], e.INIT_XYZS[0][:2], atol=1e-3)
+    e.close()
+
+
+def test_reversed_episodes_flip_the_required_direction():
+    e = HoopNetAviary(seed=0, reverse_prob=1.0, wind=0.0)
+    obs, info = e.reset(seed=2)
+    assert e._dir == -1.0
+    assert np.allclose(obs[0, -6:-3], -e.ring_n, atol=1e-5)
+    wins = 0
+    for seed in range(3):
+        e.reset(seed=seed)
+        info, te, tr = _fly(e, _expert, 700)
+        assert info["reversed"]
+        wins += bool(info["success"] and te)
+    assert wins >= 2                                     # the expert gets through back to front
+    e.close()
+
+
+def test_mirrored_lean_points_the_face_up():
+    for p, up in ((1.0, True), (0.0, False)):
+        e = HoopNetAviary(seed=0, lean_flip_prob=p, wind=0.0)
+        for i in range(10):
+            e.reset(seed=i)
+            assert (e.ring_n0[2] > 0) == up
+        e.close()
+
+
+def test_variety_probabilities():
+    e = HoopNetAviary(seed=0)                            # defaults: 0.7 / 0.5 / 0.3
+    n, carried, rev, flip = 400, 0, 0, 0
+    e.reset(seed=7)
+    for _ in range(n):
+        e.reset()
+        carried += e.carried_start
+        rev += e._dir < 0
+        flip += e._lean_flipped
+    assert abs(carried / n - 0.7) < 0.07
+    assert abs(rev / n - 0.5) < 0.07
+    assert abs(flip / n - 0.3) < 0.07
     e.close()

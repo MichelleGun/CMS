@@ -127,9 +127,17 @@ class OnboardHoopEnv(gym.Env):
             info["phase"] = "out_of_cage"
 
         truncated = (not terminated) and self._ticks >= self.max_ticks
+        if terminated or truncated:
+            # SB3's EvalCallback reads this at episode end: the dashboard's success rate.
+            info["is_success"] = info["phase"] == "passed"
         info["ring_found"] = bool(ring_obs.found)
         info["range_m"] = float(ring_obs.range_m)
         return obs, float(reward), terminated, truncated, info
+
+    def set_episode_seed(self, seed: int):
+        """Seed of the next reset() that is not given one (callable through VecEnv.env_method,
+        which, unlike set_attr, reaches the env through its Monitor wrapper)."""
+        self._seed = int(seed)
 
     def close(self):
         self.sim = None

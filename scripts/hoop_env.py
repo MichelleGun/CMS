@@ -107,6 +107,12 @@ class HoopFindAviary(BaseRLAviary):
         self.INIT_XYZS = start.reshape(1, 3)
         return super().reset(seed=seed, options=options)
 
+    def onboard_frame(self, res=(200, 150)):
+        """The drone's camera frame (uint8 RGB), callable through VecEnv.env_method (works in a
+        SubprocVecEnv worker too)."""
+        from camera_capture import get_onboard_frame
+        return get_onboard_frame(self, nth_drone=0, res=res)
+
     ################################################################################
     # observation: parent's kinematic vector + relative vector to the hoop
 

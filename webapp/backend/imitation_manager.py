@@ -16,10 +16,11 @@ from typing import List, Optional
 
 import numpy as np
 
-from config import FLIGHTS_DIR, HARDWARE_DIR
+from config import FLIGHTS_DIR, HARDWARE_DIR, RUNS_DIR
 from jobs import PYTHON_EXE, job_manager, read_json
 
 MAKE_DEMOS = HARDWARE_DIR / "onboard" / "make_demos.py"
+MAKE_TEACHER = HARDWARE_DIR / "onboard" / "make_teacher_demos.py"
 BC_TRAIN = HARDWARE_DIR / "imitation" / "bc_train.py"
 EVAL_POLICY = HARDWARE_DIR / "onboard" / "eval_policy.py"
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -107,36 +108,83 @@ class ImitationManager:
         return self.jobs.start("demos", argv, f"Simulated demos '{name}' ({episodes} episodes)",
                                outputs={"demo": out.relative_to(self.flights).as_posix()})
 
+    def generate_teacher_demos(self, run_id: str, name: str, episodes=150, profile="typical",
+                               seed=0) -> str:
+        """Fly the onboard simulator with a PyBullet (net-env) run as the teacher; its passed
+        episodes become onboard-task demos (hardware/onboard/make_teacher_demos.py)."""
+        run_dir = (RUNS_DIR / run_id).resolve()
+        if run_dir.parent != RUNS_DIR.resolve() or not (run_dir / "meta.json").is_file():
+            raise ValueError(f"unknown run '{run_id}'")
+        meta = read_json(run_dir / "meta.json") or {}
+        if meta.get("env") != "net":
+            raise ValueError("teacher demos need a PyBullet net-env run "
+                             f"('{run_id}' is env '{meta.get('env', 'legacy')}')")
+        if meta.get("algo") == "dqn":
+            raise ValueError("a DQN run cannot be a teacher (discrete moves); pick PPO/A2C/SAC/TD3")
+        out = self.demos_dir / f"{_check_name(name)}.npz"
+        if out.exists():
+            raise ValueError(f"demos/{out.name} already exists; pick another name")
+        if not 1 <= int(episodes) <= 2000:
+            raise ValueError("episodes must be 1-2000")
+        self.demos_dir.mkdir(parents=True, exist_ok=True)
+        argv = [PYTHON_EXE, MAKE_TEACHER, "--run", run_dir, "--episodes", int(episodes),
+                "--profile", profile, "--seed", int(seed), "--out", out]
+        return self.jobs.start("teacher", argv,
+                               f"Teacher demos '{name}' from {run_id} ({episodes} episodes)",
+                               outputs={"demo": out.relative_to(self.flights).as_posix()})
+
     # ------------------------------------------------------------------ clones
 
     def _model_dir(self, name: str) -> Path:
         return self.bc_dir / _check_name(name)
 
+    @staticmethod
+    def _evals(d: Path) -> list:
+        evals = []
+        if (d / "evals").is_dir():
+            for e in sorted((d / "evals").glob("*.json"), reverse=True):
+                r = read_json(e)
+                if r:
+                    evals.append({k: r.get(k) for k in (
+                        "passed", "struck", "missed", "timeout", "episodes",
+                        "render", "profile", "saved")})
+        return evals
+
     def list_models(self) -> List[dict]:
+        """Behaviour clones, then onboard-task RL runs (name "rl:<run_id>", their best model):
+        both fly the same task, so the Drone and Imitation tabs treat them alike."""
         out = []
-        if not self.bc_dir.is_dir():
-            return out
-        for d in sorted(self.bc_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-            zp = d / "bc_model.zip"
-            if not d.is_dir() or not zp.is_file():
-                continue
-            meta = read_json(d / "meta.json") or {}
-            evals = []
-            if (d / "evals").is_dir():
-                for e in sorted((d / "evals").glob("*.json"), reverse=True):
-                    r = read_json(e)
-                    if r:
-                        evals.append({k: r.get(k) for k in (
-                            "passed", "struck", "missed", "timeout", "episodes",
-                            "render", "profile", "saved")})
-            out.append({
-                "name": d.name, "model": str(zp),
-                "task": meta.get("task"), "demos": meta.get("demos"),
-                "samples": meta.get("n_samples"), "saved": meta.get("saved"),
-                "val_mse": meta.get("val_dir_loss"), "val_cos": meta.get("val_mean_cos"),
-                "train_eval": meta.get("sim_eval"), "evals": evals,
-                "flyable": meta.get("task") in (None, "onboard_hoop"),
-            })
+        if self.bc_dir.is_dir():
+            for d in sorted(self.bc_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                zp = d / "bc_model.zip"
+                if not d.is_dir() or not zp.is_file():
+                    continue
+                meta = read_json(d / "meta.json") or {}
+                out.append({
+                    "name": d.name, "kind": "clone", "model": str(zp),
+                    "task": meta.get("task"), "demos": meta.get("demos"),
+                    "samples": meta.get("n_samples"), "saved": meta.get("saved"),
+                    "val_mse": meta.get("val_dir_loss"), "val_cos": meta.get("val_mean_cos"),
+                    "train_eval": meta.get("sim_eval"), "evals": self._evals(d),
+                    "flyable": meta.get("task") in (None, "onboard_hoop"),
+                })
+        if RUNS_DIR.is_dir():
+            for d in sorted(RUNS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                meta = read_json(d / "meta.json") if d.is_dir() else None
+                zp = d / "best_model.zip"
+                if not meta or meta.get("env") != "onboard" or not zp.is_file():
+                    continue
+                status = read_json(d / "live_status.json") or {}
+                bc = meta.get("bc") or {}
+                out.append({
+                    "name": f"rl:{d.name}", "kind": "rl", "model": str(zp),
+                    "task": meta.get("task", "onboard_hoop"), "demos": bc.get("demos"),
+                    "samples": None, "saved": meta.get("finished_at") or status.get("updated_at"),
+                    "val_mse": None, "val_cos": None,
+                    "train_eval": ({"pass_rate": status.get("latest_success_rate")}
+                                   if status.get("latest_success_rate") is not None else None),
+                    "evals": self._evals(d), "flyable": True,
+                })
         return out
 
     def train(self, name: str, demo_ids: List[str], epochs=200, lr=3e-3, use="intent",
@@ -161,7 +209,14 @@ class ImitationManager:
                                outputs={"model": name})
 
     def evaluate(self, name: str, episodes=12, render=False, seed=100) -> str:
-        zp = self._model_dir(name) / "bc_model.zip"
+        if name.startswith("rl:"):                  # an onboard RL run's best model
+            run_id = _check_name(name[3:])
+            zp = RUNS_DIR / run_id / "best_model.zip"
+            meta = read_json(RUNS_DIR / run_id / "meta.json") or {}
+            if meta.get("env") != "onboard" or not zp.is_file():
+                raise ValueError(f"no onboard run '{run_id}' with a best model")
+        else:
+            zp = self._model_dir(name) / "bc_model.zip"
         if not zp.is_file():
             raise ValueError(f"no clone called '{name}'")
         if not 1 <= int(episodes) <= 200:

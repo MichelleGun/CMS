@@ -80,7 +80,11 @@ def main():
     seed = args.seed if args.seed is not None else int(time.time()) % 100000
 
     sway = args.sway_deg if args.sway_deg is not None else meta.get("sway_deg")
-    env = HoopNetAviary(seed=seed, sway_deg=sway) if use_net else HoopFindAviary(seed=seed)
+    # same episode mix as the run trained with (older runs: always front -> back, usual lean)
+    mix = {k: meta[k] for k in ("reverse_prob", "lean_flip_prob") if meta.get(k) is not None}
+    if not mix:
+        mix = {"reverse_prob": 0.0, "lean_flip_prob": 0.0}
+    env = HoopNetAviary(seed=seed, sway_deg=sway, **mix) if use_net else HoopFindAviary(seed=seed)
     raw = env
     if meta.get("env_variant") == "discrete_vel":
         env = HoopFindDiscreteVel(env)
@@ -139,7 +143,9 @@ def main():
                    "duration_s": round(k * dt, 2), "ended": "passed" if success else
                    ("timeout" if trunc and k * dt >= getattr(raw, "EPISODE_LEN_SEC", 1e9) else
                     "tipped over" if trunc else "ended"),
-                   "model": model_path.name, "realtime": bool(args.realtime)}
+                   "model": model_path.name, "realtime": bool(args.realtime),
+                   "reversed": bool(info.get("reversed", False)),
+                   "lean_flipped": bool(info.get("lean_flipped", False))}
         f.write(json.dumps(summary) + "\n")
     print(f"[showcase] done: {summary}")
     env.close()

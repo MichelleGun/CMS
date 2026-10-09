@@ -1,5 +1,28 @@
 # Progress log
 
+## Done (2026-10-10, later)
+
+- **Up to 3 training runs side by side, each with truly parallel envs.** Env copies now run in
+  their own processes (`--vec auto` → `SubprocVecEnv`, shared code in `scripts/vec_util.py`):
+  measured with `scripts/bench_vec.py`, the PyBullet net env does 1702 env-steps/s with 4 copies
+  vs 806 before (8 copies: 2258), and 3 such runs at once still manage ~944 each. Learning is
+  unchanged (same data per PPO update), only wall-clock time. The dashboard allows 3 live runs
+  (counting ones started from a terminal) and refuses a run that would need more cores than are
+  free (16-core PC: budget 14). Stop still saves cleanly: env workers ignore the Ctrl+Break and
+  are closed by the trainer.
+- **Continue training from an earlier policy.** `--init <run dir or zip>` on `train_hoop_multi.py`
+  (and "Start from" in the Training panel): the step count, curriculum and eval curve carry on;
+  refuses a different algo or env.
+- **Human flights + PyBullet runs → one onboard policy.** `hardware/onboard/make_teacher_demos.py`
+  (PyBullet policy flies the onboard sim as a privileged teacher, in a frame aligned to the ring
+  pose it trained on: 0/20 → 13/20 passes for `ppo_20261010-011316`), `bc_train.py --source-weight`
+  (human ×3 by default), and `hardware/onboard/train_onboard.py` (PPO from a clone with a fading
+  BC term and a frozen-actor critic warm-up). Clones on the sim, 20 episodes: human-only 0/20,
+  teacher-only 6/20, mixed 2/20 (18 near-miss strikes); guided RL from the mixed clone 75% after
+  150k steps (2 min). Details: `hardware/onboard/README.md` Step 8.
+- Note: `ppo_20261010-023538` (the overnight run) times out on every onboard-sim episode as a
+  teacher; its latest checkpoint scored 0% success in its own last evaluation too.
+
 ## Done (2026-10-10)
 
 - **The ring now swings about the rope knot at its top, and the swing is adjustable.** The noodle hangs from a

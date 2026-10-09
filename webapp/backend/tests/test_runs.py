@@ -179,3 +179,95 @@ def test_fixed_runs_are_unchanged(env):
     env["client"].post("/api/runs", json={"algo": "ppo", "timesteps": 1234})
     argv = env["spawned"][0].argv
     assert "--until-stopped" not in argv and argv[argv.index("--timesteps") + 1] == "1234"
+
+
+def test_episode_variety_flags_reach_the_trainer(env):
+    env["client"].post("/api/runs", json={"algo": "ppo", "timesteps": 1000, "env": "net",
+                                          "carry_start": 0.0, "reverse_prob": 0.5,
+                                          "lean_flip_prob": 0.3})
+    argv = env["spawned"][0].argv
+    assert argv[argv.index("--carry-start") + 1] == "0.0"
+    assert argv[argv.index("--reverse-prob") + 1] == "0.5"
+    assert argv[argv.index("--lean-flip-prob") + 1] == "0.3"
+
+
+def test_a_pinned_start_may_be_near_a_corner_but_the_ring_may_not(env):
+    c = env["client"]
+    ok = c.post("/api/runs", json={"algo": "ppo", "timesteps": 1000,
+                                   "start_pos": {"x": 0.85, "y": -0.85, "z": 0.03}})
+    assert ok.status_code == 201, ok.text
+    env["spawned"][0].code = 0
+    bad = c.post("/api/runs", json={"algo": "ppo", "timesteps": 1000,
+                                    "target_pos": {"x": 0.85, "y": 0.0, "z": 1.2}})
+    assert bad.status_code == 400
+
+
+# ---------------------------------------------------------- side-by-side runs, resume, onboard
+
+def test_three_runs_side_by_side_then_refused(env):
+    c = env["client"]
+    for _ in range(3):
+        r = c.post("/api/runs", json={"algo": "ppo", "timesteps": 1000, "n_envs": 2})
+        assert r.status_code == 201, r.text
+    ids = [p.argv[p.argv.index("--run-id") + 1] for p in env["spawned"]]
+    assert len(set(ids)) == 3                       # same-second starts still get unique ids
+    r = c.post("/api/runs", json={"algo": "ppo", "timesteps": 1000, "n_envs": 1})
+    assert r.status_code == 409 and "limit" in r.json()["detail"]
+    assert c.get("/api/runs").json()["capacity"]["live_runs"] == 3
+
+
+def test_run_needing_more_cores_than_free_is_refused(env, monkeypatch):
+    monkeypatch.setattr(rm_mod, "CPU_BUDGET", 6)
+    c = env["client"]
+    assert c.post("/api/runs", json={"algo": "ppo", "n_envs": 4}).status_code == 201
+    r = c.post("/api/runs", json={"algo": "ppo", "n_envs": 4})
+    assert r.status_code == 409 and "cores" in r.json()["detail"]
+    assert c.post("/api/runs", json={"algo": "ppo", "n_envs": 2}).status_code == 201
+
+
+def test_continue_from_a_run_passes_init(env):
+    d = make_run(env["runs"], "ppo_parent")
+    r = env["client"].post("/api/runs", json={"algo": "ppo", "env": "net", "init_run": "ppo_parent"})
+    assert r.status_code == 201, r.text
+    argv = env["spawned"][-1].argv
+    assert argv[argv.index("--init") + 1] == str(d.resolve())
+    assert argv[argv.index("--vec") + 1] == "auto"
+
+
+def test_continue_refuses_another_env_or_algo(env):
+    make_run(env["runs"], "ppo_parent", env="net")
+    c = env["client"]
+    assert c.post("/api/runs", json={"algo": "ppo", "env": "legacy", "init_run": "ppo_parent"}).status_code == 400
+    assert c.post("/api/runs", json={"algo": "sac", "env": "net", "init_run": "ppo_parent"}).status_code == 400
+    assert c.post("/api/runs", json={"algo": "ppo", "env": "net", "init_run": "nope"}).status_code == 400
+
+
+def test_onboard_run_uses_the_onboard_trainer_with_clone_and_demos(env, tmp_path, monkeypatch):
+    flights = tmp_path / "flights"
+    (flights / "bc" / "mix").mkdir(parents=True)
+    (flights / "bc" / "mix" / "bc_model.zip").write_bytes(b"zip")
+    (flights / "demos").mkdir()
+    (flights / "demos" / "t.npz").write_bytes(b"npz")
+    monkeypatch.setattr(rm_mod, "FLIGHTS_DIR", flights)
+    monkeypatch.setattr(rm_mod, "BC_DIR", flights / "bc")
+    r = env["client"].post("/api/runs", json={
+        "algo": "ppo", "env": "onboard", "init_clone": "mix", "demo_ids": ["demos/t.npz"],
+        "human_weight": 5, "bc_coef": 0.5, "profile": "harsh"})
+    assert r.status_code == 201, r.text
+    argv = env["spawned"][-1].argv
+    assert argv[1].endswith("train_onboard.py")
+    assert r.json()["run_id"].startswith("onboard_")
+    assert argv[argv.index("--init") + 1] == str((flights / "bc" / "mix").resolve())
+    assert argv[argv.index("--demos") + 1] == str((flights / "demos" / "t.npz").resolve())
+    assert "human=5.0" in argv and argv[argv.index("--bc-coef") + 1] == "0.5"
+    assert argv[argv.index("--profile") + 1] == "harsh"
+    bad = env["client"].post("/api/runs", json={"algo": "ppo", "env": "onboard",
+                                                "demo_ids": ["../../etc.npz"]})
+    assert bad.status_code == 400
+
+
+def test_onboard_runs_have_no_pybullet_replay_or_showcase(env):
+    make_run(env["runs"], "onboard_x", models=("best_model.zip",), env="onboard")
+    c = env["client"]
+    assert c.post("/api/runs/onboard_x/showcase", json={}).status_code in (400, 404)
+    assert c.post("/api/runs/onboard_x/replay", json={}).status_code in (400, 404)

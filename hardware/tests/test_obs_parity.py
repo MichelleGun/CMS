@@ -35,7 +35,9 @@ def test_net_env_layout_matches_builder_with_normal():
     try:
         obs, _ = env.reset(seed=0)
         assert obs.shape == (1, NET_OBS_DIM)
-        ob = ObsBuilder(env.ring_c, hoop_normal=env.ring_n)
+        # the observed normal points the way this episode must be flown (flipped when reversed);
+        # on hardware that is the direction the operator gives ObsBuilder
+        ob = ObsBuilder(env.ring_c, hoop_normal=env.ring_n * env._dir)
         rng = np.random.default_rng(0)
         for k in range(30):
             a = rng.uniform(-1, 1, size=(1, 4)).astype(np.float32)
