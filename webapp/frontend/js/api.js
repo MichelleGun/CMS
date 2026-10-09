@@ -49,13 +49,32 @@ const Api = {
     return ws;
   },
 
-  // --- real drone. There is deliberately no "take off" call: the backend only
-  // accepts dry runs, and real flights are started from a terminal. Everything
-  // callable here either reads state or makes the drone safer.
+  // --- real drone. A real takeoff needs confirm:true and is accepted only from
+  // this computer (backend main.py); land and kill are always accepted.
   getDroneStatus: () => apiGet("/api/drone/status"),
-  getDroneFlights: () => apiGet("/api/drone/flights"),
+  getDroneFlights: (limit = 25) => apiGet("/api/drone/flights?limit=" + limit),
+  startFlight: (payload) => apiPost("/api/drone/flights", payload),
+  getDroneTicks: (id) => apiGet(`/api/drone/flights/${encodeURIComponent(id)}/ticks`),
+  getDroneEvents: (id) => apiGet(`/api/drone/flights/${encodeURIComponent(id)}/events`),
+  answerSave: (id, save, passed) =>
+    apiPost(`/api/drone/flights/${encodeURIComponent(id)}/save`, { save, passed }),
+  openKeysSocket: (id) =>
+    new WebSocket(`${WS_BASE}/ws/drone/${encodeURIComponent(id)}/keys`),
+
+  // --- imitation learning and jobs
+  getDemos: () => apiGet("/api/imitation/demos"),
+  generateDemos: (payload) => apiPost("/api/imitation/demos/generate", payload),
+  labelDemo: (demo_id, passed) => apiPost("/api/imitation/demos/label", { demo_id, passed }),
+  getModels: () => apiGet("/api/imitation/models"),
+  trainClone: (payload) => apiPost("/api/imitation/train", payload),
+  evaluateClone: (name, payload) =>
+    apiPost(`/api/imitation/models/${encodeURIComponent(name)}/evaluate`, payload),
+  getJobs: (limit = 50) => apiGet("/api/jobs?limit=" + limit),
+  getJob: (id) => apiGet(`/api/jobs/${encodeURIComponent(id)}`),
+  getJobLog: (id, offset) => apiGet(`/api/jobs/${encodeURIComponent(id)}/log?offset=${offset || 0}`),
+  stopJob: (id) => apiPost(`/api/jobs/${encodeURIComponent(id)}/stop`),
+
   getDroneFlight: (id) => apiGet(`/api/drone/flights/${encodeURIComponent(id)}`),
-  startDryRun: (payload) => apiPost("/api/drone/flights", payload),
   landDrone: (id) => apiPost(`/api/drone/flights/${encodeURIComponent(id)}/land`),
   killDrone: (id) => apiPost(`/api/drone/flights/${encodeURIComponent(id)}/kill`),
   stopDroneFlight: (id) => apiPost(`/api/drone/flights/${encodeURIComponent(id)}/stop`),

@@ -18,6 +18,10 @@ Fly the Tello through the ring using only its own front camera.
     # stage 5: fly a trained policy instead of the scripted expert
     python hardware/onboard/fly_hoop.py --mode policy --model hardware/flights/bc/clone/bc_model.zip
 
+    # fly it yourself and record the run (W/S fwd/back, A/D strafe, arrows: up/down and
+    # rotate; asked to save after landing)
+    python hardware/onboard/fly_hoop.py --mode human --record --max-travel 1.8
+
 --dry-run runs this exact loop against sim_drone.SimDrone, so what is tested is what flies.
 
 SAFETY. The layers, in the order they can stop the flight, all reusing the Tello-Friend-Kit
@@ -77,6 +81,10 @@ CAMERA_HZ = 2.5
 
 
 # --------------------------------------------------------------------- small helpers
+
+def _yes(answer: str) -> bool:
+    return answer.strip().lower() in ("y", "yes")
+
 
 def _atomic_write(path: Path, data: bytes):
     """Write via a temp file and os.replace.
@@ -147,10 +155,16 @@ def _round(d: dict, nd=4):
 # --------------------------------------------------------------------- the flight
 
 class Flight:
-    def __init__(self, args, settings, flight_dir: Path):
+    def __init__(self, args, settings, flight_dir: Path, keys=None):
         self.a = args
         self.settings = settings
         self.dir = flight_dir
+        self._keys = keys               # --mode human: key source; None opens the window
+        # Post-landing prompts. --save-answer file answers them from the dashboard;
+        # tests replace this directly.
+        self._ask = (self._file_ask() if getattr(args, "save_answer", "prompt") == "file"
+                     else input)
+        self._ring_seen = False         # recording starts at the first lock
         self.detector = load_detector()
         # Ranging uses the OUTER diameter, because the noodle's outer edge is what the
         # camera measures. Confusing it with the opening biases every range by ~12 cm.
@@ -190,11 +204,65 @@ class Flight:
         )
         if a.mode == "hover":
             return (lambda ring, state: (np.zeros(spec.ACT_DIM), None)), cfg
+        if a.mode == "human":
+            from onboard.human import HumanController, PygameKeys, UdpKeys
+            keys = self._keys
+            if keys is None:
+                keys = (UdpKeys(a.keys_port) if a.keys == "udp" else PygameKeys())
+            return HumanController(keys, gain=a.human_gain), cfg
         if a.mode == "policy":
             from onboard.policy import load_policy
             fn = load_policy(a.model, algo=a.algo)
             return (lambda ring, state: (fn(self._last_obs), None)), cfg
         return Expert(cfg), cfg
+
+    # -- dashboard save answer ----------------------------------------------------------
+    def _file_ask(self, timeout_s: float = 600.0, poll_s: float = 0.2):
+        """-> an `input`-like callable that takes its answers from save_answer.json.
+
+        The first prompt announces that a save decision is wanted (an event plus a
+        status.json phase the dashboard shows as buttons) and waits for the file
+        {"save": bool, "passed": bool}. Both prompts are answered from that one file.
+        No answer within `timeout_s` discards the run, the same as answering no.
+        Only called after landing, so waiting here holds nothing in the air.
+        """
+        answer = {}
+
+        def ask(prompt: str) -> str:
+            if not answer:
+                answer.update(self._wait_for_save_answer(timeout_s, poll_s))
+            key = "save" if prompt.lower().startswith("save") else "passed"
+            return "y" if answer.get(key) else "n"
+        return ask
+
+    def _wait_for_save_answer(self, timeout_s, poll_s) -> dict:
+        n = len(self.recorder) if self.recorder is not None else 0
+        path = self.dir / "save_answer.json"
+        try:
+            with (self.dir / "events.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"utc": datetime.now().isoformat(timespec="seconds"),
+                                    "event": "awaiting_save", "samples": n}) + "\n")
+        except OSError:
+            pass
+        status = {}
+        try:
+            status = json.loads((self.dir / "status.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+        status.update(phase="awaiting_save", reason=f"{n} samples recorded",
+                      samples=n, updated_at=datetime.now().isoformat(timespec="milliseconds"))
+        write_json(self.dir / "status.json", status)
+        print(f"[demo] waiting for the dashboard: save this run ({n} samples)?", flush=True)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if path.is_file():
+                try:
+                    return json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    pass               # half-written or locked: read it next poll
+            time.sleep(poll_s)
+        print("[demo] no answer from the dashboard; discarding")
+        return {"save": False, "passed": False}
 
     # -- control-flag files -----------------------------------------------------------
     def _flag(self, name) -> bool:
@@ -284,6 +352,10 @@ class Flight:
                         events.write("video_bitrate_failed", error=str(e))
                     drone.set_speed(self.settings.speed_cm_s)
 
+                    try:
+                        drone.streamoff()
+                    except Exception:
+                        pass
                     drone.streamon()
                     stream_on = True
                     reader = drone.get_frame_read(with_queue=True, max_queue_len=2)
@@ -292,7 +364,8 @@ class Flight:
                     for n in range(a.countdown, 0, -1):
                         print(f"Takeoff in {n}s; Ctrl+C cancels.", flush=True)
                         self._wait(1.0, recorder, self.settings.minimum_battery_percent)
-                        if self._flag("land.flag") or self._flag("kill.flag"):
+                        if (self._flag("land.flag") or self._flag("kill.flag")
+                                or self._controller_stop()):
                             raise FlightError("stopped before takeoff by a control flag")
 
                     events.write("takeoff_start")
@@ -364,24 +437,72 @@ class Flight:
             except OSError:
                 pass
             result["travel_m"] = round(self.travel_m, 3)
-            if self.recorder is not None and len(self.recorder):
+            close = getattr(self.controller, "close", None)
+            if close is not None:
                 try:
-                    p = self.recorder.save(self.dir / "demo.npz")
-                    result["demo"] = str(p)
-                    print(f"[demo] {len(self.recorder)} samples -> {p}")
-                except (ValueError, OSError) as e:
-                    print(f"[demo] not saved: {e}")
+                    close()                    # the key window goes before any prompt
+                except Exception:
+                    pass
+            self._save_demo(result, aborted=primary_error is not None)
             write_json(self.dir / "summary.json", result)
 
         if landing_error is not None and primary_error is None:
             raise FlightError(f"Landing was not confirmed: {landing_error}") from landing_error
         return result
 
+    def _save_demo(self, result, aborted: bool):
+        """Write the recorded demonstration.
+
+        A human flight asks first, and only after landing -- the drone is on the ground
+        and the motors are off, so there is no hurry. A run that did not end normally
+        (error, Ctrl+C, motor cut) is never offered for saving. A pass is demo.npz and a
+        miss is demo_failed.npz, so the natural training glob (tello_*/demo.npz) takes
+        passes only: cloning a failed traversal teaches the failure.
+        """
+        rec = self.recorder
+        if rec is None or not len(rec):
+            return
+        name = "demo.npz"
+        if self.a.mode == "human":
+            if aborted or result.get("outcome") == "killed":
+                print("[demo] not saved: the flight did not end normally")
+                return
+            try:
+                keep = _yes(self._ask(f"Save this run ({len(rec)} samples)? [y/n] "))
+                passed = keep and _yes(self._ask("Did it go through the ring? [y/n] "))
+            except (KeyboardInterrupt, EOFError):
+                print("\n[demo] discarded")
+                return
+            if not keep:
+                print("[demo] discarded")
+                return
+            rec.meta["passed"] = bool(passed)
+            name = "demo.npz" if passed else "demo_failed.npz"
+        try:
+            p = rec.save(self.dir / name)
+            result["demo"] = str(p)
+            print(f"[demo] {len(rec)} samples -> {p}")
+        except (ValueError, OSError) as e:
+            print(f"[demo] not saved: {e}")
+
     # -- phases -----------------------------------------------------------------------
+    def _pump(self):
+        """Let a human controller keep its window responsive before it is engaged."""
+        pump = getattr(self.controller, "pump", None)
+        if pump is not None:
+            pump()
+
+    def _controller_stop(self) -> bool:
+        """A human asked to land or cut the motors (always False for other controllers)."""
+        c = self.controller
+        return bool(getattr(c, "kill_requested", False)) or (
+            self.a.mode == "human" and bool(getattr(c, "finished", False)))
+
     def _wait(self, seconds, recorder, min_batt):
         end = time.monotonic() + seconds
         while time.monotonic() < end:
             self._check(recorder, min_batt, airborne=False)
+            self._pump()
             time.sleep(min(0.05, max(0.0, end - time.monotonic())))
 
     def _await_first_frame(self, reader, recorder, events):
@@ -412,13 +533,14 @@ class Flight:
         while time.monotonic() < deadline:
             state, _ = recorder.snapshot()
             h = state.get("h")
-            if isinstance(h, (int, float)) and not isinstance(h, bool) and h >= 30:
+            if isinstance(h, (int, float)) and not isinstance(h, bool) and h >= 15:
                 break
             _ = reader.frame
+            self._pump()
             time.sleep(0.05)
         else:
             raise FlightError(
-                f"height never reached 30 cm within {CLIMB_TIMEOUT:.0f} s of takeoff; "
+                f"height never reached 15 cm within {CLIMB_TIMEOUT:.0f} s of takeoff; "
                 "the drone may not have left the ground")
         events.write("climbed", height_cm=recorder.snapshot()[0].get("h"))
 
@@ -426,6 +548,7 @@ class Flight:
         while time.monotonic() < end:
             self._check(recorder, self.settings.abort_battery_percent, airborne=True)
             _ = reader.frame
+            self._pump()
             time.sleep(0.03)
         events.write("settled", seconds=self.a.settle)
 
@@ -448,7 +571,7 @@ class Flight:
                 next_tick = now + spec.CTRL_DT
             tick_i += 1
 
-            if self._flag("kill.flag"):
+            if self._flag("kill.flag") or getattr(self.controller, "kill_requested", False):
                 events.write("kill_flag")
                 self._emergency(drone)
                 res.update(status="killed", outcome="killed")
@@ -481,6 +604,10 @@ class Flight:
             obs = self.builder.build(ring, state, now)
             self._last_obs = obs
 
+            if a.mode == "human":
+                self.controller.status_extra = (
+                    f"travel {self.travel_m:.2f}"
+                    + (f"/{self.max_travel:.1f} m" if self.max_travel else " m"))
             action, info = self.controller(ring, state)
             action = np.asarray(action, dtype=float).reshape(-1)[:spec.ACT_DIM]
             action, trimmed = self._safety_overrides(action, info)
@@ -505,7 +632,13 @@ class Flight:
                         trimmed=trimmed, bat=state.get("bat"), h=state.get("h"),
                         temph=state.get("temph"))
 
-            if self.recorder is not None and ring.found:
+            # Record from the first lock onward, not only while the ring is visible: the
+            # blind push through the hoop is the ring NOT being visible, and a demo
+            # without it teaches a policy everything except how to finish. The
+            # observation carries where the ring was last seen, so those ticks are
+            # interpretable.
+            self._ring_seen = self._ring_seen or bool(ring.found)
+            if self.recorder is not None and self._ring_seen:
                 self.recorder.add(obs, action, action, airborne_s)
 
             if now - last_status >= 1.0 / STATUS_HZ:
@@ -526,8 +659,11 @@ class Flight:
                 ph = getattr(self.controller, "phase", "")
                 events.write("controller_finished", phase=ph,
                              reason=getattr(self.controller, "reason", ""))
-                res.update(status="landed",
-                           outcome="traversed" if ph == DONE else "aborted_by_controller")
+                # A human decides when the run is over, and whether it went through is
+                # their call at the save prompt, not something the controller knows.
+                outcome = ("human_landed" if a.mode == "human" else
+                           "traversed" if ph == DONE else "aborted_by_controller")
+                res.update(status="landed", outcome=outcome)
                 return res
 
     def _emergency(self, drone):
@@ -601,7 +737,22 @@ def parse(argv=None):
     ap.add_argument("--profile", choices=["ideal", "typical", "harsh"], default="typical",
                     help="dry-run only: how badly the pretend drone behaves")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--mode", choices=["expert", "policy", "hover"], default="expert")
+    ap.add_argument("--mode", choices=["expert", "policy", "hover", "human"],
+                    default="expert",
+                    help="human: fly it yourself from the keyboard (W/S forward/back, "
+                         "A/D strafe, Up/Down height, Left/Right rotate); "
+                         "with --record the run is offered for saving after landing")
+    ap.add_argument("--human-gain", type=float, default=0.6,
+                    help="--mode human: fraction of full deflection a held key commands "
+                         "(0.6 = rc 18 of the 30 clamp). The expert is continuous, so a "
+                         "full-deflection key would record actions it never produces")
+    ap.add_argument("--keys", choices=["pygame", "udp"], default="pygame",
+                    help="--mode human: where held keys come from. udp = the dashboard "
+                         "sends them to 127.0.0.1:--keys-port")
+    ap.add_argument("--keys-port", type=int, default=0)
+    ap.add_argument("--save-answer", choices=["prompt", "file"], default="prompt",
+                    help="--mode human --record: answer the post-landing save questions "
+                         "in the terminal, or from save_answer.json written by the dashboard")
     ap.add_argument("--model", type=Path, default=None, help="--mode policy: a .zip")
     ap.add_argument("--algo", default=None, choices=["ppo", "a2c", "sac", "td3"])
 
@@ -650,12 +801,18 @@ def parse(argv=None):
                     help="assumed forward speed at full commit throttle; MEASURE at stage 3")
 
     ap.add_argument("--record", action="store_true", help="save a demonstration .npz")
+    ap.add_argument("--camera", action="store_true",
+                    help="start with the dashboard camera feed on (camera_enabled.flag)")
     ap.add_argument("--config", type=Path, default=None, help="kit TOML settings file")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args(argv)
 
     if a.mode == "policy" and a.model is None:
         ap.error("--mode policy needs --model")
+    if a.keys == "udp" and not 0 < a.keys_port < 65536:
+        ap.error("--keys udp needs --keys-port")
+    if not 0.0 < a.human_gain <= 1.0:
+        ap.error("--human-gain must be in (0, 1]")
     if a.attempts > 1 and not a.dry_run:
         ap.error("--attempts > 1 is dry-run only; fly real attempts one at a time")
     if a.max_travel is not None and a.max_travel <= 0:
@@ -692,9 +849,12 @@ def main(argv=None):
             "drone_width_m": a.drone_width or spec.DRONE_WIDTH_M,
             "commit_range_m": a.commit_range, "commit_speed_mps": a.commit_speed,
             "model": str(a.model) if a.model else None,
+            "keys_port": a.keys_port if a.keys == "udp" else None,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "final_status": None,
         })
+        if a.camera:
+            (d / "camera_enabled.flag").touch()
         print(f"[flight] {d.name}  mode={a.mode} dry_run={a.dry_run}"
               + (f" profile={a.profile}" if a.dry_run else ""))
         if not a.dry_run:

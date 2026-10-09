@@ -440,8 +440,19 @@
     showDraftPreview();
 
     RewardChart.init(document.getElementById("reward-chart"));
-    // The real-drone panel owns its own polling and socket, so it only needs starting.
+    // The other tabs own their own polling and sockets, so they only need starting.
+    Tabs.init();
     Drone.init();
+    Imitation.init();
+    History.init();
+    // A live flight is visible from every tab, so it is never out of sight.
+    const livePill = document.getElementById("live-flight-pill");
+    livePill.addEventListener("click", () => Tabs.show("drone"));
+    Drone.onLive((isLive, id, real) => {
+      livePill.hidden = !isLive;
+      livePill.textContent = real ? "REAL flight live" : "dry run live";
+      livePill.className = "pill " + (real ? "pill-crashed" : "pill-training");
+    });
 
     startBtn.addEventListener("click", startTraining);
     stopBtn.addEventListener("click", stopTraining);

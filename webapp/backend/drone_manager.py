@@ -1,52 +1,48 @@
 """
-The real-drone side of the dashboard: list flights, read their live state, and send the
-two commands a browser is allowed to send.
+The real-drone side of the dashboard: start flights, list them, read their live state,
+forward keyboard keys, land, kill and answer the post-landing save question.
 
-Mirrors run_manager.py deliberately -- same subprocess handling, same "the directory tree
-IS the database" approach, so a backend restart needs no recovery code. It reads what
-hardware/onboard/fly_hoop.py writes under hardware/flights/<flight_id>/ and never imports
-djitellopy, OpenCV or the flight code itself.
+Same "the directory tree IS the database" approach as run_manager.py, so a backend
+restart needs no recovery code. It reads what hardware/onboard/fly_hoop.py writes under
+hardware/flights/<flight_id>/ and never imports djitellopy, OpenCV or the flight code.
 
-TWO SAFETY DECISIONS ARE BUILT IN HERE, not in the UI, so they cannot be clicked around.
+SAFETY DECISIONS BUILT IN HERE, not in the UI, so they cannot be clicked around:
 
-1. The browser cannot take off a real drone. start_flight refuses anything but a dry run.
-   A real flight is started from a terminal by a person standing next to the cage, and the
-   dashboard attaches to it by reading the newest flight directory. The reason is latency
-   and staleness: a page left open in a forgotten tab, a double-click, or a reconnecting
-   socket must not be able to spin propellers in another room.
+1. Real flights CAN be started from the dashboard (the user chose one confirm click). What
+   is still enforced: the request must carry confirm=True, it must come from this computer
+   (main.py checks the client address), and no other flight may be active, including one
+   started from a terminal.
 
-2. Commands are FLAG FILES, not a socket or a signal. fly_hoop.py polls for land.flag and
-   kill.flag every tick. This is the same mechanism the training side already uses for its
-   camera toggle, and it is fail-safe in the direction that matters: if this backend dies,
-   no flag appears and the flight's own safety layer still lands the drone; if the flight
-   process dies, a flag is simply never read and nothing is left half-commanded. Both
-   flags only ever make the drone safer, so there is no authorisation question -- the worst
-   a stranger with access to the page can do is land a drone.
+2. Land and kill are FLAG FILES, not a socket or a signal. fly_hoop.py polls land.flag and
+   kill.flag every tick. That is fail-safe in the direction that matters: if this backend
+   dies, no flag appears and the flight's own safety layer still lands the drone.
+
+3. Human-flight keys go over UDP to 127.0.0.1 with a deadman in the flight
+   (onboard/human.py UdpKeys): no packet for 0.4 s means nothing is held and the drone
+   hovers. A closed tab or a dead backend ends in a hover, never a stuck key.
 """
 import json
-import os
-import signal
-import subprocess
-import sys
+import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import psutil
-
 from config import CMS_DIR, FLIGHTS_DIR, FLY_HOOP_SCRIPT
-
-PYTHON_EXE = sys.executable          # this backend runs inside the drones env already
+from jobs import (PYTHON_EXE, graceful_stop, pid_alive, read_json as _read_json,
+                  spawn, write_json_atomic)
 
 FLIGHT_PREFIX = "tello_"
 LAND_FLAG = "land.flag"
 KILL_FLAG = "kill.flag"
 CAMERA_FLAG = "camera_enabled.flag"
+SAVE_ANSWER = "save_answer.json"
+HELD_KEYS = {"fb+", "fb-", "lr+", "lr-", "ud+", "ud-", "yaw+", "yaw-"}
 
 MODES = [
     {"id": "expert", "label": "Scripted expert"},
     {"id": "policy", "label": "Trained policy"},
     {"id": "hover", "label": "Hover and detect only"},
+    {"id": "human", "label": "Fly it yourself (keyboard)"},
 ]
 PROFILES = [
     {"id": "ideal", "label": "Ideal"},
@@ -57,37 +53,24 @@ MODE_IDS = {m["id"] for m in MODES}
 PROFILE_IDS = {p["id"] for p in PROFILES}
 
 
-def _read_json(path: Path) -> Optional[dict]:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None          # a half-written atomic replace, or no file yet
+def _demo_label(d: Path) -> Optional[str]:
+    if (d / "demo.npz").is_file():
+        return "pass"
+    if (d / "demo_failed.npz").is_file():
+        return "miss"
+    return None
 
 
-def _subprocess_env():
-    env = dict(os.environ)
-    root = Path(PYTHON_EXE).resolve().parent
-    extra = [str(root / "Library" / "bin"), str(root / "Scripts"), str(root)]
-    env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
-    return env
-
-
-def _popen_kwargs(log_path: Path):
-    # A log file, never subprocess.PIPE: run_manager.py records a confirmed hang when an
-    # unread pipe's OS buffer filled, and the flight loop prints every tick with --verbose.
-    log_file = open(log_path, "w")
-    kwargs = dict(cwd=str(CMS_DIR), env=_subprocess_env(),
-                  stdout=log_file, stderr=subprocess.STDOUT)
-    if os.name == "nt":
-        # So CTRL_BREAK_EVENT can be delivered to the child alone. fly_hoop.py treats a
-        # KeyboardInterrupt as "land now", which is why a break is the right stop signal.
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    return kwargs
+def _free_udp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 class DroneManager:
-    def __init__(self):
-        self._procs: dict[str, subprocess.Popen] = {}
+    def __init__(self, flights_dir: Path = FLIGHTS_DIR):
+        self.flights_dir = flights_dir
+        self._procs: dict = {}
 
     # ------------------------------------------------------------------ state
 
@@ -104,22 +87,15 @@ class DroneManager:
         return bool(newest and self._pid_alive(newest))
 
     def _pid_alive(self, flight_id: str) -> bool:
-        meta = _read_json(FLIGHTS_DIR / flight_id / "meta.json") or {}
+        meta = _read_json(self.flights_dir / flight_id / "meta.json") or {}
         if meta.get("final_status"):
             return False          # it recorded its own ending
-        pid = meta.get("pid")
-        if not isinstance(pid, int):
-            return False
-        try:
-            p = psutil.Process(pid)
-            return p.is_running() and p.status() != psutil.STATUS_ZOMBIE
-        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
-            return False
+        return pid_alive(meta.get("pid"))
 
     def _flight_dirs(self):
-        if not FLIGHTS_DIR.is_dir():
+        if not self.flights_dir.is_dir():
             return []
-        dirs = [p for p in FLIGHTS_DIR.iterdir()
+        dirs = [p for p in self.flights_dir.iterdir()
                 if p.is_dir() and p.name.startswith(FLIGHT_PREFIX)]
         return sorted(dirs, key=lambda p: p.name, reverse=True)   # name is a timestamp
 
@@ -127,7 +103,7 @@ class DroneManager:
         dirs = self._flight_dirs()
         return dirs[0].name if dirs else None
 
-    def list_flights(self, limit: int = 25) -> dict:
+    def list_flights(self, limit: Optional[int] = 25) -> dict:
         flights = []
         for d in self._flight_dirs()[:limit]:
             meta = _read_json(d / "meta.json") or {}
@@ -142,6 +118,8 @@ class DroneManager:
                 "sim_outcome": summary.get("sim_outcome"),
                 "travel_m": summary.get("travel_m"),
                 "created_at": meta.get("created_at"),
+                "demo": _demo_label(d),
+                "model": meta.get("model"),
             })
         return {"flights": flights, "current_flight_id": self.newest_flight_id(),
                 "active": self.is_flight_active()}
@@ -159,7 +137,33 @@ class DroneManager:
             "camera_enabled": (d / CAMERA_FLAG).exists(),
             "land_requested": (d / LAND_FLAG).exists(),
             "kill_requested": (d / KILL_FLAG).exists(),
+            "save_answered": (d / SAVE_ANSWER).exists(),
+            "has_camera_frame": (d / "camera_latest.jpg").exists(),
+            "demo": _demo_label(d),
         }
+
+    def events(self, flight_id: str) -> list:
+        return self._jsonl(self._dir(flight_id) / "events.jsonl")
+
+    def ticks(self, flight_id: str, max_points: int = 1500) -> list:
+        rows = [r for r in self._jsonl(self._dir(flight_id) / "ticks.jsonl")
+                if r.get("type") == "tick"]
+        step = max(1, len(rows) // max_points)
+        return rows[::step]
+
+    @staticmethod
+    def _jsonl(path: Path) -> list:
+        out = []
+        try:
+            with path.open(encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        out.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass          # the line being written right now
+        except OSError:
+            pass
+        return out
 
     def status(self) -> dict:
         """What the panel polls: the newest flight, whatever its state."""
@@ -175,9 +179,9 @@ class DroneManager:
 
     def _dir(self, flight_id: str, must_exist=True) -> Path:
         # Resolve and confine: flight_id reaches here from a URL path segment, so a
-        # traversal attempt ("../..") must not let a flag file be written anywhere else.
-        d = (FLIGHTS_DIR / flight_id).resolve()
-        if d.parent != FLIGHTS_DIR.resolve() or not flight_id.startswith(FLIGHT_PREFIX):
+        # traversal attempt ("../..") must not let a file be written anywhere else.
+        d = (self.flights_dir / flight_id).resolve()
+        if d.parent != self.flights_dir.resolve() or not flight_id.startswith(FLIGHT_PREFIX):
             raise ValueError(f"not a flight id: '{flight_id}'")
         if must_exist and not d.is_dir():
             raise ValueError(f"no such flight '{flight_id}'")
@@ -191,69 +195,99 @@ class DroneManager:
             flag.unlink(missing_ok=True)
 
     def request_land(self, flight_id: str):
-        """Ask the flight to land. Always allowed, even if the flight looks finished:
-        refusing on a stale 'not running' reading would be the one failure mode that
-        actually matters."""
+        """Always allowed, even if the flight looks finished: refusing on a stale
+        'not running' reading would be the one failure mode that actually matters."""
         self._write_flag(flight_id, LAND_FLAG, True)
 
     def request_kill(self, flight_id: str):
-        """Cut the motors. The drone drops, so this is for 'it is out of control' only --
-        but it is still strictly safer than leaving it flying, so the browser may send it."""
+        """Cut the motors. The drone drops, so this is for 'it is out of control' only."""
         self._write_flag(flight_id, KILL_FLAG, True)
 
     def set_camera(self, flight_id: str, enabled: bool):
         self._write_flag(flight_id, CAMERA_FLAG, enabled)
+
+    def send_keys(self, flight_id: str, held) -> bool:
+        """Forward held keys to a live human flight. Unknown names are dropped here and
+        again in the flight. Returns False if the flight takes no keys."""
+        meta = _read_json(self._dir(flight_id) / "meta.json") or {}
+        port = meta.get("keys_port")
+        if not isinstance(port, int) or meta.get("final_status"):
+            return False
+        names = [k for k in held if k in HELD_KEYS]
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.sendto(json.dumps({"held": names}).encode(), ("127.0.0.1", port))
+        return True
+
+    def answer_save(self, flight_id: str, save: bool, passed: bool):
+        """The post-landing 'save this run?' answer, read by fly_hoop --save-answer file."""
+        write_json_atomic(self._dir(flight_id) / SAVE_ANSWER,
+                          {"save": bool(save), "passed": bool(passed)})
 
     def camera_frame_path(self, flight_id: str) -> Path:
         return self._dir(flight_id) / "camera_latest.jpg"
 
     # ------------------------------------------------------------------ starting
 
-    def start_flight(self, mode="expert", profile="typical", seed=0, attempts=1,
-                     no_forward=False, no_commit=False, max_travel=None,
-                     max_airborne=40.0, record=False, model=None,
-                     dry_run: bool = True) -> str:
-        """Start a DRY RUN. Refuses a real flight -- see this module's docstring."""
-        if not dry_run:
-            raise ValueError(
-                "the dashboard cannot start a real flight. Run it from a terminal next "
-                "to the cage: python hardware/onboard/fly_hoop.py  (the dashboard will "
-                "pick it up automatically and can land or stop it)")
+    def build_argv(self, mode="expert", profile="typical", seed=0, attempts=1,
+                   no_forward=False, no_commit=False, max_travel=None,
+                   max_airborne=40.0, record=False, model=None,
+                   dry_run: bool = True, confirm: bool = False,
+                   human_gain: float = 0.6, keys_port: Optional[int] = None) -> list:
+        if not dry_run and not confirm:
+            raise ValueError("a real flight needs confirm=true")
         if mode not in MODE_IDS:
             raise ValueError(f"unknown mode '{mode}'")
         if profile not in PROFILE_IDS:
             raise ValueError(f"unknown profile '{profile}'")
         if mode == "policy" and not model:
-            raise ValueError("mode 'policy' needs a model path")
-        if self.is_flight_active():
-            raise RuntimeError("a flight is already active")
-        if not FLY_HOOP_SCRIPT.is_file():
-            raise RuntimeError(f"missing {FLY_HOOP_SCRIPT}")
+            raise ValueError("mode 'policy' needs a model")
+        if model:
+            model = Path(model) if Path(model).is_absolute() else CMS_DIR / model
+            if not model.is_file():
+                raise ValueError(f"no model file at '{model}'")
+        if not 0.0 < float(human_gain) <= 1.0:
+            raise ValueError("human_gain must be in (0, 1]")
+        if max_travel is not None and float(max_travel) <= 0:
+            raise ValueError("max_travel must be positive")
 
-        argv = [PYTHON_EXE, str(FLY_HOOP_SCRIPT), "--dry-run",
-                "--mode", mode, "--profile", profile, "--seed", str(int(seed)),
-                "--attempts", str(max(1, int(attempts))),
-                "--max-airborne", str(float(max_airborne)),
-                "--countdown", "1", "--settle", "1.0"]
+        argv = [PYTHON_EXE, str(FLY_HOOP_SCRIPT),
+                "--mode", mode, "--seed", str(int(seed)),
+                "--max-airborne", str(float(max_airborne)), "--camera"]
+        if dry_run:
+            argv += ["--dry-run", "--profile", profile,
+                     "--attempts", str(max(1, int(attempts))),
+                     "--countdown", "1", "--settle", "1.0"]
+        else:
+            argv += ["--countdown", "3"]        # time to step back from the cage
         if no_forward:
             argv.append("--no-forward")
         if no_commit:
             argv.append("--no-commit")
         if max_travel is not None:
             argv += ["--max-travel", str(float(max_travel))]
+        if mode == "human":
+            argv += ["--keys", "udp", "--keys-port", str(keys_port or _free_udp_port()),
+                     "--human-gain", str(float(human_gain)), "--save-answer", "file"]
         if record:
             argv.append("--record")
         if model:
             argv += ["--model", str(model)]
+        return argv
 
-        FLIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-        log_path = FLIGHTS_DIR / f"dryrun_{datetime.now():%Y%m%d-%H%M%S}.log"
-        kwargs = _popen_kwargs(log_path)
-        proc = subprocess.Popen(argv, **kwargs)
-        kwargs["stdout"].close()      # the child holds its own duplicated handle now
+    def start_flight(self, **kw) -> str:
+        """Start a flight. A real one needs confirm=True; main.py also requires the
+        request to come from this computer."""
+        argv = self.build_argv(**kw)
+        if self.is_flight_active():
+            raise RuntimeError("a flight is already active")
+        if not FLY_HOOP_SCRIPT.is_file():
+            raise RuntimeError(f"missing {FLY_HOOP_SCRIPT}")
+        self.flights_dir.mkdir(parents=True, exist_ok=True)
+        prefix = "dryrun" if kw.get("dry_run", True) else "flight"
+        log_path = self.flights_dir / f"{prefix}_{datetime.now():%Y%m%d-%H%M%S}.log"
         # fly_hoop.py makes its own timestamped directory, so the id is not known until
         # it appears. The caller polls /api/drone/status for it.
-        self._procs[log_path.stem] = proc
+        self._procs[log_path.stem] = spawn(argv, log_path, CMS_DIR)
         return log_path.stem
 
     def stop_flight(self, flight_id: Optional[str] = None) -> bool:
@@ -264,34 +298,20 @@ class DroneManager:
         drone hovering with no supervisor until its own battery timeout.
         """
         if flight_id:
-            meta = _read_json(FLIGHTS_DIR / flight_id / "meta.json") or {}
+            meta = _read_json(self.flights_dir / flight_id / "meta.json") or {}
             if meta.get("dry_run") is False:
                 self.request_land(flight_id)
                 return True
         stopped = False
         for key, proc in list(self._procs.items()):
             if self._proc_alive(proc):
-                self._graceful_stop(proc)
+                graceful_stop(proc, timeout=15)
                 stopped = True
             self._procs.pop(key, None)
         if not stopped and flight_id:
             self.request_land(flight_id)
             stopped = True
         return stopped
-
-    @staticmethod
-    def _graceful_stop(proc):
-        try:
-            if os.name == "nt":
-                proc.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
-                proc.terminate()
-            proc.wait(timeout=15)
-        except (subprocess.TimeoutExpired, OSError, ValueError):
-            try:
-                proc.kill()
-            except OSError:
-                pass
 
 
 drone_manager = DroneManager()

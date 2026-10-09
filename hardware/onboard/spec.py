@@ -7,7 +7,7 @@ This module is the single source of truth. The simulator (sim.py), the real flig
 so the interface cannot drift between "what the expert was recorded doing" and "what a
 policy is asked to do". A test asserts OBS_DIM equals the sum of the field widths.
 
-Why a feature vector and not the image: a 30-float observation trains an MLP on a CPU in
+Why a feature vector and not the image: a 33-float observation trains an MLP on a CPU in
 seconds, keeps demonstration files small, and runs at 15 Hz on this machine. The cost is
 that the policy only ever sees what ring_detect.py chose to measure.
 
@@ -55,7 +55,7 @@ OBS_FIELDS = (
     ("att", 3),          # pitch, roll (deg) / ATT_NORM, and yaw rate / YAWRATE_NORM
     ("actions", ACT_BUFFER * ACT_DIM),   # executed actions, oldest first, zeros at takeoff
 )
-OBS_DIM = sum(w for _, w in OBS_FIELDS)        # 30
+OBS_DIM = sum(w for _, w in OBS_FIELDS)        # 33
 
 # Slice for each field, so consumers never hardcode an index.
 OBS_SLICES = {}

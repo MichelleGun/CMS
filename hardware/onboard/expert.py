@@ -189,6 +189,7 @@ class Expert:
         self._lost = 0
         self._search_dir = 1.0
         self._search_sweep_tick = 0
+        self._search_leg = self.cfg.search_sweep_ticks   # first leg only; see __call__
         self._seek_dir = 1.0
         self._seek_tick = 0
         self._seek_ref = None
@@ -330,13 +331,15 @@ class Expert:
                     self.phase = ABORT
                     self.reason = "ring not found while searching"
                 else:
-                    # Sweep yaw left/right so the ring is likely somewhere in the arc.
-                    # Flip direction every search_sweep_ticks ticks instead of spinning
-                    # continuously; once the ring appears _servo() takes over height.
+                    # Sweep yaw to BOTH sides of the start heading: one leg out, then
+                    # double-length legs, so it swings -A..+A rather than 0..+A (equal
+                    # legs from the start heading would never look to the other side).
+                    # Once the ring appears _servo() takes over height.
                     self._search_sweep_tick += 1
-                    if self._search_sweep_tick >= c.search_sweep_ticks:
+                    if self._search_sweep_tick >= self._search_leg:
                         self._search_dir *= -1.0
                         self._search_sweep_tick = 0
+                        self._search_leg = 2 * c.search_sweep_ticks
                     a[spec.ACT_YAW] = c.search_yaw * self._search_dir
                     a[spec.ACT_UD] = c.search_ud
             return a, self._info(ring)

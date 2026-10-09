@@ -88,10 +88,10 @@ def main(argv=None):
                     help="also record episodes that did not pass through (a clone copies "
                          "its demonstrator, including its mistakes)")
     ap.add_argument("--render", action="store_true",
-                    help="RECOMMENDED. Put the real OpenCV detector in the loop instead "
-                         "of the fast analytic model of it. Several times slower, and it "
-                         "matters: a clone trained without it scored 5/12 against the "
-                         "real detector and 10/12 with it (see the README)")
+                    help="Put the real OpenCV detector in the loop instead of the fast "
+                         "analytic model of it. Several times slower. It helped at the "
+                         "50 cm ring (5/12 -> 10/12) but not at the measured 30 cm ring, "
+                         "where the clone trained with it scored 0/12 (see the README)")
     a = ap.parse_args(argv)
 
     rec, tally = generate(a.episodes, a.profile, a.seed, a.keep_failures, a.render)

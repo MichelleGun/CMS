@@ -8,19 +8,32 @@ with:
 
 Then open http://localhost:8000 in a browser.
 """
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import ALGORITHMS, FRONTEND_DIR, REACH_RADIUS, ROOM, RUNS_DIR, START_Z, XY_MARGIN, Z_RANGE
 from drone_manager import drone_manager
 from drone_ws import stream_flight
+from imitation_manager import imitation_manager
+from jobs import job_manager
 from run_manager import run_manager
-from schemas import (CameraToggleRequest, DroneCameraToggleRequest, ReplayRequest,
-                     StartFlightRequest, StartRunRequest)
+from schemas import (CameraToggleRequest, DroneCameraToggleRequest, EvaluateRequest,
+                     GenerateDemosRequest, LabelDemoRequest, ReplayRequest,
+                     SaveAnswerRequest, StartFlightRequest, StartRunRequest,
+                     TrainCloneRequest)
 from telemetry_ws import stream_run
 
 app = FastAPI(title="Hoop-finding drone dashboard")
+
+# Real takeoffs and keyboard flying are accepted only from the computer running the
+# backend: someone at that keyboard can see the cage. uvicorn binds to 127.0.0.1 by
+# default; this also holds if someone starts it with --host 0.0.0.0.
+LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_local(client) -> bool:
+    return client is not None and client.host in LOCAL_HOSTS
 
 
 # --------------------------------------------------------------------- API
@@ -114,8 +127,8 @@ async def ws_run(websocket: WebSocket, run_id: str):
 
 
 # ------------------------------------------------------------- real drone
-# The dashboard can watch a real flight and make it safer; it cannot start one.
-# POST /api/drone/flights accepts dry runs only -- see drone_manager's docstring.
+# Real flights start from here with confirm=true, from this computer only, one at a
+# time -- see drone_manager's docstring. Land and kill are always accepted.
 
 @app.get("/api/drone/status")
 def get_drone_status():
@@ -124,7 +137,7 @@ def get_drone_status():
 
 @app.get("/api/drone/flights")
 def get_drone_flights(limit: int = 25):
-    return drone_manager.list_flights(limit=limit)
+    return drone_manager.list_flights(limit=limit if limit > 0 else None)
 
 
 @app.get("/api/drone/flights/{flight_id}")
@@ -136,18 +149,48 @@ def get_drone_flight(flight_id: str):
 
 
 @app.post("/api/drone/flights", status_code=201)
-def start_drone_flight(req: StartFlightRequest):
+def start_drone_flight(req: StartFlightRequest, request: Request):
+    if (not req.dry_run or req.mode == "human") and not _is_local(request.client):
+        raise HTTPException(status_code=403,
+                            detail="real and keyboard flights start only from the computer "
+                                   "running the dashboard")
     try:
         job = drone_manager.start_flight(
             mode=req.mode, profile=req.profile, seed=req.seed, attempts=req.attempts,
             no_forward=req.no_forward, no_commit=req.no_commit,
             max_travel=req.max_travel, max_airborne=req.max_airborne,
-            record=req.record, model=req.model, dry_run=req.dry_run)
+            record=req.record, model=req.model, dry_run=req.dry_run,
+            confirm=req.confirm, human_gain=req.human_gain)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"job": job, "status": "starting", "dry_run": True}
+    return {"job": job, "status": "starting", "dry_run": req.dry_run}
+
+
+@app.get("/api/drone/flights/{flight_id}/events")
+def get_drone_events(flight_id: str):
+    try:
+        return {"events": drone_manager.events(flight_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/drone/flights/{flight_id}/ticks")
+def get_drone_ticks(flight_id: str):
+    try:
+        return {"ticks": drone_manager.ticks(flight_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/drone/flights/{flight_id}/save")
+def answer_drone_save(flight_id: str, req: SaveAnswerRequest):
+    try:
+        drone_manager.answer_save(flight_id, req.save, req.passed)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"flight_id": flight_id, "save": req.save, "passed": req.passed}
 
 
 @app.post("/api/drone/flights/{flight_id}/land")
@@ -201,6 +244,111 @@ def get_drone_camera_frame(flight_id: str):
 @app.websocket("/ws/drone/{flight_id}")
 async def ws_drone(websocket: WebSocket, flight_id: str):
     await stream_flight(websocket, flight_id)
+
+
+@app.websocket("/ws/drone/{flight_id}/keys")
+async def ws_drone_keys(websocket: WebSocket, flight_id: str):
+    """Held keys from the browser: {"held": ["fb+", ...]}. Disconnecting releases them."""
+    if not _is_local(websocket.client):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            held = msg.get("held", []) if isinstance(msg, dict) else []
+            try:
+                drone_manager.send_keys(flight_id, held if isinstance(held, list) else [])
+            except (ValueError, OSError):
+                pass
+    except (WebSocketDisconnect, ValueError):
+        pass
+    finally:
+        try:
+            drone_manager.send_keys(flight_id, [])
+        except (ValueError, OSError):
+            pass
+
+
+# ------------------------------------------------------- imitation learning
+
+def _job_errors(fn):
+    try:
+        return {"job_id": fn()}
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/imitation/demos")
+def list_demos():
+    return {"demos": imitation_manager.list_demos()}
+
+
+@app.post("/api/imitation/demos/generate", status_code=202)
+def generate_demos(req: GenerateDemosRequest):
+    return _job_errors(lambda: imitation_manager.generate_demos(
+        req.name, req.episodes, req.profile, req.seed, req.render))
+
+
+@app.post("/api/imitation/demos/label")
+def label_demo(req: LabelDemoRequest):
+    try:
+        return {"demo_id": imitation_manager.label_demo(req.demo_id, req.passed)}
+    except (ValueError, OSError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/imitation/models")
+def list_models():
+    return {"models": imitation_manager.list_models()}
+
+
+@app.post("/api/imitation/train", status_code=202)
+def train_clone(req: TrainCloneRequest):
+    return _job_errors(lambda: imitation_manager.train(
+        req.name, req.demo_ids, req.epochs, req.lr, req.use, req.eval_episodes, req.seed))
+
+
+@app.post("/api/imitation/models/{name}/evaluate", status_code=202)
+def evaluate_clone(name: str, req: EvaluateRequest):
+    return _job_errors(lambda: imitation_manager.evaluate(name, req.episodes, req.render))
+
+
+# --------------------------------------------------------------------- jobs
+
+@app.get("/api/jobs")
+def list_jobs(limit: int = 50):
+    return {"jobs": job_manager.list(limit), "active": job_manager.active_job()}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    try:
+        job = job_manager.get(job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"no such job '{job_id}'")
+    return job
+
+
+@app.get("/api/jobs/{job_id}/log")
+def get_job_log(job_id: str, offset: int = 0):
+    try:
+        text, new_offset = job_manager.log(job_id, max(0, offset))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"text": text, "offset": new_offset}
+
+
+@app.post("/api/jobs/{job_id}/stop")
+def stop_job(job_id: str):
+    try:
+        return {"job_id": job_id, "stopped": job_manager.stop(job_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # ----------------------------------------------------------------- static

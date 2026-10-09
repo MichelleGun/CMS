@@ -448,3 +448,17 @@ def test_ring_from_obs_round_trips_the_fields_the_expert_uses():
     assert back.cy == pytest.approx(original.cy, abs=1e-3)
     assert back.axis_ratio == pytest.approx(original.axis_ratio, abs=1e-3)
     assert back.range_m == pytest.approx(original.range_m, abs=1e-3)
+
+
+def test_the_search_sweeps_both_sides_of_the_start_heading():
+    """Equal-length legs from the start heading only ever covered one side of it, so a
+    ring to the other side was never found."""
+    from onboard.expert import Expert
+    from onboard.ring_detect import RingObs
+    ex = Expert()
+    heading, lo, hi = 0.0, 0.0, 0.0
+    for _ in range(ex.cfg.search_max_ticks):
+        a, _info = ex(RingObs())
+        heading += a[spec.ACT_YAW]
+        lo, hi = min(lo, heading), max(hi, heading)
+    assert lo < -0.5 * hi and hi > 0, (lo, hi)

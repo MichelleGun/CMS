@@ -12,10 +12,17 @@
 <body>
   <header id="app-header">
     <h1>Hoop Finder</h1>
+    <nav id="tabs">
+      <button class="tab-btn" data-tab="sim" type="button">Simulator</button>
+      <button class="tab-btn" data-tab="drone" type="button">Drone</button>
+      <button class="tab-btn" data-tab="imitation" type="button">Imitation</button>
+      <button class="tab-btn" data-tab="history" type="button">History</button>
+    </nav>
     <div id="status-pill" class="pill pill-idle">idle</div>
+    <div id="live-flight-pill" class="pill pill-training" hidden>flight live</div>
   </header>
 
-  <main id="app-main">
+  <main id="app-main" class="tab-page" data-tab-page="sim">
     <aside id="run-history">
       <h2>Runs</h2>
       <div id="run-list"></div>
@@ -157,59 +164,205 @@
         <video id="replay-video" controls hidden></video>
       </div>
 
-      <div class="panel" id="panel-drone">
-        <h2>Real drone</h2>
+    </aside>
+  </main>
+
+  <!-- ================================================================ DRONE -->
+  <main id="tab-drone" class="tab-page three-col" hidden>
+    <aside class="col">
+      <div class="panel">
+        <h2>Start a flight</h2>
+        <div class="seg" id="fly-target">
+          <label><input type="radio" name="fly-target" value="dry" checked> Dry run (simulated)</label>
+          <label><input type="radio" name="fly-target" value="real"> Real drone</label>
+        </div>
+        <div id="fly-real-warning" class="warn" hidden>
+          REAL DRONE. Cage closed, nobody inside, battery above 30 %, phone Tello app closed,
+          laptop on the TELLO Wi-Fi.
+        </div>
+        <div id="stage-list" class="stage-list"></div>
+      </div>
+
+      <div class="panel" id="flight-options">
+        <h2>Options</h2>
+        <div class="field-row" id="opt-model-row">
+          <label for="opt-model">Policy</label>
+          <select id="opt-model"></select>
+        </div>
+        <div class="field-row">
+          <label for="opt-max-travel">Max travel (m)</label>
+          <input type="number" id="opt-max-travel" step="0.1" min="0.1" placeholder="none">
+        </div>
+        <div class="field-row">
+          <label for="opt-max-airborne">Max airborne (s)</label>
+          <input type="number" id="opt-max-airborne" step="5" min="5" value="40">
+        </div>
+        <div class="field-row" id="opt-gain-row">
+          <label for="opt-gain">Key strength</label>
+          <input type="number" id="opt-gain" step="0.1" min="0.1" max="1" value="0.6">
+        </div>
+        <div class="field-row" id="opt-profile-row">
+          <label for="opt-profile">Simulated drone</label>
+          <select id="opt-profile">
+            <option value="ideal">Ideal</option>
+            <option value="typical" selected>Typical</option>
+            <option value="harsh">Harsh</option>
+          </select>
+        </div>
+        <label class="checkbox-row"><input type="checkbox" id="opt-record"> Record a demonstration</label>
+        <div class="button-row">
+          <button id="fly-start-btn" class="primary-btn" type="button">Take off</button>
+        </div>
+        <div id="fly-note" class="note"></div>
+      </div>
+    </aside>
+
+    <section class="col col-main">
+      <div class="panel">
         <div id="drone-head">
           <div id="drone-pill" class="pill pill-idle">no flight</div>
           <span id="drone-flight-id" class="note"></span>
+          <label class="checkbox-row inline"><input type="checkbox" id="drone-camera-toggle"> Camera</label>
         </div>
-        <div id="drone-readout" class="readout">no flight recorded yet</div>
-
-        <label class="checkbox-row">
-          <input type="checkbox" id="drone-camera-toggle"> Show the drone's own view
-        </label>
-        <div id="drone-camera-view">
-          <img id="drone-camera-frame" alt="drone camera off" hidden>
+        <div id="drone-camera-view" class="camera-big">
+          <img id="drone-camera-frame" alt="drone camera" hidden>
           <div id="drone-camera-placeholder">camera off</div>
         </div>
+        <div id="drone-readout" class="readout">no flight recorded yet</div>
+      </div>
+      <div class="panel">
+        <h2>Flight events</h2>
+        <ol id="drone-events" class="event-list"></ol>
+      </div>
+    </section>
 
-        <div class="button-row">
-          <button id="drone-land-btn" class="danger-btn" disabled>Land now</button>
-          <button id="drone-kill-btn" class="danger-btn" disabled>Emergency stop</button>
+    <aside class="col">
+      <div class="panel">
+        <h2>Safety</h2>
+        <div class="button-col">
+          <button id="drone-land-btn" class="danger-btn big" type="button" disabled>Land now (L)</button>
+          <button id="drone-kill-btn" class="danger-btn big kill" type="button" disabled>Emergency motor cut (X)</button>
+          <button id="drone-stop-btn" class="secondary-btn" type="button" disabled>Stop dry run</button>
         </div>
-        <div id="drone-note" class="note">
-          Real flights are started from a terminal next to the cage. This panel watches
-          one and can land it.
-        </div>
-
-        <details id="drone-dryrun">
-          <summary>Dry run (no drone)</summary>
-          <div class="field-row">
-            <label for="drone-mode">Controller</label>
-            <select id="drone-mode"></select>
-          </div>
-          <div class="field-row">
-            <label for="drone-profile">Drone behaviour</label>
-            <select id="drone-profile"></select>
-          </div>
-          <label class="checkbox-row">
-            <input type="checkbox" id="drone-no-forward"> Align only, never move forward
-          </label>
-          <div class="button-row">
-            <button id="drone-dryrun-btn" class="secondary-btn">Start dry run</button>
-            <button id="drone-stop-btn" class="secondary-btn">Stop dry run</button>
-          </div>
-        </details>
+        <div id="drone-note" class="note"></div>
       </div>
 
+      <div class="panel" id="save-panel" hidden>
+        <h2>Save this run?</h2>
+        <div id="save-samples" class="note"></div>
+        <div class="button-col">
+          <button id="save-pass-btn" class="primary-btn" type="button">Went through: save as pass</button>
+          <button id="save-miss-btn" class="secondary-btn" type="button">Missed: save as miss</button>
+          <button id="save-discard-btn" class="secondary-btn" type="button">Discard</button>
+        </div>
+      </div>
+
+      <div class="panel" id="keys-panel">
+        <h2>Keyboard flight</h2>
+        <div id="keys-state" class="pill pill-idle">keys off</div>
+        <div class="keymap">
+          <div><kbd>W</kbd><kbd>S</kbd> forward / back</div>
+          <div><kbd>A</kbd><kbd>D</kbd> strafe left / right</div>
+          <div><kbd>&uarr;</kbd><kbd>&darr;</kbd> up / down</div>
+          <div><kbd>&larr;</kbd><kbd>&rarr;</kbd> rotate left / right</div>
+          <div><kbd>L</kbd> / <kbd>Esc</kbd> land</div>
+          <div><kbd>X</kbd> / <kbd>Backspace</kbd> motor cut</div>
+        </div>
+        <div id="keys-held" class="readout">-</div>
+        <div class="note">Keys work only while this tab is in front. Switching away, or no
+          keys for 0.4 s, makes the drone hover.</div>
+      </div>
     </aside>
+  </main>
+
+  <!-- ============================================================ IMITATION -->
+  <main id="tab-imitation" class="tab-page three-col" hidden>
+    <aside class="col">
+      <div class="panel">
+        <h2>Demonstrations</h2>
+        <div class="seg small" id="demo-filter">
+          <label><input type="radio" name="demo-filter" value="all" checked> All</label>
+          <label><input type="radio" name="demo-filter" value="real"> Real</label>
+          <label><input type="radio" name="demo-filter" value="sim"> Simulated</label>
+        </div>
+        <div id="demo-list" class="list"></div>
+        <div id="demo-summary" class="note"></div>
+      </div>
+      <div class="panel">
+        <h2>Generate simulated demos</h2>
+        <div class="field-row"><label for="gen-name">Name</label><input id="gen-name" value="onboard_sim_new"></div>
+        <div class="field-row"><label for="gen-episodes">Episodes</label><input type="number" id="gen-episodes" value="60" min="1"></div>
+        <div class="field-row"><label for="gen-profile">Simulated drone</label>
+          <select id="gen-profile"><option value="ideal">Ideal</option><option value="typical" selected>Typical</option><option value="harsh">Harsh</option></select></div>
+        <label class="checkbox-row"><input type="checkbox" id="gen-render"> Real detector in the loop (slower)</label>
+        <div class="button-row"><button id="gen-btn" class="secondary-btn" type="button">Generate</button></div>
+      </div>
+    </aside>
+
+    <section class="col col-main">
+      <div class="panel">
+        <h2>Train a clone</h2>
+        <div class="note">Trains on the demonstrations ticked on the left.</div>
+        <div class="field-row"><label for="train-name">Name</label><input id="train-name" value="human_clone"></div>
+        <div class="field-row"><label for="train-epochs">Epochs</label><input type="number" id="train-epochs" value="200" min="1"></div>
+        <div class="field-row"><label for="train-lr">Learning rate</label><input type="number" id="train-lr" value="0.003" step="0.0005"></div>
+        <div class="field-row"><label for="train-use">Train on</label>
+          <select id="train-use"><option value="intent" selected>what the pilot asked for</option><option value="executed">what the drone executed</option></select></div>
+        <div class="field-row"><label for="train-eval">Test episodes after</label><input type="number" id="train-eval" value="20" min="0" max="200"></div>
+        <div class="button-row"><button id="train-btn" class="primary-btn" type="button">Train</button></div>
+        <div id="train-note" class="note"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Job</h2>
+          <span id="job-pill" class="pill pill-idle">idle</span>
+          <span id="job-label" class="note"></span>
+          <button id="job-stop-btn" class="secondary-btn" type="button" disabled>Stop</button>
+        </div>
+        <pre id="job-log" class="log"></pre>
+      </div>
+    </section>
+
+    <aside class="col">
+      <div class="panel">
+        <h2>Clones</h2>
+        <div class="field-row"><label for="eval-episodes">Test episodes</label><input type="number" id="eval-episodes" value="12" min="1" max="200"></div>
+        <label class="checkbox-row"><input type="checkbox" id="eval-render"> Real detector in the loop</label>
+        <div id="model-list" class="list"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ============================================================== HISTORY -->
+  <main id="tab-history" class="tab-page two-col" hidden>
+    <aside class="col">
+      <div class="panel">
+        <h2>History</h2>
+        <div class="seg small" id="hist-filter">
+          <label><input type="radio" name="hist-filter" value="real" checked> Real flights</label>
+          <label><input type="radio" name="hist-filter" value="dry"> Dry runs</label>
+          <label><input type="radio" name="hist-filter" value="runs"> Training</label>
+          <label><input type="radio" name="hist-filter" value="jobs"> Jobs</label>
+        </div>
+        <div id="hist-list" class="list"></div>
+      </div>
+    </aside>
+    <section class="col col-main">
+      <div class="panel" id="hist-detail">
+        <div class="note">Pick something on the left.</div>
+      </div>
+    </section>
   </main>
 
   <script src="js/api.js"></script>
   <script src="js/scene3d.js"></script>
   <script src="js/controls.js"></script>
   <script src="js/chart.js"></script>
+  <script src="js/tabs.js"></script>
+  <script src="js/keys.js"></script>
   <script src="js/drone.js"></script>
+  <script src="js/imitation.js"></script>
+  <script src="js/history.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

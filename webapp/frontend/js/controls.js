@@ -77,6 +77,7 @@ const Controls = (() => {
 
     document.addEventListener("keydown", (e) => {
       if (!panelActive) return;
+      if (typeof Tabs !== "undefined" && Tabs.current() !== "sim") return;   // arrows fly the drone there
       const tag = (document.activeElement && document.activeElement.tagName) || "";
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
       switch (e.key) {

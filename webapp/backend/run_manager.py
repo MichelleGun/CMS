@@ -18,43 +18,15 @@ from typing import Optional
 
 import psutil
 
+import jobs
 from config import SCRIPTS_DIR, RUNS_DIR, CMS_DIR, ALGORITHM_IDS, bounds_ok
 
 PYTHON_EXE = sys.executable  # the drones env's own interpreter, since this
                               # backend process runs inside that same env
 
 
-def _conda_env_bin_dirs(python_exe: str):
-    """Library/bin (ffmpeg and other conda-forge CLI tools) and Scripts, for
-    the conda env this interpreter lives in. Confirmed necessary: ffmpeg is
-    installed into the drones env but not on this process's inherited PATH,
-    so subprocesses need it prepended explicitly rather than relying on
-    whatever shell launched the backend."""
-    env_root = Path(python_exe).resolve().parent
-    return [str(env_root / "Library" / "bin"), str(env_root / "Scripts"), str(env_root)]
-
-
-def _subprocess_env():
-    env = dict(os.environ)
-    extra = _conda_env_bin_dirs(PYTHON_EXE)
-    env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
-    return env
-
-
 def _popen_kwargs(log_path: Path):
-    # Redirect to a log file on disk rather than subprocess.PIPE: these
-    # scripts (replay_hoop.py especially, via BaseAviary.render()'s verbose
-    # per-step printing) can produce enough stdout to fill an unread pipe's
-    # OS buffer, which stalls the child process indefinitely once full.
-    # Confirmed by hitting this directly: a replay with --pov hung with the
-    # process still consuming CPU but making no progress. A file has no such
-    # limit, and it also leaves a debuggable log behind.
-    log_file = open(log_path, "w")
-    kwargs = dict(cwd=str(SCRIPTS_DIR), env=_subprocess_env(),
-                  stdout=log_file, stderr=subprocess.STDOUT)
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    return kwargs
+    return jobs.popen_kwargs(log_path, SCRIPTS_DIR)
 
 
 class RunManager:

@@ -1,5 +1,5 @@
 """Pydantic request/response models for the dashboard API."""
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -47,12 +47,9 @@ class CameraToggleRequest(BaseModel):
 # --- real drone (hardware/onboard/fly_hoop.py) ------------------------------
 
 class StartFlightRequest(BaseModel):
-    """dry_run defaults to True and the manager refuses anything else.
-
-    It is accepted as a field at all only so that an attempt to set it False gets a clear
-    explanation of where real flights are started from, rather than being silently ignored.
-    """
-    mode: Literal["expert", "policy", "hover"] = "expert"
+    """dry_run defaults to True. A real flight (dry_run=False) also needs confirm=True,
+    and is accepted only from this computer (see main.py)."""
+    mode: Literal["expert", "policy", "hover", "human"] = "expert"
     profile: Literal["ideal", "typical", "harsh"] = "typical"
     seed: int = 0
     attempts: int = 1
@@ -63,6 +60,43 @@ class StartFlightRequest(BaseModel):
     record: bool = False
     model: Optional[str] = None
     dry_run: bool = True
+    confirm: bool = False
+    human_gain: float = 0.6
+
+
+class SaveAnswerRequest(BaseModel):
+    save: bool
+    passed: bool = False
+
+
+# --- imitation learning -------------------------------------------------------
+
+class GenerateDemosRequest(BaseModel):
+    name: str
+    episodes: int = 60
+    profile: Literal["ideal", "typical", "harsh"] = "typical"
+    seed: int = 0
+    render: bool = False
+
+
+class LabelDemoRequest(BaseModel):
+    demo_id: str
+    passed: bool
+
+
+class TrainCloneRequest(BaseModel):
+    name: str
+    demo_ids: List[str]
+    epochs: int = 200
+    lr: float = 3e-3
+    use: Literal["intent", "executed"] = "intent"
+    eval_episodes: int = Field(20, ge=0, le=200)
+    seed: int = 0
+
+
+class EvaluateRequest(BaseModel):
+    episodes: int = 12
+    render: bool = False
 
 
 class DroneCameraToggleRequest(BaseModel):

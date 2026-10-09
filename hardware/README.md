@@ -769,6 +769,9 @@ stops inside the cage.
 
 ### Imitation learning (`imitation/`)
 
+> Step-by-step tutorial, including the onboard-camera drone policy: [`imitation/README.md`](imitation/README.md).
+> The description below is of the older simulator point-reaching task.
+
 A demonstration is, for each 1/30 s while you fly: the 75-number observation, what you asked for (direction plus speed),
 and what was actually executed (after the geofence). Saved as `.npz` with the flight's metadata. Behaviour cloning trains a
 PPO policy (same network shape the simulator trains) to reproduce your action from the observation. Details that matter:
