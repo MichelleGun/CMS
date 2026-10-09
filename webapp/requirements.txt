@@ -1,0 +1,13 @@
+# Extra packages for the web dashboard (webapp/). The simulator / training stack itself comes from
+# SETUP.md (the `drones` conda environment); install this on top of it, in the same environment:
+#
+#     pip install -r webapp/requirements.txt
+#
+# Versions are the ones the dashboard was developed and tested with.
+fastapi==0.142.1
+uvicorn[standard]==0.54.0     # [standard] brings websockets, which the live view needs
+psutil==7.2.2
+PyYAML==6.0.3
+
+# Only for keyboard flying of a real Tello from the Drone tab (hardware/); skip it for simulation:
+#   pip install -r hardware/requirements-hardware.txt

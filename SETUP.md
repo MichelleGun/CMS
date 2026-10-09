@@ -1,7 +1,9 @@
 # Environment setup
 
 Done on Windows 11, ASUS Zenbook 14 (no NVIDIA GPU → PyTorch runs on CPU).
-Adapt paths for other machines.
+Adapt paths for other machines. `gym-pybullet-drones` below is a **separate** repository: clone it
+next to this one (not inside it). For the quick version of all this see the "Quick start" in
+[README.md](README.md).
 
 ## Prerequisites
 
@@ -44,6 +46,24 @@ e = HoverAviary(); e.reset(); print('env OK')"
 ```
 
 Expected: `torch 2.14.0+cpu cuda False` … `env OK`.
+
+## Step 5: the web dashboard's packages
+
+The dashboard (`webapp/`) needs a few packages that the simulator does not. From the `CMS` folder
+(this repo), with `drones` activated:
+
+```bash
+pip install -r webapp/requirements.txt
+```
+
+Then start it and open <http://localhost:8000>:
+
+```bash
+python -m uvicorn main:app --app-dir webapp/backend --port 8000
+```
+
+Run the server **from the `drones` environment**: it starts training as a child process using the
+same Python, so a different interpreter would not find PyBullet.
 
 ## Exact versions used
 

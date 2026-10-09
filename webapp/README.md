@@ -1,10 +1,11 @@
 # Hoop finder dashboard
 
-A local web interface for the whole project, in four tabs. Nothing needs a terminal once the
+A local web interface for the whole project, in five tabs. Nothing needs a terminal once the
 server is running.
 
 | Tab | What you do there |
 |---|---|
+| **Environment** | See the simulated 2×2×2 m net and ring: randomise the ring, preview its wind sway, play an example flight, and overlay the phone scan of the real cage (auto-fitted to the sim net) |
 | **Simulator** | Train RL policies in the PyBullet simulator: start positions, algorithm, reward curve, onboard camera, video replays |
 | **Drone** | Fly the real Tello or a simulated one: the six Stage C steps as buttons, the drone camera, telemetry, Land / Emergency motor cut, **keyboard flight**, and saving the run as a demonstration |
 | **Imitation** | List every demonstration (recorded flights and simulated), generate simulated demos, train a behaviour clone on the ones you tick, evaluate clones, and send one to the Drone tab |
@@ -12,22 +13,30 @@ server is running.
 
 ## Run it
 
-Open PowerShell, then copy and paste:
+**First time only**, in the `drones` environment (see [../SETUP.md](../SETUP.md) to create it), from the
+`CMS` folder:
 
-```powershell
-cd "C:\Users\miche\OneDrive\Documents\Michelle\UTS\SPR_26\RL\ASS3\CMS"
-$PY = "C:/Users/miche/miniconda3/envs/drones/python.exe"
-& $PY -m uvicorn main:app --app-dir webapp/backend --port 8000
+```bash
+conda activate drones
+pip install -r webapp/requirements.txt
 ```
 
-Then open `http://localhost:8000`. Stop it with Ctrl+C. **Do not add `--host 0.0.0.0`**: the
-dashboard can now take off a real drone, and it should only be reachable from this computer.
+Then, from the `CMS` folder with `drones` activated:
 
-First time only:
-
-```powershell
-& $PY -m pip install fastapi "uvicorn[standard]" psutil pygame
+```bash
+python -m uvicorn main:app --app-dir webapp/backend --port 8000
 ```
+
+Then open `http://localhost:8000` (it needs an internet connection: the 3D view loads three.js from
+a CDN). Stop it with Ctrl+C. **Do not add `--host 0.0.0.0`**: the dashboard can take off a real
+drone, and it should only be reachable from this computer.
+
+If `python` is not the `drones` one (conda not activated), call that environment's interpreter
+directly, e.g. on Windows `C:/Users/<you>/miniconda3/envs/drones/python.exe -m uvicorn ...`. The
+server starts training as a child process using the same interpreter, so it must be the `drones` one.
+
+`pygame` (keyboard flying of a real Tello) is only needed for the Drone tab with real hardware:
+`pip install -r hardware/requirements-hardware.txt`.
 
 **Training on the net + ring env (Simulator tab).** To train, set up the **Training** panel and press *Start training*.
 - **Environment:** choose *Net + ring*, the default.

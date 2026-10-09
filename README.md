@@ -2,9 +2,75 @@
 
 A simulated quadrotor (PyBullet, via [`gym-pybullet-drones`](https://github.com/utiasDSL/gym-pybullet-drones),
 trained with [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3)) that learns two
-things: how to hover, and how to find a hoop placed at a random spot inside a 2x2x2 m cage every
-episode. The 2x2x2 m cage matches the footprint of a planned real-hardware demo, so the task is
-built around that constraint from the start.
+things: how to hover, and how to **take off from the floor, find a hoop and fly through it** inside
+a 2x2x2 m net. The simulated cage mirrors the real one used for the hardware demo (a 2x2x2 m net
+with a ring near its centre that sways a little in the wind), so a policy trained here can be flown
+on a real DJI Tello.
+
+Everything can be driven from a local **web dashboard**: set up and start training, watch the
+drone fly in 3D (far view and drone camera), play back what the current policy has learned, and
+compare the sim against the phone scan of the real cage.
+
+---
+
+## Quick start (for teammates)
+
+You need **Git**, **Miniconda** and a C++ compiler (Windows: Visual Studio Build Tools, "Desktop
+development with C++"). No GPU is needed. Total setup is about 20 minutes, mostly compiling PyBullet.
+
+```bash
+# 1. Get this repo (the 33 MB phone scan in assets/ comes with it)
+git clone https://github.com/MichelleGun/CMS.git
+cd CMS
+
+# 2. Build the Python environment `drones` (simulator, PyBullet, PyTorch, Stable-Baselines3).
+#    Follow SETUP.md steps 1-4; the short version is:
+#       git clone https://github.com/utiasDSL/gym-pybullet-drones.git   (next to this repo, not inside it)
+#       conda create -n drones -c conda-forge --override-channels python=3.12 -y
+#       conda activate drones
+#       conda install -c conda-forge --override-channels pip setuptools wheel -y
+#       cd ../gym-pybullet-drones && pip install -e . && cd ../CMS
+
+# 3. Add the dashboard's packages to the same environment
+conda activate drones
+pip install -r webapp/requirements.txt
+
+# 4. Start the dashboard (run it from the CMS folder, inside the `drones` environment)
+python -m uvicorn main:app --app-dir webapp/backend --port 8000
+```
+
+Then open **http://localhost:8000** in a browser (it needs an internet connection: the 3D
+view loads three.js from a CDN). Stop the server with `Ctrl+C`. Never add `--host 0.0.0.0`: the
+dashboard can fly a real drone and should only be reachable from your own computer.
+
+**First things to try**
+
+1. **Environment** tab: the simulated net and ring. *Randomise ring* shows the per-episode
+   variation, *Wind sway* the swinging, *Play example flight* a take-off through the ring, and
+   *Overlay phone scan* lays the real cage's scan over the sim net (fitted automatically).
+2. **Simulator** tab: choose *Net + ring*, an algorithm and *Fixed* or *Until I click Stop*
+   (for overnight runs), then **Start training**. The run view shows the far view with the drone's
+   route, the drone's camera, and **Watch current policy** plays one episode with what it has
+   learned so far. A *Real-time* checkbox slows everything to real speed so you can follow it.
+3. Training saves into `results/hoop/runs/<run id>/` (not committed to git). `latest_model.zip` is
+   updated at every evaluation and `best_model.zip` on each new best, so an interrupted run keeps
+   its progress.
+
+**Good to know**
+
+- The dashboard starts training in a separate process, so **keep the server window open** while a
+  run trains (closing it ends the run). For overnight runs also keep the laptop plugged in; while an
+  *Until I click Stop* run trains, Windows is kept from sleeping.
+- Training speed depends on your CPU. A 1M-step run takes a few hours on a laptop; around 100-150
+  simulation steps per second is typical. With the dashboard's 3D view open it is a little slower.
+- If something looks stale after pulling new code, press **Ctrl+F5** in the browser and restart
+  the server.
+- Windows is what this was developed on. macOS/Linux should work (the same Python code), but the
+  *Stop* button and sleep-prevention are only tested on Windows.
+- Without a real Tello nothing in `hardware/` is needed. The **Drone** tab has a simulated drone for
+  dry runs.
+
+---
 
 For a full, step-by-step guide to recreating this entire system from nothing, see
 [tutorial/TUTORIAL.md](tutorial/TUTORIAL.md). For exact environment setup commands, see
@@ -17,8 +83,9 @@ For a full, step-by-step guide to recreating this entire system from nothing, se
 
 ## How to run it
 
-This assumes the `drones` conda environment already exists. If it doesn't yet, start with
-[SETUP.md](SETUP.md) or [tutorial/TUTORIAL.md](tutorial/TUTORIAL.md).
+This assumes the `drones` conda environment already exists and `pip install -r
+webapp/requirements.txt` has been run in it (see the quick start above). If the environment doesn't
+exist yet, start with [SETUP.md](SETUP.md) or [tutorial/TUTORIAL.md](tutorial/TUTORIAL.md).
 
 ### The web dashboard (easiest way to play with it)
 
@@ -28,8 +95,8 @@ once it's running.
 
 ```bash
 conda activate drones
-cd path/to/CMS/webapp
-python -m uvicorn main:app --app-dir backend --port 8000
+cd path/to/CMS
+python -m uvicorn main:app --app-dir webapp/backend --port 8000
 ```
 
 Then open `http://localhost:8000` in a browser. Stop it with Ctrl+C.
@@ -72,7 +139,7 @@ CMS/
 ├── webapp/        the local web dashboard (FastAPI backend + browser frontend)
 ├── hardware/      flying the policies on a real DJI Tello (see hardware/README.md)
 ├── tutorial/      TUTORIAL.md and the runnable notebook
-├── assets/        the basketball court texture
+├── assets/        the basketball court texture and the phone scan of the real cage (3D_net&hoop.glb)
 └── results/       trained models, evaluation logs, videos, and webapp run data
 ```
 
