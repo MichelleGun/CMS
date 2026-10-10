@@ -153,6 +153,11 @@
   }
 
   function renderCapacity() {
+    if (uiMode === "starting") {
+      capacityNote.className = "note";
+      capacityNote.textContent = "loading the run\u2026 (the Training panel unlocks once it is shown)";
+      return;
+    }
     if (!capacity) { capacityNote.textContent = ""; return; }
     capacityNote.className = "note" + (atCapacity() ? " bad" : "");
     capacityNote.textContent =
@@ -164,6 +169,11 @@
   // ------------------------------------------------- start-from / onboard options
 
   function fillSelect(sel, items, keep) {
+    // the run list is re-polled every 2.5 s: leave an unchanged dropdown alone, since rebuilding
+    // it closes the list if it happens to be open
+    const same = sel.options.length === items.length &&
+      items.every(([v, l], i) => sel.options[i].value === v && sel.options[i].textContent === l);
+    if (same) return;
     sel.replaceChildren();
     items.forEach(([value, label]) => {
       const opt = document.createElement("option");
@@ -177,7 +187,25 @@
   function runLabel(r) {
     const best = r.best_eval_reward !== null && r.best_eval_reward !== undefined
       ? `best ${r.best_eval_reward.toFixed(1)}` : "no eval yet";
-    return `run ${r.run_id} (${(r.current_timestep || 0).toLocaleString()} steps, ${best})`;
+    const succ = RunNames.success(r);
+    const when = r.label ? ` \u00b7 ${RunNames.when(r.created_at)}` : "";
+    const tag = r.run_id === bestRunId ? "BEST \u00b7 " : "";
+    return `${tag}${RunNames.title(r)}${when} (${(r.current_timestep || 0).toLocaleString()} steps, ` +
+      `${best}${succ ? ", " + succ : ""})`;
+  }
+
+  // newest first, but the best run and the starred ones on top, so the keepers are easy to pick
+  function keepersFirst(list) {
+    const rank = (r) => (r.run_id === bestRunId ? 0 : r.starred ? 1 : 2);
+    return list.slice().reverse().map((r, i) => [r, i])
+      .sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([r]) => r);
+  }
+
+  async function toggleStar(r, ev) {
+    if (ev) ev.stopPropagation();          // the star sits on a clickable run row
+    try { await Api.setRunStarred(r.run_id, !r.starred); }
+    catch (e) { alert("could not star: " + e.message); return; }
+    await refreshRuns().catch(() => {});
   }
 
   function renderInitOptions() {
@@ -190,13 +218,13 @@
           (ev && ev.pass_rate !== undefined && ev.pass_rate !== null ? ` (${Math.round(ev.pass_rate * 100)}% in sim)` : "")]);
       });
     }
-    runs.slice().reverse()
+    keepersFirst(runs)
       .filter((r) => r.has_model && (r.env || "legacy") === env &&
                      (env === "onboard" || r.algo === algoSelect.value))
       .forEach((r) => items.push([`run:${r.run_id}`, runLabel(r)]));
     fillSelect(initSelect, items, initSelect.value);
     // teacher candidates: PyBullet net runs with continuous actions
-    const teachers = runs.slice().reverse()
+    const teachers = keepersFirst(runs)
       .filter((r) => r.has_model && r.env === "net" && r.algo !== "dqn")
       .map((r) => [r.run_id, runLabel(r)]);
     fillSelect(teacherRunSelect, teachers.length ? teachers : [["", "no PyBullet net run with a model"]],
@@ -324,15 +352,18 @@
 
   // -------------------------------------------------------- best replay
 
+  // The viewed run's own best policy, flown on a fresh random ring/start/wind each time.
   function requestOverlayBestReplay() {
-    if (!bestRunId) return;
-    if (overlayBestReplayRunId === bestRunId && !overlayReplayVideo.hidden) return;
-    overlayBestReplayRunId = bestRunId;
+    const runId = viewedRunId;
+    if (!runId) return;
+    if (overlayBestReplayRunId === runId && (!overlayReplayVideo.hidden || overlayReplayPollTimer)) return;
+    overlayBestReplayRunId = runId;
     overlayReplayStatus.textContent = "rendering...";
     overlayReplayVideo.hidden = true;
-    Api.startReplay(bestRunId, { variant: "best", pov: false, episodes: 1 }).then((res) => {
-      pollOverlayReplay(bestRunId, res.replay_id);
+    Api.startReplay(runId, { variant: "best", pov: false, episodes: 1 }).then((res) => {
+      pollOverlayReplay(runId, res.replay_id);
     }).catch((e) => {
+      overlayBestReplayRunId = null;             // let a later click try again
       overlayReplayStatus.textContent = "failed: " + e.message;
     });
   }
@@ -340,6 +371,11 @@
   function pollOverlayReplay(runId, replayId) {
     if (overlayReplayPollTimer) clearInterval(overlayReplayPollTimer);
     overlayReplayPollTimer = setInterval(async () => {
+      if (runId !== viewedRunId) {               // another run is in view now
+        clearInterval(overlayReplayPollTimer);
+        overlayReplayPollTimer = null;
+        return;
+      }
       try {
         const status = await Api.getReplayStatus(runId, replayId, false);
         if (status.status === "done") {
@@ -362,6 +398,69 @@
     }, 2000);
   }
 
+  // ------------------------------------------------------- run name + rename
+
+  let renaming = false;
+
+  function renderOverlayTitle(r) {
+    if (renaming) return;
+    const listed = runs.find((x) => x.run_id === r.run_id);
+    if (listed) r = Object.assign({}, r, { starred: listed.starred, label: listed.label });
+    const star = document.getElementById("star-btn");
+    star.textContent = r.starred ? "\u2605" : "\u2606";
+    star.classList.toggle("on", !!r.starred);
+    star.title = r.starred ? "Unstar this run" : "Star this run (a keeper)";
+    document.getElementById("overlay-best-tag").hidden = r.run_id !== bestRunId;
+    document.getElementById("overlay-run-name").textContent = RunNames.title(Object.assign({}, r, { starred: false }));
+    document.getElementById("overlay-run-when").textContent =
+      (r.label ? RunNames.when(r.created_at) + " \u00b7 " : "") + (r.run_id || "");
+  }
+
+  function startRename() {
+    if (!viewedRunId || renaming) return;
+    const runId = viewedRunId;
+    const nameEl = document.getElementById("overlay-run-name");
+    const run = runs.find((r) => r.run_id === runId) || {};
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 60;
+    input.value = run.label || "";
+    input.placeholder = "name this run (empty = date & time)";
+    renaming = true;
+    nameEl.replaceChildren(input);
+    input.focus();
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      renaming = false;
+      if (save) {
+        try { await Api.setRunLabel(runId, input.value.trim()); }
+        catch (e) { alert("could not rename: " + e.message); }
+      }
+      nameEl.textContent = "";
+      await refreshRuns().catch(() => {});
+      const r = runs.find((x) => x.run_id === runId);
+      if (r) renderOverlayTitle(r);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") finish(true);
+      else if (e.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
+  }
+
+  // Start from an earlier run: show (and keep) that run's reward, so continuing it doesn't
+  // silently change the MDP under the critic.
+  async function onInitChoice() {
+    const v = initSelect.value;
+    if (!v.startsWith("run:")) { Reward.setParent(null); return; }
+    try {
+      const r = await Api.getRun(v.slice(4));
+      Reward.setParent(r.meta);
+    } catch (e) { Reward.setParent(null); }
+  }
+
   // ----------------------------------------------------------------- runs
 
   async function refreshRuns() {
@@ -376,7 +475,12 @@
     }
 
     stopBtn.disabled = !(viewedRunId && runs.find((r) => r.run_id === viewedRunId && r.status === "training"));
-    viewBestBtn.disabled = !bestRunId;
+    const viewed = runs.find((r) => r.run_id === viewedRunId);
+    viewBestBtn.disabled = !(viewed && viewed.has_model) || (viewed && viewed.env === "onboard");
+    viewBestBtn.title = viewed && viewed.env === "onboard"
+      ? "Replays are PyBullet-only: an onboard-camera run has no replay video"
+      : "A replay of this run's best saved policy (a new random ring and start each time)";
+    if (viewed && !renaming) renderOverlayTitle(viewed);
     applyPanelState();
 
     // On load, jump into a run only if one is actually training; otherwise stay in setup so
@@ -394,14 +498,41 @@
     runListEl.innerHTML = "";
     runs.slice().reverse().forEach((r) => {
       const row = document.createElement("div");
+      const isBest = r.run_id === bestRunId;
       row.className = "run-row" +
         (r.run_id === viewedRunId ? " selected" : "") +
-        (r.status === "training" ? " active-training" : "");
+        (r.status === "training" ? " active-training" : "") +
+        (isBest ? " best-run" : "") + (r.starred ? " starred" : "");
+      const star = document.createElement("button");
+      star.type = "button";
+      star.className = "icon-btn star-btn" + (r.starred ? " on" : "");
+      star.textContent = r.starred ? "\u2605" : "\u2606";
+      star.title = r.starred ? "Unstar" : "Star this run (a keeper: listed first in Start from)";
+      star.addEventListener("click", (e) => toggleStar(r, e));
+      row.append(star);
+      if (isBest) {
+        const tag = document.createElement("span");
+        tag.className = "tag-best";
+        tag.textContent = "BEST";
+        tag.title = "Highest eval success on today's env" + (RunNames.success(r) ? ` (${RunNames.success(r)})` : "") +
+          ": passes through the ring";
+        row.append(tag);
+      }
       const best = r.best_eval_reward !== null && r.best_eval_reward !== undefined
         ? r.best_eval_reward.toFixed(1) : "-";
-      row.innerHTML = `<span class="algo-badge">${r.algo}</span> <span class="note">${r.env || ""}</span><br>` +
+      const title = document.createElement("strong");
+      title.textContent = r.label || RunNames.title(Object.assign({}, r, { starred: false }));
+      row.append(title, document.createElement("br"));
+      if (r.label) {
+        const when = document.createElement("span");
+        when.className = "run-when";
+        when.textContent = RunNames.when(r.created_at);
+        row.append(when, document.createElement("br"));
+      }
+      row.insertAdjacentHTML("beforeend", `<span class="algo-badge">${r.algo}</span> <span class="note">${r.env || ""}</span><br>` +
         `${r.status} &middot; ${stepsText(r)}<br>` +
-        `best ${best}`;
+        `best ${best}` + (RunNames.success(r) ? ` &middot; ${RunNames.success(r)}` : ""));
+      row.title = r.run_id;
       row.addEventListener("click", () => selectRun(r.run_id));
       runListEl.appendChild(row);
     });
@@ -425,6 +556,9 @@
       replayStatusEl.textContent = "";
       replayVideo.hidden = true;
       replayViewToggle.hidden = true;
+      overlayBestReplayRunId = null;
+      overlayReplayVideo.hidden = true;
+      overlayReplayStatus.textContent = "";
       setUiMode("starting");
     }
 
@@ -434,16 +568,26 @@
       setStatusPill(status);
       if (r.curve) RewardChart.setCurrentCurve(r.curve.timesteps, r.curve.mean_reward);
       if (r.meta.target_override) Scene3D.setHoop(r.meta.target_override);
+      renderOverlayTitle(Object.assign({}, r.meta, { label: r.label, starred: r.starred }));
+      Reward.renderCard(r.meta);
+      live.swayMax = r.meta.sway_deg === null ? undefined : r.meta.sway_deg;
       openLiveSocket(runId);              // also carries showcase episodes for finished runs
       realtimeToggle.checked = false;
       if (isViewedRunTraining) Api.setRealtime(runId, false).catch(() => {});
-      if (isViewedRunTraining && r.meta.env === "net") {
-        // the drone POV is what you come here to see: turn it on for live net runs
+      live.evalEvery = r.meta.eval_every_timesteps || null;
+      const onboard = r.meta.env === "onboard";
+      if (isViewedRunTraining && (r.meta.env === "net" || onboard)) {
+        // the drone POV is what you come here to see: turn it on for live net / onboard runs
         cameraToggle.checked = true;
         onCameraToggle();
       }
       showcaseStatus.className = "note";
-      showcaseStatus.textContent = isViewedRunTraining
+      showcaseBtn.disabled = onboard;
+      showcaseStatus.textContent = onboard
+        ? "Onboard-camera runs train in their own simulator (not PyBullet), so there is no policy episode " +
+          "or replay video here: the far view and drone POV above are the training env live. " +
+          "Fly the saved policy from the Drone tab (dry run first)."
+        : isViewedRunTraining
         ? "Plays one real-time episode with what the policy has learned so far (no exploration). Available after the first evaluation."
         : "Plays one real-time episode of this run's latest saved policy.";
       setUiMode("run");
@@ -512,7 +656,7 @@
 
   function resetLiveView() {
     live.ep = null; live.epStart = null; live.episodes = 0; live.passes = 0;
-    live.evalSuccess = null; live.lastT = 0;
+    live.evalSuccess = null; live.lastT = 0; live.swing = null;
     endShowcaseView();
     Scene3D.clearTrail();
     hudLine.textContent = "waiting for the first episode\u2026";
@@ -521,11 +665,13 @@
   function renderHud(extra) {
     if (live.showcase) return;
     const t = live.epStart !== null ? live.simT.toFixed(1) : "-";      // simulated seconds
-    const sr = live.evalSuccess === null ? "-" : `${Math.round(live.evalSuccess * 100)}%`;
+    const sr = live.evalSuccess !== null ? `${Math.round(live.evalSuccess * 100)}%`
+      : live.evalEvery ? `first at ${live.evalEvery.toLocaleString()} steps` : "-";
     hudLine.textContent =
       `episode ${live.ep === null ? "-" : live.ep + 1}  \u00b7  ${t} s  \u00b7  ` +
       `${live.reversed ? "back\u2192front  \u00b7  " : ""}` +
       `passes seen ${live.passes}/${live.episodes}  \u00b7  eval success ${sr}  \u00b7  step ${live.lastT}` +
+      (live.swing ? `\n${live.swing}` : "") +
       (extra ? `  \u00b7  ${extra}` : "");
   }
 
@@ -539,8 +685,16 @@
     if (msg.t !== undefined && msg.t < live.lastT) return;
     live.lastMsgAt = Date.now();
     live.lastT = msg.t || live.lastT;
-    if (msg.step !== undefined) live.simT = msg.step / 30;
+    if (msg.step !== undefined) live.simT = msg.step / (msg.ctrl_hz || 30);
     if (msg.reversed !== undefined) live.reversed = msg.reversed;
+    if (msg.swing_deg !== undefined) {
+      // why the ring may look calm: wind ramp x this episode's gust x the run's "Max swing"
+      live.swing = `ring swing this episode ${msg.swing_deg.toFixed(0)}\u00b0` +
+        (live.swayMax !== undefined ? ` of ${live.swayMax}\u00b0 max` : "") +
+        `  \u00b7  wind ramp ${Math.round((msg.wind_scale || 0) * 100)}%` +
+        `  \u00b7  period ${(msg.swing_period_s || 0).toFixed(1)} s` +
+        (realtimeToggle.checked ? "" : "  (view runs faster than real time)");
+    }
     if (msg.ep !== undefined && msg.ep !== live.ep) {
       if (live.ep !== null) Scene3D.newEpisode("train");
       live.ep = msg.ep;
@@ -656,12 +810,19 @@
       carry_start: document.getElementById("carry-start-toggle").checked ? 0.7 : 0.0,
       reverse_prob: document.getElementById("reverse-toggle").checked ? 0.5 : 0.0,
       lean_flip_prob: document.getElementById("lean-flip-toggle").checked ? 0.3 : 0.0,
+      wind_steps: Math.max(0, parseInt(document.getElementById("wind-steps-input").value, 10) || 0),
     };
+    if (envSelect.value === "net") Object.assign(payload, Reward.payload());
     if (onboard) {
       payload.demo_ids = Array.from(onboardDemoList.querySelectorAll("input:checked")).map((b) => b.value);
       payload.human_weight = parseFloat(document.getElementById("human-weight").value) || 0;
       payload.bc_coef = parseFloat(document.getElementById("bc-coef").value) || 0;
       payload.profile = document.getElementById("onboard-profile").value;
+      payload.onboard_dr = document.getElementById("onboard-dr-toggle").checked ? 1.0 : 0.0;
+      payload.onboard_sway_deg = parseFloat(document.getElementById("onboard-sway").value) || 0;
+      payload.hard_start_p = Math.min(100, Math.max(0, parseFloat(document.getElementById("hard-start-input").value) || 0)) / 100;
+      payload.dr_steps = Math.max(0, parseInt(document.getElementById("dr-steps-input").value, 10) || 0);
+      payload.bc_augment = document.getElementById("bc-augment-toggle").checked;
       payload.seed = parseInt(seedInput.value, 10) || 0;       // the onboard sim draws its own layouts
     } else if (randomizeToggle.checked) {
       payload.seed = parseInt(seedInput.value, 10) || 0;
@@ -866,6 +1027,18 @@
     document.getElementById("replay-current-btn").addEventListener("click", () => requestReplay("current"));
     document.getElementById("replay-best-btn").addEventListener("click", () => requestReplay("best"));
 
+    Reward.init(config.reward);
+    initSelect.addEventListener("change", onInitChoice);
+    document.getElementById("rename-btn").addEventListener("click", startRename);
+    const onboardSway = document.getElementById("onboard-sway");
+    onboardSway.addEventListener("input", () => {
+      document.getElementById("onboard-sway-val").textContent = `${onboardSway.value}°`;
+    });
+    document.getElementById("star-btn").addEventListener("click", () => {
+      const r = runs.find((x) => x.run_id === viewedRunId);
+      if (r) toggleStar(r);
+    });
+
     randomizeToggle.addEventListener("change", () => {
       seedInput.disabled = !randomizeToggle.checked;
     });
@@ -876,6 +1049,9 @@
     // error every 2.5s until it comes back.
     setInterval(() => refreshRuns().catch(() => {}), 2500);
   }
+
+  // the History tab opens a run here
+  window.SimApp = { selectRun: (runId) => { autoSelectEnabled = false; viewedRunId = null; selectRun(runId); } };
 
   window.addEventListener("DOMContentLoaded", boot);
 })();

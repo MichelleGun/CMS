@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hoop Finder Dashboard</title>
-  <link rel="stylesheet" href="css/style.css?v=13">
+  <link rel="stylesheet" href="css/style.css?v=17">
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
@@ -45,7 +45,16 @@
         <div id="overlay-header">
           <div id="overlay-toggle">
             <button id="view-newest-btn" class="toggle-btn active" type="button">Newest</button>
-            <button id="view-best-btn" class="toggle-btn" type="button" disabled>Best</button>
+            <button id="view-best-btn" class="toggle-btn" type="button" disabled
+                    title="A replay of this run's best saved policy (a new random ring and start each time)">Best</button>
+          </div>
+          <div id="overlay-title">
+            <button id="star-btn" class="icon-btn star-btn" type="button" title="Star this run (a keeper)">&#9734;</button>
+            <strong id="overlay-run-name"></strong>
+            <span id="overlay-best-tag" class="tag-best" hidden
+                  title="Highest eval success on today's env: passes through the ring">BEST</span>
+            <span id="overlay-run-when" class="note"></span>
+            <button id="rename-btn" class="icon-btn" type="button" title="Rename this run">&#9998;</button>
           </div>
           <button id="back-to-setup-btn" class="secondary-btn" type="button">Back to setup</button>
         </div>
@@ -83,9 +92,13 @@
             <div id="overlay-camera-placeholder" class="note">camera off</div>
           </div>
           <div id="overlay-replay-pane" hidden>
-            <h3>Best run replay</h3>
+            <h3>This run's best policy (replay)</h3>
             <div id="overlay-replay-status" class="note"></div>
             <video id="overlay-replay-video" controls hidden></video>
+          </div>
+          <div id="overlay-reward-pane">
+            <h3>Reward (MDP)</h3>
+            <div id="overlay-reward" class="reward-table note">&ndash;</div>
           </div>
         </div>
 
@@ -155,6 +168,19 @@
           <div class="field-row"><label for="onboard-profile">Simulated drone</label>
             <select id="onboard-profile"><option value="ideal">ideal</option>
               <option value="typical" selected>typical</option><option value="harsh">harsh</option></select></div>
+          <div class="duration-label">Robustness</div>
+          <label class="checkbox-row" title="Each episode: a drone somewhere between ideal and harsh (and its speed calibration off by up to 25%), the ring hung a little differently, swinging on its rope, and a noisy, sometimes laggy detector. Evaluation always uses the full strength.">
+            <input type="checkbox" id="onboard-dr-toggle" checked> Randomise drone, ring and detector</label>
+          <div class="field-row"><label>Ring swing (max) <span id="onboard-sway-val">15&deg;</span></label>
+            <input type="range" id="onboard-sway" min="0" max="30" step="1" value="15"></div>
+          <div class="field-row" title="Share of episodes that start behind, beside or below the ring, or anywhere in the cage, often facing away: the policy has to find the ring first">
+            <label for="hard-start-input">Hard starts (behind / beside / below)</label>
+            <input type="number" id="hard-start-input" value="50" min="0" max="100" step="5"><span class="note">%</span></div>
+          <div class="field-row" title="Randomisation and hard starts grow from none to full over this many steps, so the front approach is learnt first. 0 = full from the start">
+            <label for="dr-steps-input">Ramp up over</label>
+            <input type="number" id="dr-steps-input" value="500000" min="0" step="50000"></div>
+          <label class="checkbox-row" title="Half of each demo batch mirrored left/right, plus small sensor noise: the few demos there are cover twice the situations">
+            <input type="checkbox" id="bc-augment-toggle" checked> Augment demos (mirror + noise)</label>
           <div class="duration-label">Teacher demos from a PyBullet run</div>
           <div class="field-row"><select id="teacher-run-select"></select>
             <button id="teacher-btn" class="secondary-btn" type="button">Make</button></div>
@@ -173,6 +199,30 @@
             <input type="checkbox" id="lean-flip-toggle" checked> Ring sometimes leans the other way (30%)</label>
           <div class="field-row"><label>Ring swing (max) <span class="sway-deg-val">20&deg;</span></label>
             <input type="range" id="train-sway-deg" class="sway-deg-input" min="0" max="45" step="1" value="20"></div>
+          <div class="field-row" title="The ring starts still and its wind grows to full over this many steps, so the policy learns a still ring first. 0 = full swing from the first step. A run continued past this point is already at full wind.">
+            <label for="wind-steps-input">Swing ramps up over</label>
+            <input type="number" id="wind-steps-input" value="1500000" min="0" step="100000"></div>
+          <div class="note">The slider is the <em>largest</em> swing. Each episode draws a gust of
+            0&ndash;100% of it, scaled by the ramp, and swings with a 1.5&ndash;3 s period. The far
+            view shows this episode's swing.</div>
+          <details id="reward-block" class="reward-block">
+            <summary>Reward (MDP) <span id="reward-summary" class="note"></span></summary>
+            <div class="field-row"><label for="reward-mode">Mode</label>
+              <select id="reward-mode">
+                <option value="shaped" selected>shaped (v2): progress + pass bonus</option>
+                <option value="budget">budget (v3): endless laps, ends at &minus;budget</option>
+              </select></div>
+            <div class="field-row" id="laps-row" title="Passes per episode, the direction flipping after each. 0 = endless back-and-forth">
+              <label for="laps-input">Passes per episode</label>
+              <input type="number" id="laps-input" value="1" min="0" max="20"></div>
+            <div class="field-row" id="budget-row" hidden title="The episode ends when its total reward falls to minus this">
+              <label for="budget-input">Budget</label>
+              <input type="number" id="budget-input" value="3" min="0.1" max="100" step="0.5"></div>
+            <div id="reward-weights"></div>
+            <div class="button-row">
+              <button id="reward-reset-btn" class="secondary-btn" type="button">Reset to defaults</button></div>
+            <div id="reward-note" class="note"></div>
+          </details>
         </div>
         <div id="algo-block">
         <label for="algo-select">Algorithm</label>
@@ -374,6 +424,7 @@
         <div class="field-row"><label for="gen-profile">Simulated drone</label>
           <select id="gen-profile"><option value="ideal">Ideal</option><option value="typical" selected>Typical</option><option value="harsh">Harsh</option></select></div>
         <label class="checkbox-row"><input type="checkbox" id="gen-render"> Real detector in the loop (slower)</label>
+        <label class="checkbox-row" title="Randomised drone, a swinging ring (15 deg) and detector noise, and some starts behind / beside / below the ring. Only the episodes the expert still passes are kept."><input type="checkbox" id="gen-robust"> Robust (randomised, hard starts)</label>
         <div class="button-row"><button id="gen-btn" class="secondary-btn" type="button">Generate</button></div>
       </div>
     </aside>
@@ -475,6 +526,8 @@
           <label><input type="radio" name="hist-filter" value="runs"> Training</label>
           <label><input type="radio" name="hist-filter" value="jobs"> Jobs</label>
         </div>
+        <label class="checkbox-row note"><input type="checkbox" id="hist-keepers">
+          Training: only the best and starred runs</label>
         <div id="hist-list" class="list"></div>
       </div>
     </aside>
@@ -485,16 +538,17 @@
     </section>
   </main>
 
-  <script src="js/api.js?v=13"></script>
-  <script src="js/scene3d.js?v=13"></script>
-  <script src="js/controls.js?v=13"></script>
-  <script src="js/chart.js?v=13"></script>
-  <script src="js/tabs.js?v=13"></script>
-  <script src="js/keys.js?v=13"></script>
-  <script src="js/drone.js?v=13"></script>
-  <script src="js/imitation.js?v=13"></script>
-  <script src="js/history.js?v=13"></script>
-  <script src="js/envview.js?v=13"></script>
-  <script src="js/app.js?v=13"></script>
+  <script src="js/api.js?v=17"></script>
+  <script src="js/scene3d.js?v=17"></script>
+  <script src="js/controls.js?v=17"></script>
+  <script src="js/chart.js?v=17"></script>
+  <script src="js/tabs.js?v=17"></script>
+  <script src="js/keys.js?v=17"></script>
+  <script src="js/drone.js?v=17"></script>
+  <script src="js/imitation.js?v=17"></script>
+  <script src="js/history.js?v=17"></script>
+  <script src="js/envview.js?v=17"></script>
+  <script src="js/reward.js?v=17"></script>
+  <script src="js/app.js?v=17"></script>
 </body>
 </html>

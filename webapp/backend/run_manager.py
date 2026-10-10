@@ -20,7 +20,7 @@ import psutil
 
 import jobs
 from config import (SCRIPTS_DIR, RUNS_DIR, CMS_DIR, ALGORITHM_IDS, START_MARGIN, FLIGHTS_DIR,
-                    HARDWARE_DIR, bounds_ok)
+                    HARDWARE_DIR, NET_OBS_DIM, bounds_ok)
 
 PYTHON_EXE = sys.executable  # the drones env's own interpreter, since this
                               # backend process runs inside that same env
@@ -51,6 +51,7 @@ class RunManager:
         self._training_procs: dict[str, subprocess.Popen] = {}
         self._launch_meta: dict[str, dict] = {}    # run_id -> n_envs/vec, until meta.json exists
         self._replay_procs: dict[str, subprocess.Popen] = {}
+        self._success_cache: dict[str, tuple] = {}   # run_id -> (npz mtime, best success rate)
         self._showcase_procs: dict[str, subprocess.Popen] = {}   # run_id -> proc
 
     # ---------------------------------------------------------------- runs
@@ -142,7 +143,11 @@ class RunManager:
                   lean_flip_prob: float = 0.3, vec: str = "auto",
                   init_run: Optional[str] = None, init_clone: Optional[str] = None,
                   demo_ids=None, human_weight: float = 3.0, bc_coef: float = 1.0,
-                  profile: str = "typical") -> str:
+                  profile: str = "typical", onboard_dr: float = 1.0, onboard_sway_deg: float = 15.0,
+                  hard_start_p: float = 0.5, dr_steps: int = 500_000, bc_augment: bool = True,
+                  wind_steps: int = 1_500_000,
+                  reward_mode: str = "shaped", budget: float = 3.0, laps: int = 1,
+                  reward_weights: Optional[dict] = None) -> str:
         if env == "onboard":
             algo = "ppo"                            # the onboard trainer is PPO (+ demo term)
         if algo not in ALGORITHM_IDS:
@@ -178,7 +183,10 @@ class RunManager:
             common += ["--init", str(init_dir)]
 
         if env == "onboard":
-            argv = [PYTHON_EXE, str(ONBOARD_TRAIN), *common, "--profile", profile]
+            argv = [PYTHON_EXE, str(ONBOARD_TRAIN), *common, "--profile", profile,
+                    "--dr", str(onboard_dr), "--sway-deg", str(onboard_sway_deg),
+                    "--hard-start-p", str(hard_start_p), "--dr-steps", str(int(dr_steps)),
+                    "--bc-augment" if bc_augment else "--no-bc-augment"]
             if demos:
                 argv += ["--demos", *(str(p) for p in demos),
                          "--source-weight", f"human={human_weight}",
@@ -190,7 +198,11 @@ class RunManager:
                 argv += ["--ring-jitter", str(ring_jitter), "--radius-start", str(radius_start),
                          "--sway-deg", str(sway_deg),
                          "--carry-start", str(carry_start), "--reverse-prob", str(reverse_prob),
-                         "--lean-flip-prob", str(lean_flip_prob)]
+                         "--lean-flip-prob", str(lean_flip_prob),
+                         "--wind-steps", str(int(wind_steps)), "--reward", reward_mode,
+                         "--budget", str(budget), "--laps", str(int(laps))]
+                if reward_weights:
+                    argv += ["--reward-weights", json.dumps(reward_weights)]
             if start_pos is not None:
                 argv += ["--start-pos", *(str(v) for v in start_pos)]
             if target_pos is not None:
@@ -251,6 +263,7 @@ class RunManager:
             meta = _read_json(d / "meta.json")
             if meta is None:
                 continue
+            tags = _read_tags(d)
             status_doc = _read_json(d / "live_status.json") or {}
             status = self._status(d.name, meta, status_doc)
             best = status_doc.get("best_eval_reward")
@@ -272,10 +285,14 @@ class RunManager:
                 "n_envs": meta.get("n_envs"),
                 "vec": meta.get("vec"),
                 "init_parent": meta.get("init_parent"),
+                "label": tags.get("label"),
+                "starred": bool(tags.get("starred")),
+                "best_success_rate": self._best_success(d),
+                "best_mean_passes": status_doc.get("best_mean_passes"),
+                "comparable": meta.get("env") == "net" and meta.get("obs_dim") == NET_OBS_DIM,
             })
         current_run_id = runs[-1]["run_id"] if runs else None
-        scored = [r for r in runs if r["best_eval_reward"] is not None]
-        best_run_id = max(scored, key=lambda r: r["best_eval_reward"])["run_id"] if scored else None
+        best_run_id = _pick_best(runs)
         return {"runs": runs, "current_run_id": current_run_id, "best_run_id": best_run_id,
                 "capacity": self.capacity()}
 
@@ -287,7 +304,55 @@ class RunManager:
         live_status = _read_json(d / "live_status.json")
         curve = _read_curve(d / "evaluations.npz")
         return {"meta": meta, "live_status": live_status, "curve": curve,
+                "label": _read_tags(d).get("label"),
+                "starred": bool(_read_tags(d).get("starred")),
                 "status": self._status(run_id, meta, live_status or {})}
+
+    def _best_success(self, run_dir: Path):
+        """Highest eval success rate the run reached (evaluations.npz 'successes'), or None.
+        Cached by the file's mtime: the run list is polled every 2.5 s."""
+        path = run_dir / "evaluations.npz"
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return None
+        hit = self._success_cache.get(run_dir.name)
+        if hit and hit[0] == mtime:
+            return hit[1]
+        best = None
+        try:
+            import numpy as np
+            with np.load(path) as data:
+                if "successes" in data.files and data["successes"].size:
+                    best = round(float(np.asarray(data["successes"], dtype=float).mean(axis=1).max()), 4)
+        except Exception:
+            return hit[1] if hit else None         # mid-write: keep the last good value
+        self._success_cache[run_dir.name] = (mtime, best)
+        return best
+
+    def _run_dir(self, run_id: str) -> Path:
+        d = RUNS_DIR / run_id
+        if "/" in run_id or "\\" in run_id or not (d / "meta.json").is_file():
+            raise ValueError(f"unknown run '{run_id}'")
+        return d
+
+    def set_starred(self, run_id: str, starred: bool) -> bool:
+        """Mark a run as a keeper (label.json, next to its name)."""
+        d = self._run_dir(run_id)
+        tags = _read_tags(d)
+        tags["starred"] = bool(starred)
+        _write_tags(d, tags)
+        return bool(starred)
+
+    def set_label(self, run_id: str, label: str) -> str:
+        """A run's display name. Kept in label.json, not meta.json, which the trainer rewrites
+        when the run ends; the folder (the run id) is never renamed."""
+        d = self._run_dir(run_id)
+        label = " ".join(label.split())[:60]
+        tags = _read_tags(d)
+        tags["label"] = label
+        _write_tags(d, tags)
+        return label
 
     def _status(self, run_id: str, meta: dict, status_doc: dict) -> str:
         """final_status once the run has ended; otherwise "training" while its process is alive,
@@ -441,6 +506,42 @@ def _read_json(path: Path):
         return json.loads(path.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return None
+
+
+def _read_tags(run_dir: Path) -> dict:
+    """The run's own name and star (label.json; meta.json belongs to the trainer)."""
+    doc = _read_json(run_dir / "label.json")
+    return doc if isinstance(doc, dict) else {}
+
+
+def _write_tags(run_dir: Path, tags: dict):
+    tags = {k: v for k, v in tags.items() if v}       # drop an empty name / an unset star
+    path = run_dir / "label.json"
+    if not tags:
+        if path.is_file():
+            path.unlink()
+        return
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(tags))
+    os.replace(tmp, path)
+
+
+def _pick_best(runs):
+    """The run to highlight: among runs on today's net env (comparable), the highest eval success
+    rate, then mean passes, then eval reward. Reward alone is not comparable across reward modes
+    (a budget-mode 2 can beat a shaped-mode 13). Falls back to the highest reward."""
+    def num(v):
+        return -1e18 if v is None else float(v)
+    cands = [r for r in runs if r["comparable"] and r["best_success_rate"] is not None]
+    if cands:
+        # older runs did not log mean passes: with one pass per episode it equals the success rate
+        best = max(cands, key=lambda r: (num(r["best_success_rate"]),
+                                         num(r["best_mean_passes"] if r["best_mean_passes"] is not None
+                                             else r["best_success_rate"]),
+                                         num(r["best_eval_reward"])))
+        return best["run_id"]
+    scored = [r for r in runs if r["best_eval_reward"] is not None]
+    return max(scored, key=lambda r: r["best_eval_reward"])["run_id"] if scored else None
 
 
 def _read_curve(path: Path):

@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from config import ALGORITHMS, ASSETS_DIR, FRONTEND_DIR, HOOP_SPEC, REACH_RADIUS, ROOM, RUNS_DIR, START_MARGIN, START_Z, XY_MARGIN, Z_RANGE
+from config import ALGORITHMS, REWARD_INFO, ASSETS_DIR, FRONTEND_DIR, HOOP_SPEC, REACH_RADIUS, ROOM, RUNS_DIR, START_MARGIN, START_Z, XY_MARGIN, Z_RANGE
 from drone_manager import drone_manager
 from drone_ws import stream_flight
 from imitation_manager import imitation_manager
@@ -20,7 +20,7 @@ from jobs import job_manager
 from run_manager import run_manager
 from schemas import (CameraToggleRequest, DroneCameraToggleRequest, EvaluateRequest,
                      GenerateDemosRequest, LabelDemoRequest, ReplayRequest,
-                     RealtimeToggleRequest, SaveAnswerRequest, ShowcaseRequest, StartFlightRequest, StartRunRequest,
+                     RealtimeToggleRequest, RunLabelRequest, RunStarRequest, SaveAnswerRequest, ShowcaseRequest, StartFlightRequest, StartRunRequest,
                      TeacherDemosRequest, TrainCloneRequest)
 from telemetry_ws import stream_run
 
@@ -77,6 +77,7 @@ def get_config():
         "start_z": START_Z,
         "reach_radius": REACH_RADIUS,
         "algorithms": ALGORITHMS,
+        "reward": REWARD_INFO,
     }
 
 
@@ -108,12 +109,34 @@ def start_run(req: StartRunRequest):
             until_stopped=req.until_stopped, vec=req.vec,
             init_run=req.init_run, init_clone=req.init_clone, demo_ids=req.demo_ids,
             human_weight=req.human_weight, bc_coef=req.bc_coef, profile=req.profile,
+            onboard_dr=req.onboard_dr, onboard_sway_deg=req.onboard_sway_deg,
+            hard_start_p=req.hard_start_p, dr_steps=req.dr_steps, bc_augment=req.bc_augment,
+            wind_steps=req.wind_steps, reward_mode=req.reward_mode, budget=req.budget,
+            laps=req.laps, reward_weights=req.reward_weights,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"run_id": run_id, "status": "starting"}
+
+
+@app.put("/api/runs/{run_id}/label")
+def set_run_label(run_id: str, req: RunLabelRequest):
+    try:
+        label = run_manager.set_label(run_id, req.label)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"run_id": run_id, "label": label}
+
+
+@app.put("/api/runs/{run_id}/star")
+def set_run_star(run_id: str, req: RunStarRequest):
+    try:
+        starred = run_manager.set_starred(run_id, req.starred)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"run_id": run_id, "starred": starred}
 
 
 @app.post("/api/runs/{run_id}/stop")
@@ -355,7 +378,8 @@ def list_demos():
 @app.post("/api/imitation/demos/generate", status_code=202)
 def generate_demos(req: GenerateDemosRequest):
     return _job_errors(lambda: imitation_manager.generate_demos(
-        req.name, req.episodes, req.profile, req.seed, req.render))
+        req.name, req.episodes, req.profile, req.seed, req.render,
+        dr=req.dr, sway_deg=req.sway_deg, hard_start_p=req.hard_start_p))
 
 
 @app.post("/api/imitation/demos/teacher", status_code=202)

@@ -51,6 +51,37 @@ HOOP_SPEC = {
     "sway_period_s": list(_SPEC.sway_period_s),
 }
 
+# Observation size of today's net env: KIN state (12) + a 15-step action buffer (4 x ctrl_freq/2)
+# + the ring terms. Runs saved with another size come from an older env version: their scores
+# are not comparable, so they are never picked as the best run (they can still be starred).
+NET_OBS_DIM = 72 + hoop_env.OBS_EXTRA
+
+# The net env's reward (MDP), for the Training panel's editable "Reward" block and the run
+# overlay's read-only card: the default weights, and which mode uses which with a one-liner each.
+REWARD_INFO = {
+    "modes": list(hoop_env.REWARD_MODES),
+    "defaults": dict(hoop_env.DEFAULT_REWARD_WEIGHTS),
+    "terms": {
+        "shaped": [
+            ["pass_bonus", "+ per pass through the ring"],
+            ["centre_bonus", "+ up to this extra for a dead-centre pass"],
+            ["shaping_gain", "x metres of progress towards / through the ring (potential-based)"],
+            ["axis_pull", "potential weight of being off the ring's axis just in front of it"],
+            ["time_penalty", "- per control step (30 per second)"],
+            ["rim_penalty", "- per rim clip"],
+            ["net_penalty", "- touching the net (ends the episode)"],
+            ["net_bounce_penalty", "- touching the net when it bounces instead"],
+            ["wrong_way_penalty", "- passing through the wrong way"],
+        ],
+        "budget": [
+            ["budget_pass", "+ per pass (endless laps)"],
+            ["budget_time", "- per control step"],
+            ["budget_rim", "- per rim clip"],
+            ["budget_net", "- at least this for the net, which also ends the episode at -budget"],
+        ],
+    },
+}
+
 # (id, label, env action variant). "continuous_vel" feeds HoopFindAviary's own
 # VEL action directly; "discrete_vel" wraps it with HoopFindDiscreteVel (see
 # scripts/discrete_action_wrapper.py) so SB3's DQN (Discrete-only) can use it.

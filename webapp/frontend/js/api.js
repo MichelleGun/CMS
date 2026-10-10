@@ -23,11 +23,50 @@ async function apiPost(path, body) {
   return res.json();
 }
 
+async function apiPut(path, body) {
+  const res = await fetch(API_BASE + path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try { detail = (await res.json()).detail || detail; } catch (e) { /* ignore */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+// How a training run is named everywhere (run list, Start from, History, overlay): its own
+// name if it was given one, else its algorithm and start time. `when` is always the date & time.
+const RunNames = {
+  when(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d)) return iso.replace("T", " ").slice(0, 16);
+    return d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  },
+  title(r) {
+    const star = r.starred ? "\u2605 " : "";
+    if (r.label) return star + r.label;
+    const algo = (r.algo || "run").toUpperCase();
+    const w = RunNames.when(r.created_at);
+    return star + (w ? `${algo} \u00b7 ${w}` : r.run_id);
+  },
+  // "best success 40%" for tooltips / dropdowns (null when the run has no success data)
+  success(r) {
+    return r.best_success_rate === null || r.best_success_rate === undefined ? null
+      : `${Math.round(r.best_success_rate * 100)}% success`;
+  },
+};
+
 const Api = {
   getConfig: () => apiGet("/api/config"),
   getRuns: () => apiGet("/api/runs"),
   getRun: (runId) => apiGet(`/api/runs/${encodeURIComponent(runId)}`),
   startRun: (payload) => apiPost("/api/runs", payload),
+  setRunStarred: (runId, starred) => apiPut(`/api/runs/${encodeURIComponent(runId)}/star`, { starred }),
+  setRunLabel: (runId, label) => apiPut(`/api/runs/${encodeURIComponent(runId)}/label`, { label }),
   stopRun: (runId) => apiPost(`/api/runs/${encodeURIComponent(runId)}/stop`),
   startReplay: (runId, payload) => apiPost(`/api/runs/${encodeURIComponent(runId)}/replay`, payload),
   getReplayStatus: (runId, replayId, pov) =>

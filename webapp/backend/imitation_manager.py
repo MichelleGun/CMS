@@ -94,7 +94,7 @@ class ImitationManager:
         return target.relative_to(self.flights).as_posix()
 
     def generate_demos(self, name: str, episodes=60, profile="typical", seed=0,
-                       render=False) -> str:
+                       render=False, dr=0.0, sway_deg=15.0, hard_start_p=0.0) -> str:
         out = self.demos_dir / f"{_check_name(name)}.npz"
         if out.exists():
             raise ValueError(f"demos/{out.name} already exists; pick another name")
@@ -105,7 +105,11 @@ class ImitationManager:
                 "--seed", int(seed), "--out", out]
         if render:
             argv.append("--render")
-        return self.jobs.start("demos", argv, f"Simulated demos '{name}' ({episodes} episodes)",
+        if dr > 0 or hard_start_p > 0:
+            argv += ["--dr", float(dr), "--sway-deg", float(sway_deg),
+                     "--hard-start-p", float(hard_start_p)]
+        robust = " robust" if dr > 0 or hard_start_p > 0 else ""
+        return self.jobs.start("demos", argv, f"Simulated{robust} demos '{name}' ({episodes} episodes)",
                                outputs={"demo": out.relative_to(self.flights).as_posix()})
 
     def generate_teacher_demos(self, run_id: str, name: str, episodes=150, profile="typical",

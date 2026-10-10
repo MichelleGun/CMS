@@ -598,7 +598,7 @@ kbd {
   background: rgba(31, 31, 47, 0.85); font-size: 12px; line-height: 1.6; max-width: 520px; }
 #hud-source { color: var(--text-dim); }
 .hud-train { color: #3cc6ff; } .hud-show { color: #5cf08a; font-weight: bold; }
-#hud-line { font-family: Consolas, "Courier New", monospace; color: var(--text); }
+#hud-line { font-family: Consolas, "Courier New", monospace; color: var(--text); white-space: pre-line; }
 .hud-legend { color: var(--text-dim); font-size: 11px; }
 .hud-rt { font-size: 12px; margin: 2px 0; }
 .hud-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 3px 0 8px; }
@@ -613,3 +613,49 @@ kbd {
 #env-readout { text-align: left; white-space: pre; overflow-x: auto; }
 #env-select { width: auto; max-width: 190px; }
 .duration-label { display: block; margin: 10px 0 4px; }
+
+/* A locked Training panel (a run is loading, or no cores are free) must look locked: disabled
+   dropdowns and fields otherwise look normal but ignore clicks. */
+select:disabled, input:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* run name + date in the overlay header, with the rename pencil */
+#overlay-title { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text); }
+#overlay-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#overlay-title input { font-size: 13px; width: 220px; }
+.icon-btn {
+  background: none; border: 1px solid transparent; color: var(--text-dim);
+  border-radius: 6px; padding: 2px 6px; cursor: pointer; font-size: 14px;
+}
+.icon-btn:hover { border-color: var(--border); color: var(--text); }
+.run-row .run-when { color: var(--text-dim); font-size: 11px; }
+
+/* Reward (MDP): the editable block in the Training panel and the read-only overlay card */
+.reward-block { margin-top: 8px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.reward-block summary { cursor: pointer; font-weight: bold; }
+.reward-block summary .note { font-weight: normal; display: block; margin-top: 2px; }
+.reward-block .field-row input[type="number"] { width: 80px; }
+.reward-table { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; }
+.reward-table .rw-val { color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+.reward-table .rw-changed { color: var(--accent-orange); }
+
+/* The best run (highest eval success on today's env) and the runs starred as keepers */
+:root { --accent-green: #5cf08a; }
+.tag-best {
+  font-size: 10px; font-weight: bold; letter-spacing: 0.04em; text-transform: uppercase;
+  border: 1px solid var(--accent-green); border-radius: 999px; padding: 1px 7px;
+  color: #171721; background: var(--accent-green);
+}
+.run-row { position: relative; }
+.run-row.best-run {
+  border-color: var(--accent-green);
+  border-left: 4px solid var(--accent-green);
+  background: rgba(92, 240, 138, 0.08);
+}
+.run-row.best-run.selected { border-color: var(--accent-green); background: rgba(92, 240, 138, 0.14); }
+.run-row .star-btn { position: absolute; top: 4px; right: 4px; }
+.run-row .tag-best { position: absolute; top: 8px; right: 34px; }
+.star-btn { font-size: 16px; line-height: 1; }
+.star-btn.on { color: #ffd34d; }
+.run-row.starred strong { color: #ffd34d; }
+.run-row { padding-right: 30px; }
+.run-row.best-run > strong { display: inline-block; padding-right: 50px; }

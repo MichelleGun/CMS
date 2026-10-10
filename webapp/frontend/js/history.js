@@ -75,7 +75,7 @@ const History = (() => {
     return r;
   }
 
-  let cache = { flights: [], runs: [], jobs: [] };
+  let cache = { flights: [], runs: [], jobs: [], bestRunId: null };
 
   function outcomeTag(f) {
     const ended = ["crashed", "refused", "killed", "interrupted"];
@@ -96,11 +96,14 @@ const History = (() => {
             [outcomeTag(x), x.demo && ["demo: " + x.demo, x.demo === "pass" ? "tag-ok" : "tag-bad"]],
             () => showFlight(x.flight_id), "f:" + x.flight_id));
     } else if (f === "runs") {
-      items = [...cache.runs].reverse().map((r) =>
-        row(`${(r.algo || "").toUpperCase()} ${when(r.created_at)}`,
-            `${r.current_timestep ?? 0} / ${r.until_stopped ? "\u221e" : (r.total_timesteps ?? "?")} steps · best ${
+      const keepersOnly = el.keepers && el.keepers.checked;
+      items = [...cache.runs].reverse()
+        .filter((r) => !keepersOnly || r.starred || r.run_id === cache.bestRunId).map((r) =>
+        row(RunNames.title(r),
+            `${r.label ? RunNames.when(r.created_at) + " · " : ""}${r.current_timestep ?? 0} / ${r.until_stopped ? "\u221e" : (r.total_timesteps ?? "?")} steps · best ${
               r.best_eval_reward === null || r.best_eval_reward === undefined ? "-" : r.best_eval_reward.toFixed(1)}`,
-            [[r.status, r.status === "completed" ? "tag-ok" : ""]],
+            [r.run_id === cache.bestRunId && ["BEST" + (RunNames.success(r) ? " \u00b7 " + RunNames.success(r) : ""), "tag-best"],
+             [r.status, r.status === "completed" ? "tag-ok" : ""]],
             () => showRun(r.run_id), "r:" + r.run_id));
     } else {
       items = cache.jobs.map((j) =>
@@ -118,7 +121,7 @@ const History = (() => {
       Api.getRuns().catch(() => ({ runs: [] })),
       Api.getJobs(100).catch(() => ({ jobs: [] })),
     ]);
-    cache = { flights: flights.flights, runs: runs.runs, jobs: jobs.jobs };
+    cache = { flights: flights.flights, runs: runs.runs, jobs: jobs.jobs, bestRunId: runs.best_run_id || null };
     renderList();
   }
 
@@ -183,9 +186,32 @@ const History = (() => {
     const d = detail(id);
     const r = await Api.getRun(id);
     const m = r.meta || {}, ls = r.live_status || {};
+    const title = d.querySelector("h2");
+    title.textContent = RunNames.title(Object.assign({}, m, { label: r.label, starred: r.starred }));
+    const star = node("button", "icon-btn star-btn" + (r.starred ? " on" : ""), r.starred ? "\u2605" : "\u2606");
+    star.type = "button";
+    star.title = r.starred ? "Unstar this run" : "Star this run (a keeper)";
+    star.addEventListener("click", async () => {
+      try { await Api.setRunStarred(id, !r.starred); } catch (e) { alert("could not star: " + e.message); return; }
+      await load();
+      showRun(id);
+    });
+    const rename = node("button", "icon-btn", "✎");
+    rename.type = "button";
+    rename.title = "Rename this run";
+    rename.addEventListener("click", async () => {
+      const name = prompt("Name this run (empty = its date & time):", r.label || "");
+      if (name === null) return;
+      try { await Api.setRunLabel(id, name.trim()); } catch (e) { alert("could not rename: " + e.message); return; }
+      await load();
+      showRun(id);
+    });
+    title.append(" ", star, rename);
+    if (id === cache.bestRunId) title.append(" ", node("span", "tag-best", "BEST"));
     d.append(kv([
+      ["run id", id], ["started", when(m.created_at)],
       ["algorithm", (m.algo || "").toUpperCase()], ["status", m.final_status || ls.status],
-      ["started", when(m.created_at)], ["steps", m.final_timesteps || ls.current_timestep],
+      ["steps", m.final_timesteps || ls.current_timestep],
       ["requested", m.until_stopped ? "until stopped" : m.timesteps_requested], ["best eval reward", ls.best_eval_reward],
     ]));
     if (r.curve && r.curve.timesteps.length) {
@@ -194,9 +220,12 @@ const History = (() => {
       lineChart(c.canvas, [{ label: "mean reward",
         data: r.curve.timesteps.map((x, i) => ({ x, y: r.curve.mean_reward[i] })) }], "timesteps");
     }
-    const open = node("button", "secondary-btn", "Open in the Simulator tab (replays)");
+    const open = node("button", "secondary-btn", "Open this run in the Simulator tab (replays)");
     open.type = "button";
-    open.addEventListener("click", () => Tabs.show("sim"));
+    open.addEventListener("click", () => {
+      Tabs.show("sim");
+      if (window.SimApp) window.SimApp.selectRun(id);
+    });
     d.append(open);
   }
 
@@ -210,8 +239,10 @@ const History = (() => {
   }
 
   function init() {
-    el = { filter: $("hist-filter"), list: $("hist-list"), detail: $("hist-detail") };
+    el = { filter: $("hist-filter"), list: $("hist-list"), detail: $("hist-detail"),
+           keepers: $("hist-keepers") };
     el.filter.addEventListener("change", renderList);
+    if (el.keepers) el.keepers.addEventListener("change", renderList);
     Tabs.onChange((name) => { if (name === "history") load().catch(() => {}); });
     if (Tabs.current() === "history") load().catch(() => {});
   }

@@ -271,3 +271,92 @@ def test_onboard_runs_have_no_pybullet_replay_or_showcase(env):
     c = env["client"]
     assert c.post("/api/runs/onboard_x/showcase", json={}).status_code in (400, 404)
     assert c.post("/api/runs/onboard_x/replay", json={}).status_code in (400, 404)
+
+
+def test_start_run_passes_swing_ramp_and_reward(env):
+    r = env["client"].post("/api/runs", json={
+        "algo": "ppo", "timesteps": 1000, "env": "net", "wind_steps": 0,
+        "reward_mode": "budget", "budget": 5, "laps": 0,
+        "reward_weights": {"budget_pass": 2.0}})
+    assert r.status_code == 201, r.text
+    argv = env["spawned"][0].argv
+    assert argv[argv.index("--wind-steps") + 1] == "0"
+    assert argv[argv.index("--reward") + 1] == "budget"
+    assert argv[argv.index("--budget") + 1] == "5.0"
+    assert json.loads(argv[argv.index("--reward-weights") + 1]) == {"budget_pass": 2.0}
+
+
+def test_default_run_sends_no_reward_overrides(env):
+    env["client"].post("/api/runs", json={"algo": "ppo", "timesteps": 1000, "env": "net"})
+    argv = env["spawned"][0].argv
+    assert argv[argv.index("--wind-steps") + 1] == "1500000"
+    assert argv[argv.index("--reward") + 1] == "shaped"
+    assert "--reward-weights" not in argv
+
+
+def test_config_lists_the_reward_terms(env):
+    cfg = env["client"].get("/api/config").json()
+    names = {n for terms in cfg["reward"]["terms"].values() for n, _ in terms}
+    assert names <= set(cfg["reward"]["defaults"])
+    assert cfg["reward"]["defaults"]["pass_bonus"] > 0
+
+
+def test_rename_run_keeps_meta_untouched(env):
+    d = make_run(env["runs"], "ppo_a")
+    before = (d / "meta.json").read_text()
+    r = env["client"].put("/api/runs/ppo_a/label", json={"label": "  wide   ring test "})
+    assert r.status_code == 200 and r.json()["label"] == "wide ring test"
+    assert (d / "meta.json").read_text() == before            # the trainer owns meta.json
+    runs = env["client"].get("/api/runs").json()["runs"]
+    assert runs[0]["label"] == "wide ring test"
+    assert env["client"].get("/api/runs/ppo_a").json()["label"] == "wide ring test"
+    env["client"].put("/api/runs/ppo_a/label", json={"label": ""})
+    assert env["client"].get("/api/runs").json()["runs"][0]["label"] is None
+    assert env["client"].put("/api/runs/nope/label", json={"label": "x"}).status_code == 404
+    assert env["client"].put("/api/runs/ppo_a/label", json={"label": "x" * 61}).status_code == 422
+
+
+def _evals(d: Path, successes, rewards):
+    import numpy as np
+    s = np.array(successes, dtype=float)
+    np.savez(d / "evaluations.npz", timesteps=np.arange(len(s)) * 1000,
+             results=np.array(rewards, dtype=float), ep_lengths=np.ones_like(s), successes=s)
+
+
+def _net_run(runs: Path, run_id, obs_dim=82, reward_mode="shaped", best_reward=None):
+    d = runs / run_id
+    d.mkdir()
+    (d / "meta.json").write_text(json.dumps({"run_id": run_id, "algo": "ppo", "env": "net",
+                                             "obs_dim": obs_dim, "reward_mode": reward_mode}))
+    (d / "latest_model.zip").write_bytes(b"zip")
+    if best_reward is not None:
+        (d / "live_status.json").write_text(json.dumps({"best_eval_reward": best_reward}))
+    return d
+
+
+def test_best_run_is_picked_by_success_not_reward(env):
+    shaped = _net_run(env["runs"], "ppo_shaped", best_reward=13.0)
+    _evals(shaped, [[0, 0], [0, 0]], [[13, 13], [12, 12]])
+    budget = _net_run(env["runs"], "ppo_budget", reward_mode="budget", best_reward=2.0)
+    _evals(budget, [[0, 0], [1, 0]], [[1, 1], [2, 2]])
+    old = _net_run(env["runs"], "ppo_old", obs_dim=None, best_reward=50.0)   # older env version
+    _evals(old, [[1, 1]], [[50, 50]])
+    data = env["client"].get("/api/runs").json()
+    assert data["best_run_id"] == "ppo_budget"
+    rows = {r["run_id"]: r for r in data["runs"]}
+    assert rows["ppo_budget"]["best_success_rate"] == 0.5
+    assert rows["ppo_old"]["comparable"] is False
+
+
+def test_star_and_name_live_side_by_side(env):
+    d = make_run(env["runs"], "ppo_k")
+    c = env["client"]
+    assert c.put("/api/runs/ppo_k/star", json={"starred": True}).json()["starred"] is True
+    c.put("/api/runs/ppo_k/label", json={"label": "keeper"})
+    row = c.get("/api/runs").json()["runs"][0]
+    assert row["starred"] is True and row["label"] == "keeper"
+    c.put("/api/runs/ppo_k/label", json={"label": ""})
+    assert c.get("/api/runs/ppo_k").json()["starred"] is True       # renaming keeps the star
+    c.put("/api/runs/ppo_k/star", json={"starred": False})
+    assert not (d / "label.json").exists()                           # nothing left to keep
+    assert c.put("/api/runs/nope/star", json={"starred": True}).status_code == 404
