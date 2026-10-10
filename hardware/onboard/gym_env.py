@@ -42,8 +42,18 @@ R_PASSED = 20.0
 R_STRUCK = -10.0
 R_MISSED = -5.0
 R_OUT_OF_CAGE = -10.0
+# Once, the first time the ring comes into view in an episode that started without it in
+# view (hard starts: behind / beside / below, facing away). Helps the first searches succeed;
+# it can only be earned once per episode, so turning away and back again earns nothing.
+R_FOUND = 0.5
 
 MAX_EPISODE_SEC = 30.0
+HARD_START_EPISODE_SEC = 40.0      # searching for the ring and repositioning take longer
+
+# the weights above, by name (saved in a run's meta.json so the dashboard can show the MDP)
+REWARD_WEIGHTS = {"w_axial": W_AXIAL, "w_radial": W_RADIAL, "w_time": W_TIME,
+                  "r_passed": R_PASSED, "r_struck": R_STRUCK, "r_missed": R_MISSED,
+                  "r_out_of_cage": R_OUT_OF_CAGE, "r_found": R_FOUND}
 
 
 class OnboardHoopEnv(gym.Env):
@@ -59,15 +69,25 @@ class OnboardHoopEnv(gym.Env):
     def __init__(self, profile="typical", seed: int = 0, render_frames: bool = False,
                  ring: Optional[Ring] = None, detector: Optional[DetectorParams] = None,
                  max_episode_sec: float = MAX_EPISODE_SEC,
-                 drone_width_m: float = spec.DRONE_WIDTH_M):
+                 drone_width_m: float = spec.DRONE_WIDTH_M,
+                 dr: float = 0.0, sway_deg: float = 15.0, hard_start_p: float = 0.0,
+                 ramp: float = 1.0, open_plane: Optional[bool] = None):
+        """dr / sway_deg / hard_start_p / ramp / open_plane: robustness, see sim.py. open_plane
+        defaults to on whenever starts can be away from the front runway."""
         super().__init__()
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(spec.OBS_DIM,),
                                             dtype=np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, shape=(spec.ACT_DIM,), dtype=np.float32)
+        if open_plane is None:
+            open_plane = hard_start_p > 0
         self._kwargs = dict(profile=profile, render=render_frames, ring=ring,
-                            detector=detector, drone_width_m=drone_width_m)
+                            detector=detector, drone_width_m=drone_width_m, dr=dr,
+                            sway_deg=sway_deg, hard_start_p=hard_start_p, ramp=ramp,
+                            open_plane=open_plane)
         self._seed = int(seed)
-        self.max_ticks = int(max_episode_sec * spec.CTRL_HZ)
+        self.base_ticks = self.max_ticks = int(max_episode_sec * spec.CTRL_HZ)
+        self.hard_ticks = int(max(max_episode_sec, HARD_START_EPISODE_SEC) * spec.CTRL_HZ)
+        self._found_once = True
         self.sim: Optional[OnboardSim] = None
         self.builder = ObsBuilder()
         self._ticks = 0
@@ -89,6 +109,8 @@ class OnboardHoopEnv(gym.Env):
         ring_obs = self.sim.reset(seed=s)
         self.builder.reset()
         self._ticks = 0
+        self.max_ticks = self.base_ticks if self.sim.start_type == "front" else self.hard_ticks
+        self._found_once = bool(ring_obs.found)          # in view from the start: no bonus
         self._axial, self._radial = self._axial_radial()
         obs = self.builder.build(ring_obs, self.sim.state(), self.sim.t)
         return obs, {}
@@ -105,9 +127,12 @@ class OnboardHoopEnv(gym.Env):
                   + W_RADIAL * (self._radial - radial)
                   - W_TIME)
         self._axial, self._radial = axial, radial
+        if ring_obs.found and not self._found_once:
+            self._found_once = True
+            reward += R_FOUND
 
         terminated = False
-        info = {"phase": "flying"}
+        info = {"phase": "flying", "start_type": self.sim.start_type}
         o = self.sim.outcome
         if o.crossed:
             terminated = True
@@ -130,9 +155,49 @@ class OnboardHoopEnv(gym.Env):
         if terminated or truncated:
             # SB3's EvalCallback reads this at episode end: the dashboard's success rate.
             info["is_success"] = info["phase"] == "passed"
+            info["passes"] = int(info["is_success"])     # the dashboard HUD's pass count
+        info["reversed"] = False
         info["ring_found"] = bool(ring_obs.found)
         info["range_m"] = float(ring_obs.range_m)
         return obs, float(reward), terminated, truncated, info
+
+    # -- dashboard (callable through VecEnv.env_method, so they work in subprocess envs) -----
+    def telemetry(self) -> dict:
+        """The drone's pose and the ring, in the same cage frame as the dashboard's 3D view
+        (x, y in [-1, 1] m, z up from the floor); a small dict, cheap to send between processes."""
+        if self.sim is None:
+            return {}
+        r = self.sim.ring
+        return {"pos": [float(v) for v in self.sim.pos],
+                "rpy": [0.0, 0.0, float(np.radians(self.sim.yaw_deg))],
+                "target": [float(v) for v in r.centre],
+                "hoop_normal": [float(v) for v in r.normal],
+                "hoop_radius": float(r.radius)}
+
+    def onboard_frame(self, res=(200, 150)):
+        """What the drone's camera sees (RGB uint8), for the dashboard's POV. Leaves the
+        simulator's random stream untouched (frame() draws its dropped-frame chance from it),
+        so watching never changes what is learned."""
+        import cv2
+        if self.sim is None:
+            return np.zeros((res[1], res[0], 3), np.uint8)
+        state = self.sim.rng.bit_generator.state
+        try:
+            bgr = self.sim.frame()
+        finally:
+            self.sim.rng.bit_generator.state = state
+        return cv2.cvtColor(cv2.resize(bgr, tuple(res)), cv2.COLOR_BGR2RGB)
+
+    def set_ramp(self, ramp: float):
+        """Curriculum hook: how much of dr / hard_start_p applies (0..1), from the next episode."""
+        self._kwargs["ramp"] = float(ramp)
+        if self.sim is not None:
+            self.sim.ramp = float(ramp)
+
+    def set_sway_deg(self, deg: float):
+        self._kwargs["sway_deg"] = float(deg)
+        if self.sim is not None:
+            self.sim.sway_deg = float(deg)
 
     def set_episode_seed(self, seed: int):
         """Seed of the next reset() that is not given one (callable through VecEnv.env_method,

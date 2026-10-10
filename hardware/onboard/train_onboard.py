@@ -52,8 +52,8 @@ from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 
 from imitation.record_demo import load_demos, parse_source_weights, sample_weights
 from onboard import spec
-from onboard.gym_env import OnboardHoopEnv
-from telemetry_callback import DashboardEvalCallback
+from onboard.gym_env import REWARD_WEIGHTS, OnboardHoopEnv
+from telemetry_callback import CameraCallback, DashboardEvalCallback, PaceCallback, TelemetryCallback
 from vec_util import VEC_CHOICES, load_for_resume, make_train_vec_env, resolve_model_path, resolve_vec
 
 UNTIL_STOPPED_BUDGET = 10 ** 12
@@ -71,6 +71,68 @@ def _request_stop(signum, frame):
 class StopRequestCallback(BaseCallback):
     def _on_step(self) -> bool:
         return not _stop_requested["flag"]
+
+
+class RampCallback(BaseCallback):
+    """Robustness curriculum: ramps the training envs' `ramp` (how much of the domain
+    randomisation and of the hard starts applies) from 0 to 1 over `horizon` timesteps, so the
+    policy first learns the measured front approach. Like train_hoop_multi's wind ramp, but
+    counted from THIS run's start, so a run continued from an easier one ramps up too."""
+    def __init__(self, horizon, every=5000):
+        super().__init__()
+        self.horizon, self.every = horizon, every
+        self._last = None
+        self._start = 0
+
+    def _scale(self):
+        return round(min(1.0, (self.num_timesteps - self._start) / max(1.0, self.horizon)), 3)
+
+    def _on_training_start(self):
+        self._start = self.num_timesteps
+        self._last = self._scale()
+        self.training_env.env_method("set_ramp", self._last)
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps % self.every < self.training_env.num_envs:
+            s = self._scale()
+            if s != self._last:
+                self.training_env.env_method("set_ramp", s)
+                self._last = s
+        return True
+
+
+def mirror_signs():
+    """(obs_sign, act_sign): multiplying by these reflects a sample left <-> right (the ring
+    on the other side, the drone strafing and turning the other way). Lateral terms flip:
+    the ring's image x (now and last seen), sideways speed vgy, roll, yaw rate, and the LR
+    and YAW actions, both the commanded one and those in the action history."""
+    obs = np.ones(spec.OBS_DIM, np.float32)
+    sl = spec.OBS_SLICES
+    obs[sl["centre"].start] = -1          # cx
+    obs[sl["last_centre"].start] = -1     # last cx
+    obs[sl["vel"].start + 1] = -1         # vgy
+    obs[sl["att"].start + 1] = -1         # roll
+    obs[sl["att"].start + 2] = -1         # yaw rate
+    a0 = sl["actions"].start
+    for k in range(spec.ACT_BUFFER):
+        obs[a0 + k * spec.ACT_DIM + spec.ACT_LR] = -1
+        obs[a0 + k * spec.ACT_DIM + spec.ACT_YAW] = -1
+    act = np.ones(spec.ACT_DIM, np.float32)
+    act[spec.ACT_LR] = act[spec.ACT_YAW] = -1
+    return obs, act
+
+
+def noise_columns():
+    """(ring_cols, body_cols): observation columns that get small noise in BC augmentation.
+    Ring columns only where the ring is actually found (noise on a 'not seen' zero would invent
+    a sighting); body columns (velocity, attitude) always."""
+    sl = spec.OBS_SLICES
+    ring = [i for name in ("centre", "scale", "range") for i in range(sl[name].start, sl[name].stop)]
+    body = [i for name in ("vel", "att") for i in range(sl[name].start, sl[name].stop)]
+    return ring, body
+
+
+BC_NOISE_STD = 0.02
 
 
 class EvalSeedReset(BaseCallback):
@@ -115,11 +177,19 @@ class BCRegularizedPPO(PPO):
     bc_batch = 256
     bc_start_steps = 0
     critic_warmup_steps = 0
+    bc_augment = False
     _bc_obs = _bc_act = _bc_w = _bc_rng = None
 
     def configure(self, demo_obs=None, demo_act=None, demo_w=None, bc_coef=1.0, bc_coef_min=0.1,
-                  bc_decay_steps=300_000, bc_batch=256, critic_warmup_steps=0, seed=0):
+                  bc_decay_steps=300_000, bc_batch=256, critic_warmup_steps=0, seed=0,
+                  bc_augment=False):
         import torch
+        self.bc_augment = bool(bc_augment)
+        obs_sign, act_sign = mirror_signs()
+        ring_cols, body_cols = noise_columns()
+        self._aug = dict(obs_sign=torch.as_tensor(obs_sign), act_sign=torch.as_tensor(act_sign),
+                         ring=torch.as_tensor(ring_cols), body=torch.as_tensor(body_cols),
+                         found=spec.OBS_SLICES["found"].start)
         self.bc_coef, self.bc_coef_min = float(bc_coef), float(bc_coef_min)
         self.bc_decay_steps = max(1, int(bc_decay_steps))
         self.bc_batch = int(bc_batch)
@@ -136,7 +206,23 @@ class BCRegularizedPPO(PPO):
         return self
 
     def _excluded_save_params(self):
-        return super()._excluded_save_params() + list(BC_ATTRS)
+        return super()._excluded_save_params() + list(BC_ATTRS) + ["_aug"]
+
+    def augment(self, obs, act):
+        """Half the batch mirrored left <-> right, plus small observation noise: the few demos
+        there are cover twice the situations and don't pin the policy to exact readings."""
+        import torch
+        a = self._aug
+        flip = torch.as_tensor(self._bc_rng.random(len(obs)) < 0.5)
+        obs = torch.where(flip[:, None], obs * a["obs_sign"], obs)
+        act = torch.where(flip[:, None], act * a["act_sign"], act)
+        gen = torch.Generator().manual_seed(int(self._bc_rng.integers(2 ** 31)))
+        noise = torch.randn(obs.shape, generator=gen) * BC_NOISE_STD
+        seen = (obs[:, a["found"]] > 0.5).float()[:, None]
+        obs = obs.clone()
+        obs[:, a["ring"]] += noise[:, a["ring"]] * seen
+        obs[:, a["body"]] += noise[:, a["body"]]
+        return obs, act
 
     def current_bc_coef(self) -> float:
         k = min(1.0, (self.num_timesteps - self.bc_start_steps) / self.bc_decay_steps)
@@ -172,9 +258,12 @@ class BCRegularizedPPO(PPO):
         losses = []
         for _ in range(n_steps):
             ids = torch.as_tensor(self._bc_rng.integers(0, n, size=min(self.bc_batch, n)))
-            mean = self.policy.get_distribution(self._bc_obs[ids]).distribution.mean
+            obs_b, act_b = self._bc_obs[ids], self._bc_act[ids]
+            if self.bc_augment:
+                obs_b, act_b = self.augment(obs_b, act_b)
+            mean = self.policy.get_distribution(obs_b).distribution.mean
             w = self._bc_w[ids]
-            per = ((mean - self._bc_act[ids]) ** 2).mean(dim=1)
+            per = ((mean - act_b) ** 2).mean(dim=1)
             loss = coef * (per * w).sum() / w.sum().clamp_min(1e-8)
             self.policy.optimizer.zero_grad()
             loss.backward()
@@ -219,6 +308,19 @@ def main(argv=None):
     ap.add_argument("--lr", type=float, default=None,
                     help="learning rate (default 1e-4 from a clone or an earlier run, 3e-4 from scratch)")
     ap.add_argument("--profile", choices=["ideal", "typical", "harsh"], default="typical")
+    ap.add_argument("--dr", type=float, default=0.0,
+                    help="domain randomisation strength 0..1 (drone dynamics and calibration, ring "
+                         "placement, a swinging ring, detector noise/latency); see onboard/sim.py")
+    ap.add_argument("--sway-deg", type=float, default=15.0,
+                    help="largest swing of the ring on its rope at full wind (deg), with --dr > 0")
+    ap.add_argument("--hard-start-p", type=float, default=0.0,
+                    help="share of episodes starting behind / beside / below the ring or anywhere, "
+                         "often facing away (the ring must be searched for)")
+    ap.add_argument("--dr-steps", type=int, default=500_000,
+                    help="timesteps over which --dr and --hard-start-p ramp up from 0 (0 = full "
+                         "from the start); evaluation is always at full strength")
+    ap.add_argument("--bc-augment", action=argparse.BooleanOptionalAction, default=True,
+                    help="mirror half of each demo batch left/right and add small observation noise")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--timesteps", type=int, default=500_000)
     ap.add_argument("--until-stopped", action="store_true")
@@ -270,6 +372,10 @@ def main(argv=None):
         "init_kind": ("clone" if from_clone else "run") if init_path else None,
         "init_timesteps": None,
         "learning_rate": lr, "critic_warmup_steps": warmup,
+        "reward": dict(REWARD_WEIGHTS),        # the onboard MDP, shown on the dashboard
+        "robust": {"dr": args.dr, "sway_deg": args.sway_deg, "hard_start_p": args.hard_start_p,
+                   "dr_steps": args.dr_steps, "bc_augment": bool(args.bc_augment)},
+        "ctrl_hz": spec.CTRL_HZ,
         "bc": ({"demos": [Path(f).name for f in demo_files], "samples": counts, "source_weights": sw,
                 "coef": args.bc_coef, "coef_min": args.bc_coef_min,
                 "decay_steps": args.bc_decay_steps} if demo_files else None),
@@ -278,12 +384,17 @@ def main(argv=None):
     }
     _atomic_write_json(run_dir / "meta.json", meta)
 
-    env_kwargs = dict(profile=args.profile, seed=args.seed * 100_000)
+    robust = dict(dr=args.dr, sway_deg=args.sway_deg, hard_start_p=args.hard_start_p)
+    ramped = args.dr_steps > 0 and (args.dr > 0 or args.hard_start_p > 0)
+    env_kwargs = dict(profile=args.profile, seed=args.seed * 100_000, **robust,
+                      ramp=0.0 if ramped else 1.0)
     train_env = make_train_vec_env(OnboardHoopEnv, env_kwargs, args.n_envs, seed=args.seed, vec=vec,
                                    rank_seed_kwarg="seed")
     # Evaluation layouts come from a separate stream that training never draws from;
     # EvalSeedReset rewinds it before every evaluation.
-    eval_env = make_train_vec_env(OnboardHoopEnv, dict(profile=args.profile, seed=EVAL_SEED_BASE),
+    # ... always at full robustness strength: its success rate is the robust one
+    eval_env = make_train_vec_env(OnboardHoopEnv, dict(profile=args.profile, seed=EVAL_SEED_BASE,
+                                                       **robust, ramp=1.0),
                                   1, seed=args.seed + 1, vec="dummy")
 
     import torch
@@ -309,7 +420,8 @@ def main(argv=None):
         model = BCRegularizedPPO("MlpPolicy", train_env, learning_rate=lr, seed=args.seed,
                                  device="cpu", verbose=1)
     model.configure(d_obs, d_act, d_w, bc_coef=args.bc_coef, bc_coef_min=args.bc_coef_min,
-                    bc_decay_steps=args.bc_decay_steps, critic_warmup_steps=warmup, seed=args.seed)
+                    bc_decay_steps=args.bc_decay_steps, critic_warmup_steps=warmup, seed=args.seed,
+                    bc_augment=args.bc_augment)
     start_steps = int(model.num_timesteps)
     print(f"[INFO] envs {args.n_envs} ({vec}); actor frozen for the first {warmup} steps; "
           f"BC coef {args.bc_coef if demo_files else 0} -> {args.bc_coef_min if demo_files else 0}")
@@ -320,7 +432,15 @@ def main(argv=None):
         total_timesteps=None if args.until_stopped else start_steps + args.timesteps, t0=t0,
         best_model_save_path=str(run_dir), log_path=str(run_dir), eval_freq=args.eval_freq,
         n_eval_episodes=args.n_eval_episodes, deterministic=True, render=False)
-    callback = CallbackList([EvalSeedReset(eval_env, args.eval_freq, EVAL_SEED_BASE), eval_cb,
+    # the dashboard's live view: the watched env's pose + ring, its camera view, and the
+    # "real time" toggle (the same callbacks as the PyBullet trainer, fed through env methods)
+    watch = [TelemetryCallback(run_dir=run_dir, env_index=0, state_method="telemetry",
+                               ctrl_hz=spec.CTRL_HZ),
+             CameraCallback(run_dir=run_dir, env_index=0),
+             PaceCallback(run_dir=run_dir, ctrl_dt=spec.CTRL_DT)]
+    if ramped:
+        watch.append(RampCallback(args.dr_steps))
+    callback = CallbackList([*watch, EvalSeedReset(eval_env, args.eval_freq, EVAL_SEED_BASE), eval_cb,
                              StopRequestCallback()])
 
     budget = UNTIL_STOPPED_BUDGET if args.until_stopped else args.timesteps

@@ -34,12 +34,16 @@ from onboard.gym_env import OnboardHoopEnv
 
 
 def generate(episodes=60, profile="typical", seed=0, keep_failures=False,
-             render_frames=False, cfg: ExpertConfig = None, verbose=True):
-    """-> (DemoRecorder, tally dict)."""
-    env = OnboardHoopEnv(profile=profile, seed=seed, render_frames=render_frames)
+             render_frames=False, cfg: ExpertConfig = None, verbose=True,
+             dr=0.0, sway_deg=15.0, hard_start_p=0.0):
+    """-> (DemoRecorder, tally dict). dr / sway_deg / hard_start_p: the randomised (robust)
+    task, see sim.py; only the episodes the expert still passes are kept."""
+    env = OnboardHoopEnv(profile=profile, seed=seed, render_frames=render_frames,
+                         dr=dr, sway_deg=sway_deg, hard_start_p=hard_start_p)
     policy = ExpertPolicy(cfg)
     rec = DemoRecorder(
         meta={"source": "onboard_scripted_expert", "profile": profile,
+              "robust": {"dr": dr, "sway_deg": sway_deg, "hard_start_p": hard_start_p},
               "episodes_requested": episodes, "sim": True,
               "expert": (cfg or ExpertConfig()).to_json()},
         obs_dim=spec.OBS_DIM, task=spec.TASK_NAME, obs_shape=(spec.OBS_DIM,))
@@ -82,6 +86,11 @@ def main(argv=None):
     ap.add_argument("--episodes", type=int, default=60)
     ap.add_argument("--profile", choices=["ideal", "typical", "harsh"], default="typical")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--dr", type=float, default=0.0,
+                    help="domain randomisation 0..1: varied drone, a swinging ring, detector noise")
+    ap.add_argument("--sway-deg", type=float, default=15.0)
+    ap.add_argument("--hard-start-p", type=float, default=0.0,
+                    help="share of episodes starting behind / beside / below the ring or anywhere")
     ap.add_argument("--out", type=Path, default=None,
                     help=f"default: {DEMO_DIR}/onboard_sim_<n>.npz")
     ap.add_argument("--keep-failures", action="store_true",
@@ -94,7 +103,8 @@ def main(argv=None):
                          "where the clone trained with it scored 0/12 (see the README)")
     a = ap.parse_args(argv)
 
-    rec, tally = generate(a.episodes, a.profile, a.seed, a.keep_failures, a.render)
+    rec, tally = generate(a.episodes, a.profile, a.seed, a.keep_failures, a.render,
+                          dr=a.dr, sway_deg=a.sway_deg, hard_start_p=a.hard_start_p)
     if not len(rec):
         sys.exit("[make_demos] no samples recorded: the expert passed through nothing. "
                  "Check the expert's config, or pass --keep-failures to inspect it.")

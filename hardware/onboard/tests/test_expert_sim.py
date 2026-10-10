@@ -462,3 +462,28 @@ def test_the_search_sweeps_both_sides_of_the_start_heading():
         heading += a[spec.ACT_YAW]
         lo, hi = min(lo, heading), max(hi, heading)
     assert lo < -0.5 * hi and hi > 0, (lo, hi)
+
+
+def test_env_reports_pose_and_ring_for_the_dashboard():
+    from onboard.gym_env import OnboardHoopEnv
+    env = OnboardHoopEnv(seed=0)
+    env.reset(seed=3)
+    t = env.telemetry()
+    assert t["pos"] == list(env.sim.pos) and t["target"] == list(env.sim.ring.centre)
+    assert t["hoop_radius"] == env.sim.ring.radius
+    assert abs(np.linalg.norm(t["hoop_normal"]) - 1.0) < 1e-9
+    env.close()
+
+
+def test_camera_view_does_not_change_what_is_learned():
+    from onboard.gym_env import OnboardHoopEnv
+    watched, plain = OnboardHoopEnv(seed=0), OnboardHoopEnv(seed=0)
+    watched.reset(seed=5)
+    plain.reset(seed=5)
+    a = np.array([0.2, 0.6, 0.1, 0.0])
+    for _ in range(20):
+        frame = watched.onboard_frame((200, 150))
+        o1 = watched.step(a)[0]
+        o2 = plain.step(a)[0]
+        assert np.array_equal(o1, o2)        # rendering left the sim's random stream alone
+    assert frame.shape == (150, 200, 3) and frame.dtype == np.uint8
