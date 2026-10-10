@@ -47,8 +47,15 @@ class TelemetryCallback(BaseCallback):
     """Throttled drone position/orientation/target stream for the live 3D view."""
 
     def __init__(self, run_dir: Path, env_index: int = 0, hz: float = 15.0,
-                 max_lines: int = 1800, rotate_every: int = 150, verbose=0):
+                 max_lines: int = 1800, rotate_every: int = 150, state_method: str = None,
+                 ctrl_hz: float = None, verbose=0):
+        """state_method: for envs whose observation is not HoopNetAviary's layout (the onboard
+        camera task), the name of an env method returning {pos, rpy, target, hoop_normal,
+        hoop_radius}; it is called through env_method, so it works in subprocess envs.
+        ctrl_hz: the env's control rate, sent along so the dashboard's clock is right."""
         super().__init__(verbose)
+        self.state_method = state_method
+        self.ctrl_hz = ctrl_hz
         self.telemetry_path = Path(run_dir) / "telemetry.jsonl"
         self.env_index = env_index
         self.min_interval = 1.0 / hz
@@ -81,15 +88,28 @@ class TelemetryCallback(BaseCallback):
         if done and "terminal_observation" in info:
             # SB3 auto-resets: new_obs is already the next episode's first obs
             obs_i = np.asarray(info["terminal_observation"]).reshape(-1)
-        pos = obs_i[0:3]
-        rpy = obs_i[3:6]
-        rel = obs_i[-3:]
+        state = None
+        if self.state_method:
+            # (at an episode end the env has already reset: this is the new episode's start,
+            # which only shows for one frame; the done/success flags below are the old episode's)
+            try:
+                state = self.training_env.env_method(self.state_method, indices=[self.env_index])[0]
+            except Exception:
+                return True
+            if not state:
+                return True
+            pos, rpy, target = state["pos"], state["rpy"], state["target"]
+        else:
+            pos = obs_i[0:3]
+            rpy = obs_i[3:6]
+            target = (pos + obs_i[-3:]).tolist()
+            pos, rpy = pos.tolist(), rpy.tolist()
         record = {
             "t": int(self.num_timesteps),
             "ts": now,
-            "pos": pos.tolist(),
-            "rpy": rpy.tolist(),
-            "target": (pos + rel).tolist(),
+            "pos": pos,
+            "rpy": rpy,
+            "target": target,
             "ep": self._ep,
             "step": self._ep_step,
             "net_contact": self._net_hit,
@@ -98,14 +118,29 @@ class TelemetryCallback(BaseCallback):
         self._net_hit = self._rim_hit = False
         if "passes" in info:
             record["passes"] = int(info["passes"])
+        if "score" in info:
+            record["score"] = round(float(info["score"]), 4)
         if "reversed" in info:
             record["reversed"] = bool(info["reversed"])
+        # this episode's ring swing (HoopNetAviary): the dashboard HUD shows it, since the swing is
+        # wind ramp x per-episode gust x the "Max swing" setting, often well under the setting
+        for k in ("wind_scale", "swing_deg", "swing_period_s"):
+            if k in info:
+                record[k] = round(float(info[k]), 3)
         if done:
             record["done"] = True
             record["success"] = bool(info.get("is_success", False))
             self._ep += 1
             self._ep_step = 0
-        if obs_i.size == 78:     # HoopNetAviary: ring normal sits just before the relative vector
+        if self.ctrl_hz:
+            record["ctrl_hz"] = self.ctrl_hz
+        if state is not None:
+            record["hoop_normal"] = state.get("hoop_normal")
+            record["hoop_radius"] = state.get("hoop_radius")
+        elif obs_i.size == 82:     # HoopNetAviary: [..., normal, ring vel, ring radius, relative vector]
+            record["hoop_normal"] = obs_i[-10:-7].tolist()
+            record["hoop_radius"] = float(obs_i[-4])
+        elif obs_i.size == 78:   # older HoopNetAviary: ring normal just before the relative vector
             record["hoop_normal"] = obs_i[-6:-3].tolist()
             try:
                 record["hoop_radius"] = float(
@@ -162,10 +197,32 @@ class DashboardEvalCallback(EvalCallback):
         self.live_status_path = Path(run_dir) / "live_status.json"
         self.total_timesteps = total_timesteps
         self.t0 = t0
+        self._passes_buffer = []          # passes per episode in the current evaluation
+        self.latest_mean_passes = None
+        self.best_mean_passes = None
+        self.max_passes = None            # most passes in any one evaluation episode so far
+
+    def _log_success_callback(self, locals_, globals_):
+        super()._log_success_callback(locals_, globals_)
+        if locals_["done"]:
+            passes = locals_["info"].get("passes")
+            if passes is not None:
+                self._passes_buffer.append(int(passes))
 
     def _on_step(self) -> bool:
+        evaluating = self.eval_freq > 0 and self.n_calls % self.eval_freq == 0
+        if evaluating:
+            self._passes_buffer = []
         continue_training = super()._on_step()
-        if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
+        if evaluating and self._passes_buffer:
+            self.latest_mean_passes = float(np.mean(self._passes_buffer))
+            self.best_mean_passes = max(self.best_mean_passes or 0.0, self.latest_mean_passes)
+            self.max_passes = max(self.max_passes or 0, max(self._passes_buffer))
+            if self.verbose:
+                print(f"Passes per episode: mean {self.latest_mean_passes:.2f}, "
+                      f"this eval {self._passes_buffer}, best mean {self.best_mean_passes:.2f}, "
+                      f"max ever {self.max_passes}")
+        if evaluating:
             # latest_model.zip = the policy as of this eval, so the dashboard's "watch current
             # policy" always has something to load (best_model.zip only changes on a new best).
             try:
@@ -185,6 +242,9 @@ class DashboardEvalCallback(EvalCallback):
                                       else float(self.best_mean_reward)),
                 "latest_success_rate": (float(np.mean(self._is_success_buffer))
                                          if len(self._is_success_buffer) else None),
+                "latest_mean_passes": self.latest_mean_passes,
+                "best_mean_passes": self.best_mean_passes,
+                "max_passes": self.max_passes,
                 "elapsed_sec": time.time() - self.t0,
                 "updated_at": datetime.now().isoformat(),
             }

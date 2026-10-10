@@ -9,7 +9,8 @@ flights can train one policy together.
         hardware/flights/demos/teacher_ppo.npz --source-weight human=3 --out hardware/flights/bc/mixed
 
 Why this direction, and not the other: the two tasks see different things. The PyBullet
-policy reads 78 numbers of TRUE state (position, velocity, the ring's centre and facing);
+policy reads 82 numbers of TRUE state (position, velocity, the ring's centre, facing, velocity
+and size; policies trained before 2026-10-10 evening read 78, without the last two);
 the onboard policy reads 33 numbers from the camera (where the ring is in the image, how
 big). A human flight records only the camera numbers, so it cannot be turned into a PyBullet
 observation. The onboard simulator, though, knows the true state at every tick. So the
@@ -19,7 +20,8 @@ teacher did. That is ordinary privileged-teacher distillation.
 
 The bridge, per tick (onboard sim runs at 15 Hz, PyBullet at 30 Hz):
   * teacher obs = [pos, rpy=(0,0,0), world vel, ang vel=0, last 15 PyBullet-rate actions,
-    ring normal (the direction to pass through), ring centre - pos]. rpy is zero because
+    ring normal (the direction to pass through), [82-D teachers only: ring velocity = 0 (the
+    onboard ring hangs still), ring opening radius], ring centre - pos]. rpy is zero because
     PyBullet's velocity controller holds yaw at 0, which is all the teacher has ever seen;
     its actions are world-frame, so the onboard drone's own yaw does not change their meaning.
   * teacher action [dx, dy, dz, s] -> world velocity SPEED_LIMIT * |s| * unit(d) (exactly
@@ -56,7 +58,8 @@ from onboard.sim import MAX_SPEED, MAX_YAW_DPS
 PYB_CTRL_HZ = 30                       # HoopNetAviary's ctrl_freq
 PYB_SPEED_LIMIT = 0.03 * 30.0 / 3.6    # BaseRLAviary VEL: 3 % of the CF2X's 30 km/h, ~0.25 m/s
 PYB_ACTION_BUFFER = PYB_CTRL_HZ // 2   # BaseRLAviary.ACTION_BUFFER_SIZE
-TEACHER_OBS_DIM = 12 + 4 * PYB_ACTION_BUFFER + 6          # 78
+TEACHER_OBS_DIM = 12 + 4 * PYB_ACTION_BUFFER + 10         # 82: + normal, ring vel, radius, rel
+LEGACY_TEACHER_OBS_DIM = 12 + 4 * PYB_ACTION_BUFFER + 6   # 78: + normal, rel (older runs)
 YAW_K = 1.0 / 35.0                     # rc per degree of heading error
 YAW_MAX = 0.7
 YAW_FREEZE_M = 0.35
@@ -92,10 +95,10 @@ class SimTeacher:
             raise ValueError("frame must be 'canonical' or 'world'")
         self.frame = frame
         shape = tuple(model.observation_space.shape)
-        if shape[-1] != TEACHER_OBS_DIM:
+        if shape[-1] not in (TEACHER_OBS_DIM, LEGACY_TEACHER_OBS_DIM):
             raise ValueError(f"teacher expects observations of width {shape[-1]}; a HoopNetAviary "
-                             f"(net env) policy has {TEACHER_OBS_DIM}. Is this a legacy-env or "
-                             "onboard-task model?")
+                             f"(net env) policy has {TEACHER_OBS_DIM} (or {LEGACY_TEACHER_OBS_DIM} "
+                             "for older runs). Is this a legacy-env or onboard-task model?")
         self.obs_shape = shape
         self.reset()
 
@@ -131,8 +134,10 @@ class SimTeacher:
         c = sim.ring.centre
         pos = R @ (sim.pos - c) + c_t
         kin = np.concatenate([pos, np.zeros(3), R @ sim.vel, np.zeros(3)])
-        obs = np.concatenate([kin, np.concatenate(list(self.buf)), R @ self.pass_dir(sim),
-                              R @ (c - sim.pos)])
+        ring = [R @ self.pass_dir(sim)]
+        if self.obs_shape[-1] == TEACHER_OBS_DIM:       # the onboard ring hangs still
+            ring += [np.zeros(3), [sim.ring.radius]]
+        obs = np.concatenate([kin, np.concatenate(list(self.buf)), *ring, R @ (c - sim.pos)])
         return obs.astype(np.float32).reshape(self.obs_shape)
 
     def action_to_rc(self, action, sim) -> np.ndarray:

@@ -38,7 +38,7 @@ from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from hoop_env import HoopFindAviary, ROOM  # noqa: E402
-from hoop_net_env import HoopNetAviary  # noqa: E402
+from hoop_net_env import HoopNetAviary, merge_reward_weights  # noqa: E402
 from discrete_action_wrapper import HoopFindDiscreteVel  # noqa: E402
 from telemetry_callback import (TelemetryCallback, DashboardEvalCallback, CameraCallback,  # noqa: E402
                                 PaceCallback)
@@ -95,6 +95,47 @@ class RadiusCurriculumCallback(BaseCallback):
         return True
 
 
+class WindCurriculumCallback(BaseCallback):
+    """Ramps the ring's live wind from calm (0) to full (1) over the first `horizon` timesteps, so
+    the policy learns to fly through a still ring before it has to time a swinging one."""
+    def __init__(self, horizon, every=5000):
+        super().__init__()
+        self.horizon, self.every = horizon, every
+        self._last = None
+
+    def _scale(self):
+        return round(min(1.0, self.num_timesteps / max(1.0, self.horizon)), 3)
+
+    def _on_training_start(self):
+        self._last = self._scale()
+        self.training_env.env_method("set_wind", self._last)
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps % self.every < self.training_env.num_envs:
+            s = self._scale()
+            if s != self._last:
+                self.training_env.env_method("set_wind", s)
+                self._last = s
+        return True
+
+
+def linear_schedule(start, end):
+    """SB3 learning-rate schedule: `start` at the beginning of learn() -> `end` at its end."""
+    def f(progress_remaining):
+        return end + (start - end) * progress_remaining
+    return f
+
+
+# PPO settings for the net env (fresh runs). The defaults (constant lr 3e-4, 10 epochs, no KL cap,
+# gamma 0.99) made ppo_20261010-093427 overwrite its policy every update (approx_kl ~0.9,
+# clip_fraction ~0.8, action std collapsed to 0.06) and stall at ~6% success for 10M steps.
+# gamma 0.995 at 30 Hz looks ~6.7 s ahead (0.99: ~3.3 s), far enough to see the pass from takeoff.
+PPO_NET_KWARGS = dict(n_steps=2048, batch_size=256, n_epochs=5, target_kl=0.03, ent_coef=0.003,
+                      gamma=0.995, gae_lambda=0.95,
+                      policy_kwargs=dict(net_arch=dict(pi=[256, 256], vf=[256, 256])))
+PPO_NET_LR = (3e-4, 5e-5)          # linear over --timesteps (constant 1e-4 with --until-stopped)
+
+
 class StopRequestCallback(BaseCallback):
     """Returns False (stop training) once a SIGTERM/SIGBREAK has set the
     module-level stop flag, so model.learn() exits its loop cleanly instead
@@ -132,6 +173,14 @@ def _make_env_kwargs(args):
         kwargs["carry_start"] = args.carry_start
         kwargs["reverse_prob"] = args.reverse_prob
         kwargs["lean_flip_prob"] = args.lean_flip_prob
+        kwargs["laps"] = args.laps
+        kwargs["episode_sec"] = args.episode_sec
+        kwargs["net_terminate"] = args.net_terminate
+        kwargs["reward_mode"] = args.reward
+        kwargs["budget"] = args.budget
+        kwargs["reward_weights"] = args.reward_weights
+        if args.wind_steps > 0:
+            kwargs["wind"] = 0.0       # the wind curriculum ramps it up from calm
     if args.seed is not None:
         kwargs["seed"] = args.seed
     if args.start_pos is not None:
@@ -161,6 +210,27 @@ def main():
                      help="net env: chance an episode must fly through the ring back to front")
     ap.add_argument("--lean-flip-prob", type=float, default=0.3,
                      help="net env: chance the ring leans the other way (wind holding it over)")
+    ap.add_argument("--laps", type=int, default=1,
+                     help="net env: passes per episode, the direction flipping after each "
+                          "(0 = endless back-and-forth until the net / time limit)")
+    ap.add_argument("--episode-sec", type=float, default=None,
+                     help="net env: episode time limit (s; default 20, or 120 with --reward budget, "
+                          "where it is only a safety cap)")
+    ap.add_argument("--reward", choices=["shaped", "budget"], default="shaped",
+                     help="net env: shaped = MDP v2 (shaping + pass bonus, one pass per episode by "
+                          "default); budget = MDP v3 (-0.005/step, +1 per pass, -0.05 rim, endless "
+                          "passes; the episode ends when its total reaches -BUDGET or at the net)")
+    ap.add_argument("--budget", type=float, default=3.0,
+                     help="net env, --reward budget: the episode ends when its total reward falls to "
+                          "-BUDGET (3 = 20 s for the first pass; each pass adds 6.7 s)")
+    ap.add_argument("--reward-weights", type=json.loads, default=None, metavar="JSON",
+                     help="net env: override reward weights, e.g. '{\"pass_bonus\": 30}' "
+                          "(names: hoop_net_env.DEFAULT_REWARD_WEIGHTS)")
+    ap.add_argument("--net-terminate", action=argparse.BooleanOptionalAction, default=True,
+                     help="net env: touching the net ends the episode (--no-net-terminate: bounce)")
+    ap.add_argument("--wind-steps", type=int, default=1_500_000,
+                     help="net env: timesteps over which the ring's wind ramps from calm to full "
+                          "(0 = full wind from the start; evaluation always uses full wind)")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--start-pos", type=float, nargs=3, default=None, metavar=("X", "Y", "Z"))
     ap.add_argument("--target-pos", type=float, nargs=3, default=None, metavar=("X", "Y", "Z"))
@@ -193,6 +263,11 @@ def main():
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, _request_stop)
 
+    if args.env == "net":
+        if args.reward == "budget":
+            args.laps, args.net_terminate = 0, True      # endless passes; the net always ends it
+        if args.episode_sec is None:
+            args.episode_sec = 120.0 if args.reward == "budget" else 20.0
     budget = UNTIL_STOPPED_BUDGET if args.until_stopped else args.timesteps
     curriculum_steps = args.curriculum_steps or (500_000 if args.until_stopped else args.timesteps // 2)
 
@@ -229,6 +304,15 @@ def main():
         "carry_start": args.carry_start if args.env == "net" else None,
         "reverse_prob": args.reverse_prob if args.env == "net" else None,
         "lean_flip_prob": args.lean_flip_prob if args.env == "net" else None,
+        "laps": args.laps if args.env == "net" else None,
+        "episode_sec": args.episode_sec if args.env == "net" else None,
+        "net_terminate": args.net_terminate if args.env == "net" else None,
+        "wind_steps": args.wind_steps if args.env == "net" else None,
+        "reward_mode": args.reward if args.env == "net" else None,
+        "budget": args.budget if args.env == "net" and args.reward == "budget" else None,
+        "reward_weights": merge_reward_weights(args.reward_weights) if args.env == "net" else None,
+        "obs_dim": None,
+        "hyperparams": None,
         "n_envs": args.n_envs,
         "vec": vec,
         "init_from": str(init_path) if init_path else None,
@@ -255,6 +339,7 @@ def main():
     eval_env_kwargs = dict(env_kwargs)
     if args.env == "net":
         eval_env_kwargs["hoop_radius_scale"] = 1.0     # always evaluate on the real-size ring
+        eval_env_kwargs.pop("wind", None)              # ... in full wind
     eval_env_kwargs["seed"] = (args.seed + 1) if args.seed is not None else 1
     eval_env = make_train_vec_env(env_cls, eval_env_kwargs, 1, seed=eval_env_kwargs["seed"],
                                   wrapper_class=wrapper_class, vec="dummy")
@@ -282,8 +367,22 @@ def main():
             meta["timesteps_requested"] = int(model.num_timesteps) + args.timesteps
         _atomic_write_json(run_dir / "meta.json", meta)
         print(f"[INFO] continuing from {init_path} at {model.num_timesteps} steps")
+        if args.env == "net":
+            print(f"[INFO] reward: {args.reward} (if the parent used another reward, the critic "
+                  "re-fits to the new scale over the first updates)")
     else:
-        model = algo_cls("MlpPolicy", train_env, verbose=1)
+        hp = {}
+        if args.algo == "ppo" and args.env == "net":
+            hp = dict(PPO_NET_KWARGS)
+            if args.until_stopped:
+                hp["learning_rate"] = 1e-4
+                meta["hyperparams"] = dict(hp)
+            else:
+                hp["learning_rate"] = linear_schedule(*PPO_NET_LR)
+                meta["hyperparams"] = dict(hp, learning_rate=f"linear {PPO_NET_LR[0]} -> {PPO_NET_LR[1]}")
+        model = algo_cls("MlpPolicy", train_env, verbose=1, **hp)
+    meta["obs_dim"] = int(train_env.observation_space.shape[-1])
+    _atomic_write_json(run_dir / "meta.json", meta)
     start_steps = int(model.num_timesteps)
 
     t0 = time.time()
@@ -304,6 +403,8 @@ def main():
     callbacks = [telemetry_cb, camera_cb, eval_cb, PaceCallback(run_dir=run_dir), StopRequestCallback()]
     if args.env == "net" and args.radius_start != 1.0:
         callbacks.append(RadiusCurriculumCallback(curriculum_steps, start=args.radius_start))
+    if args.env == "net" and args.wind_steps > 0:
+        callbacks.append(WindCurriculumCallback(args.wind_steps))
     callback = CallbackList(callbacks)
 
     final_status = "crashed"

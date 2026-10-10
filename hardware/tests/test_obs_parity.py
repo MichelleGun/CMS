@@ -29,7 +29,7 @@ def test_builder_shape_buffer_order_and_zero_init():
 
 
 def test_net_env_layout_matches_builder_with_normal():
-    """HoopNetAviary's 78-D observation == ObsBuilder(hoop_normal=...) on the same state/actions."""
+    """HoopNetAviary's 82-D observation == ObsBuilder(hoop_normal=..., hoop_radius=...) on the same state/actions."""
     from hoop_net_env import HoopNetAviary
     env = HoopNetAviary(seed=0, wind=0.0)     # ObsBuilder holds one fixed hoop pose: no live sway here
     try:
@@ -37,7 +37,7 @@ def test_net_env_layout_matches_builder_with_normal():
         assert obs.shape == (1, NET_OBS_DIM)
         # the observed normal points the way this episode must be flown (flipped when reversed);
         # on hardware that is the direction the operator gives ObsBuilder
-        ob = ObsBuilder(env.ring_c, hoop_normal=env.ring_n * env._dir)
+        ob = ObsBuilder(env.ring_c, hoop_normal=env.ring_n * env._dir, hoop_radius=env.inner_radius)
         rng = np.random.default_rng(0)
         for k in range(30):
             a = rng.uniform(-1, 1, size=(1, 4)).astype(np.float32)

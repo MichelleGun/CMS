@@ -52,7 +52,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import court as court_mod  # noqa: E402  (local module, next to this file)
 from hoop_env import HoopFindAviary  # noqa: E402
-from hoop_net_env import HoopNetAviary  # noqa: E402
+from hoop_net_env import HoopNetAviary, env_kwargs_from_meta  # noqa: E402
 from discrete_action_wrapper import HoopFindDiscreteVel  # noqa: E402
 from camera_capture import get_onboard_frame  # noqa: E402
 
@@ -104,7 +104,11 @@ def main():
     ap.add_argument("--pov", action="store_true")
     ap.add_argument("--sway-deg", type=float, default=None,
                     help="net env: largest ring swing about its rope knot (deg; default: the run's own)")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="scenario seed (ring pose, start, wind); default: a new one every replay")
     args = ap.parse_args()
+    seed = args.seed if args.seed is not None else int(time.time()) % 100000
+    print(f"[replay_hoop] seed {seed}")
 
     run_dir = args.run_dir.resolve()
     meta = json.loads((run_dir / "meta.json").read_text())
@@ -133,8 +137,10 @@ def main():
     frame_idx = 0
     env = None
     try:
-        sway = args.sway_deg if args.sway_deg is not None else meta.get("sway_deg")
-        env = (HoopNetAviary(gui=True, record=True, sway_deg=sway) if use_net
+        kw = env_kwargs_from_meta(meta)        # the task the run trained on (laps, reward, ...)
+        if args.sway_deg is not None:
+            kw["sway_deg"] = args.sway_deg
+        env = (HoopNetAviary(gui=True, record=True, **kw) if use_net
                else HoopFindAviary(gui=True, record=True))
         if needs_discrete:
             env = HoopFindDiscreteVel(env)
@@ -159,7 +165,7 @@ def main():
         from gym_pybullet_drones.utils.utils import sync
 
         ep = 0
-        obs, _ = env.reset(seed=1000 + ep)
+        obs, _ = env.reset(seed=seed + ep)
         rebuild_scene()
         t0 = time.time()
         step = 0
@@ -178,7 +184,7 @@ def main():
                 ep += 1
                 if ep >= args.episodes:
                     break
-                obs, _ = env.reset(seed=1000 + ep)
+                obs, _ = env.reset(seed=seed + ep)
                 rebuild_scene()
                 t0 = time.time()
                 step = 0

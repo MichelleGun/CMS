@@ -5,8 +5,10 @@ Layout (HoopFindAviary, ObservationType.KIN, ActionType.VEL, ctrl 30 Hz), shape 
     [ pos(3), rpy(3), vel(3), angvel(3),          12  world frame, rad, m/s, rad/s
       action_buffer(15 x 4, oldest first),        60  last 0.5 s of *executed* actions
       hoop - pos (3) ]                             3
-HoopNetAviary (scripts/hoop_net_env.py) inserts the ring's unit normal (3) before the final
-relative vector -> shape (1, 78); pass `hoop_normal` to ObsBuilder to get that layout.
+HoopNetAviary (scripts/hoop_net_env.py) inserts the ring's unit normal (3), velocity (3) and
+opening radius (1) before the final relative vector -> shape (1, 82); pass `hoop_normal` and
+`hoop_radius` to ObsBuilder to get that layout (velocity is 0: the measured ring is held still).
+Older net-env policies used (1, 78): normal only; pass `hoop_normal` without `hoop_radius`.
 No normalisation (the sim training used none). sim_check/obs_parity.py checks this
 against the real environment.
 """
@@ -14,14 +16,16 @@ from collections import deque
 
 import numpy as np
 
-from .constants import ACT_BUFFER, ACT_DIM, CTRL_DT, NET_OBS_DIM, OBS_DIM
+from .constants import ACT_BUFFER, ACT_DIM, CTRL_DT, LEGACY_NET_OBS_DIM, NET_OBS_DIM, OBS_DIM
 from .smoothing import wrap_pi
 
 
 class ObsBuilder:
-    def __init__(self, hoop_xyz, lpf_alpha=0.35, hoop_normal=None):
-        """hoop_normal: None -> legacy 75-D layout; a 3-vector -> HoopNetAviary's 78-D layout.
+    def __init__(self, hoop_xyz, lpf_alpha=0.35, hoop_normal=None, hoop_radius=None):
+        """hoop_normal: None -> legacy 75-D layout; a 3-vector -> net-env layout, 82-D with
+        hoop_radius (the ring's inner radius, m) or the older 78-D without it.
         On hardware the ring is fixed, so this is the measured facing of the real ring."""
+        self.radius = None if hoop_radius is None else float(hoop_radius)
         self.hoop = np.asarray(hoop_xyz, dtype=float).reshape(3)
         self.normal = None
         if hoop_normal is not None:
@@ -63,4 +67,7 @@ class ObsBuilder:
         rel = self.hoop - pos
         if self.normal is None:
             return np.hstack([kin, buf, rel]).astype(np.float32).reshape(1, OBS_DIM)
-        return np.hstack([kin, buf, self.normal, rel]).astype(np.float32).reshape(1, NET_OBS_DIM)
+        if self.radius is None:
+            return np.hstack([kin, buf, self.normal, rel]).astype(np.float32).reshape(1, LEGACY_NET_OBS_DIM)
+        return np.hstack([kin, buf, self.normal, np.zeros(3), [self.radius], rel]
+                         ).astype(np.float32).reshape(1, NET_OBS_DIM)

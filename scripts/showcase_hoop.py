@@ -32,7 +32,7 @@ from stable_baselines3 import PPO, A2C, SAC, TD3, DQN
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from hoop_env import HoopFindAviary  # noqa: E402
-from hoop_net_env import HoopNetAviary  # noqa: E402
+from hoop_net_env import HoopNetAviary, env_kwargs_from_meta  # noqa: E402
 from discrete_action_wrapper import HoopFindDiscreteVel  # noqa: E402
 from camera_capture import get_onboard_frame  # noqa: E402
 
@@ -79,12 +79,16 @@ def main():
     use_net = meta.get("env") == "net"
     seed = args.seed if args.seed is not None else int(time.time()) % 100000
 
-    sway = args.sway_deg if args.sway_deg is not None else meta.get("sway_deg")
-    # same episode mix as the run trained with (older runs: always front -> back, usual lean)
-    mix = {k: meta[k] for k in ("reverse_prob", "lean_flip_prob") if meta.get(k) is not None}
-    if not mix:
-        mix = {"reverse_prob": 0.0, "lean_flip_prob": 0.0}
-    env = HoopNetAviary(seed=seed, sway_deg=sway, **mix) if use_net else HoopFindAviary(seed=seed)
+    # the task the run trained on: its swing, episode mix, laps, net rule and reward
+    # (older runs without an episode mix: always front -> back, usual lean)
+    kw = env_kwargs_from_meta(meta)
+    kw.setdefault("reverse_prob", 0.0)
+    kw.setdefault("lean_flip_prob", 0.0)
+    if args.sway_deg is not None:
+        kw["sway_deg"] = args.sway_deg
+    if kw.get("reward_mode") == "budget":
+        kw["episode_sec"] = 600.0      # no practical cap: show how many passes it strings together
+    env = HoopNetAviary(seed=seed, **kw) if use_net else HoopFindAviary(seed=seed)
     raw = env
     if meta.get("env_variant") == "discrete_vel":
         env = HoopFindDiscreteVel(env)
@@ -138,11 +142,17 @@ def main():
                     time.sleep(lag)
 
         success = bool(info.get("is_success", info.get("success", False))) if use_net else bool(term)
+        budget_mode = use_net and getattr(raw, "reward_mode", "shaped") == "budget"
+        if budget_mode and term:              # endless passes: say why it stopped
+            ended = "net" if info.get("net_ended") else "budget used up"
+        else:
+            ended = ("passed" if success else
+                     "timeout" if trunc and k * dt >= getattr(raw, "EPISODE_LEN_SEC", 1e9) else
+                     "tipped over" if trunc else "ended")
         summary = {"source": "showcase", "summary": True, "success": success,
                    "passes": int(info.get("passes", 0)), "net_hits": net_hits, "rim_hits": rim_hits,
-                   "duration_s": round(k * dt, 2), "ended": "passed" if success else
-                   ("timeout" if trunc and k * dt >= getattr(raw, "EPISODE_LEN_SEC", 1e9) else
-                    "tipped over" if trunc else "ended"),
+                   "duration_s": round(k * dt, 2), "ended": ended,
+                   "score": info.get("score"),
                    "model": model_path.name, "realtime": bool(args.realtime),
                    "reversed": bool(info.get("reversed", False)),
                    "lean_flipped": bool(info.get("lean_flipped", False))}

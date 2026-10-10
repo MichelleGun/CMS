@@ -12,14 +12,32 @@ Compared with hoop_env.HoopFindAviary (a point to reach, no net, no ring geometr
   barely drifts, the bottom swings furthest) and is shoved when the drone clips its rim,
   then swings back. The observation always holds the ring's live pose;
 - success is a *pass through the opening* in the +normal direction, not proximity;
-- the net is a soft boundary: touching it bounces the drone back (small penalty)
-  and the episode continues; so does clipping the ring's rim;
-- the drone always starts on the floor (like the real Tello takeoff).
+- touching the net ends the episode (net_terminate=True, the default: the real drone lands
+  when it hits the net); with net_terminate=False it bounces the drone back with a small
+  penalty and the episode continues. Clipping the ring's rim always bounces and continues;
+- the drone always starts on the floor (like the real Tello takeoff);
+- laps=0 is endless back-and-forth: after each pass the required direction flips, and the
+  next pass only counts once the drone has flown clear of the ring on the exit side.
 
-Observation (78-D, KIN):
-    [kin12, last-15-actions x4 (60), ring_normal (3), hoop_centre - drone_pos (3)]
-Same layout as hoop_env's 75-D vector with the ring normal inserted before the final
-relative vector, so `obs[-3:]` is still "vector to the hoop" for the telemetry code.
+Observation (82-D, KIN):
+    [kin12, last-15-actions x4 (60), ring_normal (3), ring_velocity (3), ring_inner_radius (1),
+     hoop_centre - drone_pos (3)]
+hoop_env's 75-D vector with the ring's normal, live velocity (it swings) and opening size
+inserted before the final relative vector, so `obs[-3:]` is still "vector to the hoop" for the
+telemetry code. (Policies trained before 2026-10-10 evening used a 78-D layout without the
+velocity and radius.)
+
+Reward, two modes (reward_mode):
+- "budget" (MDP v3, used since 2026-10-11): -0.005 per step, +1 per pass, -0.05 per rim clip.
+  Passes never end the episode (endless back-and-forth); it ends when the running total falls
+  to -budget (default -3: 20 s for the first pass, and each pass buys 6.7 s more), when the drone
+  touches the net (that drains what is left of the budget, so the total lands on -budget too),
+  or at the episode_sec safety cap. No shaping: v2's shaping paid the drone for parking in front
+  of the ring.
+- "shaped" (MDP v2, the default for backward compatibility): potential-based shaping towards a
+  waypoint in front of the ring, then one behind it (plus a pull onto the ring's axis on the
+  approach side), a centring-weighted pass bonus, and penalties for the rim, the net and
+  wrong-way crossings.
 
 Action: ActionType.VEL, `[dx, dy, dz, s]` (direction + speed fraction of ~0.25 m/s).
 
@@ -75,6 +93,49 @@ class HoopSpec:
     restitution: float = 0.4            # bounce: fraction of normal speed returned
     min_bounce_speed: float = 0.08      # m/s, so the drone always actually leaves the net
     approach_dist: float = 0.35         # shaping waypoint distance either side of the ring
+    arm_dist: float = 0.28              # laps: fly this far out past the ring before the next pass counts
+
+
+# reward terms (per control step unless noted)
+SHAPING_GAIN = 10.0        # x change in potential (m)
+AXIS_PULL = 1.5            # potential weight of the distance off the ring's axis on the approach side
+AXIS_PULL_LEN = 0.4        # m, how far in front of the ring that pull reaches (Gaussian length)
+TIME_PENALTY = 0.005
+PASS_BONUS = 20.0          # per pass ...
+CENTRE_BONUS = 10.0        # ... plus up to this for a dead-centre one
+RIM_PENALTY = 3.0
+NET_PENALTY = 5.0          # net_terminate=True: touching the net ends the episode
+NET_BOUNCE_PENALTY = 1.0   # net_terminate=False: bounce and carry on
+WRONG_WAY_PENALTY = 5.0
+
+# reward_mode="budget" (MDP v3)
+BUDGET_TIME = 0.005        # per control step (1 per 6.7 s)
+BUDGET_PASS = 1.0
+BUDGET_RIM = 0.05
+BUDGET_NET = 0.1           # the minimum net cost; touching the net also ends the episode at -budget
+REWARD_MODES = ("shaped", "budget")
+
+# the weights above, by name: reward_weights= (and the dashboard) can override any of them per run
+DEFAULT_REWARD_WEIGHTS = {
+    "shaping_gain": SHAPING_GAIN, "axis_pull": AXIS_PULL, "time_penalty": TIME_PENALTY,
+    "pass_bonus": PASS_BONUS, "centre_bonus": CENTRE_BONUS, "rim_penalty": RIM_PENALTY,
+    "net_penalty": NET_PENALTY, "net_bounce_penalty": NET_BOUNCE_PENALTY,
+    "wrong_way_penalty": WRONG_WAY_PENALTY,
+    "budget_time": BUDGET_TIME, "budget_pass": BUDGET_PASS, "budget_rim": BUDGET_RIM,
+    "budget_net": BUDGET_NET,
+}
+
+
+def merge_reward_weights(overrides=None) -> dict:
+    """DEFAULT_REWARD_WEIGHTS with `overrides` merged in (unknown names raise)."""
+    w = dict(DEFAULT_REWARD_WEIGHTS)
+    for k, v in (overrides or {}).items():
+        if k not in w:
+            raise ValueError(f"unknown reward weight '{k}' (known: {', '.join(w)})")
+        w[k] = float(v)
+    return w
+
+OBS_EXTRA = 3 + 3 + 1 + 3  # ring normal, ring velocity, ring radius, ring centre - drone
 
 
 DEFAULT_SPEC = HoopSpec()
@@ -125,23 +186,44 @@ class HoopNetAviary(BaseRLAviary):
                  sway_deg: float = None,
                  carry_start: float = 0.7,
                  reverse_prob: float = 0.5,
-                 lean_flip_prob: float = 0.3):
+                 lean_flip_prob: float = 0.3,
+                 net_terminate: bool = True,
+                 episode_sec: float = None,
+                 reward_mode: str = "shaped",
+                 budget: float = 3.0,
+                 reward_weights: dict = None):
         """start_pos: optional (x, y[, z]) -- only x/y are used, the drone always starts on the
         floor. target_pos: optional ring centre override (jitter on the centre is then off).
         ring_jitter: 0 disables per-episode ring jitter, 1 = full. hoop_radius_scale > 1 widens
         the opening (training curriculum). wind: 0 keeps the ring still within an episode (no
         sway, no shove), 1 = full live wind. sway_deg: largest swing of the ring about its top knot at
         full gust (deg, default spec.sway_tilt_deg). laps > 1 flips the required crossing direction after
-        each pass, so the drone has to fly round and re-enter.
+        each pass, so the drone has to turn round and come back through; laps=0 does that endlessly
+        (only the net, a tip-over or the time limit end the episode).
         carry_start: chance an episode starts where the previous one ended (as if the drone landed
         there), otherwise anywhere on the floor. reverse_prob: chance the ring must be flown through
-        back to front. lean_flip_prob: chance the ring leans the other way (wind holding it over)."""
+        back to front. lean_flip_prob: chance the ring leans the other way (wind holding it over).
+        net_terminate: touching the net ends the episode (else bounce and continue).
+        episode_sec: time limit (s; default 20, or 120 in budget mode where it is only a safety cap).
+        reward_mode: "shaped" or "budget" (see the module docstring). Budget mode always flies
+        endless laps and always ends the episode at the net. budget: the episode ends when its
+        total reward falls to -budget. reward_weights: overrides of DEFAULT_REWARD_WEIGHTS."""
+        if reward_mode not in REWARD_MODES:
+            raise ValueError(f"reward_mode must be one of {REWARD_MODES}")
+        self.reward_mode = reward_mode
+        self.budget = float(budget)
+        self.rw = merge_reward_weights(reward_weights)
+        if reward_mode == "budget":
+            laps, net_terminate = 0, True
+        if episode_sec is None:
+            episode_sec = 120.0 if reward_mode == "budget" else 20.0
         self.ROOM = np.array(room, dtype=float)
-        self.EPISODE_LEN_SEC = 20
+        self.EPISODE_LEN_SEC = float(episode_sec)
         self.spec = spec
         self.ring_jitter = float(ring_jitter)
         self.radius_scale = float(hoop_radius_scale)
         self.laps = int(laps)
+        self.net_terminate = bool(net_terminate)
         self.wind = float(wind)
         self.sway_deg = float(spec.sway_tilt_deg if sway_deg is None else sway_deg)
         self.carry_start = float(carry_start)
@@ -238,10 +320,13 @@ class HoopNetAviary(BaseRLAviary):
         self.push_off = np.zeros(3)
         self._push_vel = np.zeros(3)
         self._update_ring(0.0)
+        self.ring_vel = np.zeros(3)
 
     def _update_ring(self, dt):
-        """Advance the ring's live pose by dt seconds: wind sway + the damped shove-back."""
+        """Advance the ring's live pose by dt seconds: wind sway + the damped shove-back.
+        Also sets ring_vel, the centre's velocity over that step (kept as is when dt == 0)."""
         s, k = self.spec, self.wind
+        prev_c = getattr(self, "ring_c", None)
         self._ring_t += dt
         if dt > 0 and k > 0:
             w, z = self._sway_w, s.push_damping
@@ -260,6 +345,8 @@ class HoopNetAviary(BaseRLAviary):
         self.ring_knot = pivot + k * self.push_off    # where the rope is tied (the shove moves it too)
         self.ring_c = self.ring_knot + rotate(self.ring_c0 - top0, self._wind_axis, ang)
         self.ring_n = rotate(self.ring_n0, self._wind_axis, ang)
+        if dt > 0 and prev_c is not None:
+            self.ring_vel = (self.ring_c - prev_c) / dt
         # kept so the dashboard / legacy code can read the "target" like HoopFindAviary
         self.TARGET_POS = self.ring_c
 
@@ -305,6 +392,10 @@ class HoopNetAviary(BaseRLAviary):
         self._prev_pos = None
         self._prev_s = 0.0
         self._prev_phase = 0
+        self._prev_phi = 0.0
+        self._armed = True           # the next forward crossing counts as a pass
+        self._net_end = False        # net_terminate: the net was touched this episode
+        self.score = 0.0             # running total of this episode's reward
         self.phase = 0
 
     ################################################################################
@@ -334,16 +425,20 @@ class HoopNetAviary(BaseRLAviary):
         base = super()._observationSpace()
         room_tile = np.tile(self.ROOM, (self.NUM_DRONES, 1))
         ones = np.ones((self.NUM_DRONES, 3))
-        lo = np.hstack([base.low, -ones, -room_tile])
-        hi = np.hstack([base.high, ones, room_tile])
+        one = np.ones((self.NUM_DRONES, 1))
+        lo = np.hstack([base.low, -ones, -2 * ones, 0 * one, -room_tile])
+        hi = np.hstack([base.high, ones, 2 * ones, 0.5 * one, room_tile])
         return spaces.Box(low=lo, high=hi, dtype=np.float32)
 
     def _computeObs(self):
         base = super()._computeObs()
         pos = np.array([self._getDroneStateVector(i)[0:3] for i in range(self.NUM_DRONES)])
         rel = self.ring_c - pos
-        normal = np.tile(self.ring_n * self._dir, (self.NUM_DRONES, 1))
-        return np.hstack([base, normal, rel]).astype(np.float32)
+        nd = self.NUM_DRONES
+        normal = np.tile(self.ring_n * self._dir, (nd, 1))
+        ring_vel = np.tile(self.ring_vel, (nd, 1))
+        radius = np.full((nd, 1), self.inner_radius)
+        return np.hstack([base, normal, ring_vel, radius, rel]).astype(np.float32)
 
     ################################################################################
     # contact, pass-through and reward bookkeeping (once per control step)
@@ -386,7 +481,10 @@ class HoopNetAviary(BaseRLAviary):
         if self._fresh:                       # first update after a (re)set: just seed the state
             self._fresh = False
             d = pos - c
-            self._prev_pos, self._prev_s, self._prev_phase = pos.copy(), float(d @ n0), 0
+            phase = self._phase(pos, c, n0)
+            self._prev_pos, self._prev_s, self._prev_phase = pos.copy(), float(d @ n0), phase
+            self._prev_phi = self._potential(pos, c, n0, phase)
+            self.phase = phase
             self._ev, self._reward = ev, 0.0
             return
 
@@ -398,12 +496,17 @@ class HoopNetAviary(BaseRLAviary):
         prev_s = float((self._prev_pos - c) @ n0)
         crossed_fwd = (self._dir > 0 and prev_s < 0 <= s) or (self._dir < 0 and prev_s > 0 >= s)
         crossed_back = (self._dir > 0 and prev_s > 0 >= s) or (self._dir < 0 and prev_s < 0 <= s)
+        r_ok = self.inner_radius - sp.drone_radius        # clear opening for the drone's centre
+        r_cross = r_ok
         if crossed_fwd or crossed_back:
             t = prev_s / (prev_s - s)
             cp = self._prev_pos + t * (pos - self._prev_pos) - c
             r_cross = np.linalg.norm(cp - (cp @ n0) * n0)
-            if r_cross < self.inner_radius - sp.drone_radius:
-                ev["passed" if crossed_fwd else "wrong"] = True
+            if r_cross < r_ok:
+                if crossed_back:
+                    ev["wrong"] = True
+                elif self._armed:                 # laps: not until it has flown clear after the last pass
+                    ev["passed"] = True
 
         # ---- net: soft walls on x, y and the top (the floor is the physical plane) ----
         lim = np.array([self.ROOM[0] / 2, self.ROOM[1] / 2, self.ROOM[2]]) - sp.net_margin
@@ -445,29 +548,84 @@ class HoopNetAviary(BaseRLAviary):
         self.rim_contacts += ev["rim"]
         self.wrong_way += ev["wrong"]
         d = pos - c
-        n_eff = n0 * self._dir
-        s_eff = float(d @ n_eff)
-        r_lat = np.linalg.norm(d - (d @ n0) * n0)
-        wp = sp.approach_dist
-        target = c - n_eff * wp if self._prev_phase == 0 else c + n_eff * wp
-        progress = np.linalg.norm(self._prev_pos - target) - np.linalg.norm(pos - target)
-        reward = 10.0 * progress - 0.005
-        if -0.6 < s_eff < 0:
-            reward -= 0.05 * r_lat                         # line up with the opening
-        if ev["net"] or ev["rim"]:
-            reward -= 1.0
-        if ev["wrong"]:
-            reward -= 5.0
-        phase = int(-0.45 < s_eff < 0.05 and r_lat < 1.2 * self.inner_radius)
+        if not self._armed and float(d @ n0) * self._dir < -sp.arm_dist:
+            self._armed = True                             # flown clear: the next pass counts
+        phase = self._phase(pos, c, n0)
+        phi = self._potential(pos, c, n0, phase)
+        if self.reward_mode == "budget":
+            reward = self._budget_reward(ev)
+        else:
+            reward = self._shaped_reward(ev, phi, r_cross, r_ok)
         if ev["passed"]:
-            reward += 20.0
             self.passes += 1
-            if self.passes < self.laps:                    # lap mode: now come back through
+            if self.laps == 0 or self.passes < self.laps:  # lap mode: turn round and come back through
                 self._dir = -self._dir
-                phase = 0
+                self._armed = False
+                phase = self._phase(pos, c, n0)
+                phi = self._potential(pos, c, n0, phase)   # the shaping restarts for the new leg
+        self.score += reward
         self.phase = phase
         self._prev_pos, self._prev_s, self._prev_phase = pos.copy(), float(d @ n0), phase
+        self._prev_phi = phi
         self._ev, self._reward = ev, float(reward)
+
+    def _budget_reward(self, ev):
+        """MDP v3: time, passes and rim clips only. Touching the net ends the episode and
+        costs whatever budget is left (at least BUDGET_NET), so it is never cheaper than waiting."""
+        w = self.rw
+        reward = -w["budget_time"]
+        if ev["rim"]:
+            reward -= w["budget_rim"]
+        if ev["passed"]:
+            reward += w["budget_pass"]
+        if ev["net"]:
+            self._net_end = True
+            reward = min(reward - w["budget_net"], -self.budget - self.score)
+        return reward
+
+    def _shaped_reward(self, ev, phi, r_cross, r_ok):
+        """MDP v2: potential-based shaping plus pass bonus and penalties."""
+        # potential-based shaping: summed over an episode it is phi_end - phi_start, so flying
+        # in circles (or in and out of a phase) earns nothing
+        w = self.rw
+        reward = w["shaping_gain"] * (phi - self._prev_phi) - w["time_penalty"]
+        if ev["net"]:
+            if self.net_terminate:
+                reward -= w["net_penalty"]
+                self._net_end = True
+            else:
+                reward -= w["net_bounce_penalty"]
+        if ev["rim"]:
+            reward -= w["rim_penalty"]
+        if ev["wrong"]:
+            reward -= w["wrong_way_penalty"]
+        if ev["passed"]:
+            reward += w["pass_bonus"] + w["centre_bonus"] * max(0.0, 1.0 - r_cross / r_ok)
+        return reward
+
+    def _phase(self, pos, c, n0):
+        """1 once the drone is lined up just in front of the opening (aim behind the ring), else 0
+        (aim at the approach point in front). Always 0 until a lap has re-armed."""
+        if not self._armed:
+            return 0
+        d = pos - c
+        s_eff = float(d @ n0) * self._dir
+        r_lat = np.linalg.norm(d - (d @ n0) * n0)
+        return int(-0.45 < s_eff < 0.05 and r_lat < 1.2 * self.inner_radius)
+
+    def _potential(self, pos, c, n0, phase):
+        """Shaping potential (m, <= 0): minus the distance still to fly via the approach point in
+        front of the ring to the one behind it, minus a pull onto the ring's axis near its plane."""
+        wp = self.spec.approach_dist
+        n_eff = n0 * self._dir
+        d = pos - c
+        s_eff = float(d @ n_eff)
+        r_lat = np.linalg.norm(d - (d @ n0) * n0)
+        if phase == 0:
+            phi = -(np.linalg.norm(pos - (c - n_eff * wp)) + 2 * wp)
+        else:
+            phi = -np.linalg.norm(pos - (c + n_eff * wp))
+        return float(phi - self.rw["axis_pull"] * np.exp(-(s_eff / AXIS_PULL_LEN) ** 2) * r_lat)
 
     ################################################################################
     # reward / termination
@@ -475,8 +633,15 @@ class HoopNetAviary(BaseRLAviary):
     def _computeReward(self):
         return self._reward
 
+    def _success(self):
+        return self.passes >= max(1, self.laps)
+
     def _computeTerminated(self):
-        return self.passes >= self.laps
+        if self._net_end:
+            return True
+        if self.reward_mode == "budget":
+            return self.score <= -self.budget + 1e-9
+        return self.laps > 0 and self.passes >= self.laps
 
     def _computeTruncated(self):
         state = self._getDroneStateVector(0)
@@ -485,13 +650,24 @@ class HoopNetAviary(BaseRLAviary):
         return self.step_counter / self.PYB_FREQ > self.EPISODE_LEN_SEC
 
     def _computeInfo(self):
-        return {"passes": self.passes, "success": self.passes >= self.laps,
-                "is_success": self.passes >= self.laps,       # read by SB3's EvalCallback
+        return {"passes": self.passes, "success": self._success(),
+                "is_success": self._success(),                # read by SB3's EvalCallback
+                "net_ended": bool(self._net_end), "score": float(self.score),
                 "net_contact": bool(self._ev["net"]), "rim_contact": bool(self._ev["rim"]),
                 "net_contacts": self.net_contacts, "rim_contacts": self.rim_contacts,
                 "wrong_way": self.wrong_way, "phase": self.phase,
                 "hoop_centre": self.ring_c.tolist(), "hoop_normal": (self.ring_n * self._dir).tolist(),
                 "hoop_radius": float(self.inner_radius),
-                "wind": float(self.wind * self._gust), "push_offset": float(np.linalg.norm(self.push_off)),
+                "wind": float(self.wind * self._gust), "wind_scale": float(self.wind),
+                "swing_deg": float(self.wind * self._gust * self.sway_deg),
+                "swing_period_s": float(2 * np.pi / self._sway_w), "push_offset": float(np.linalg.norm(self.push_off)),
                 "reversed": bool(self._start_dir < 0), "lean_flipped": bool(self._lean_flipped),
                 "carried_start": bool(getattr(self, "carried_start", False))}
+
+
+def env_kwargs_from_meta(meta: dict) -> dict:
+    """HoopNetAviary constructor kwargs for the settings a run trained with (its meta.json), so a
+    replay or showcase flies the same task. Missing keys (older runs) keep the defaults."""
+    keys = ("sway_deg", "reverse_prob", "lean_flip_prob", "carry_start", "laps", "net_terminate",
+            "episode_sec", "reward_mode", "budget", "reward_weights")
+    return {k: meta[k] for k in keys if meta.get(k) is not None}

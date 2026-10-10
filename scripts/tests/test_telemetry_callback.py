@@ -69,3 +69,61 @@ def test_curriculum_shrinks_over_its_own_horizon():
     for t, want in [(0, 1.5), (500, 1.25), (1000, 1.0), (10 ** 9, 1.0)]:
         cb.num_timesteps = t
         assert cb._scale() == want
+
+
+def test_82d_obs_reads_normal_and_radius(tmp_path):
+    cb = TelemetryCallback(run_dir=tmp_path, hz=0.001)
+    cb.num_timesteps = 0
+    obs = np.zeros(82, dtype=np.float32)
+    obs[-10:-7] = [1.0, 0.0, 0.0]        # normal
+    obs[-7:-4] = [0.1, 0.0, 0.0]         # ring velocity
+    obs[-4] = 0.15                       # ring radius
+    obs[-3:] = [0.0, 0.0, 1.0]
+    _step(cb, obs, {}, False)
+    rec = json.loads((tmp_path / "telemetry.jsonl").read_text().splitlines()[0])
+    assert rec["hoop_normal"] == [1.0, 0.0, 0.0]
+    assert abs(rec["hoop_radius"] - 0.15) < 1e-6
+
+
+def test_wind_curriculum_ramps_from_calm():
+    from train_hoop_multi import WindCurriculumCallback
+    cb = WindCurriculumCallback(horizon=1000)
+    for t, want in [(0, 0.0), (500, 0.5), (1000, 1.0), (10 ** 9, 1.0)]:
+        cb.num_timesteps = t
+        assert cb._scale() == want
+
+
+def test_eval_callback_collects_passes_per_episode(tmp_path):
+    from telemetry_callback import DashboardEvalCallback
+
+    class _Env:
+        num_envs = 1
+    cb = DashboardEvalCallback.__new__(DashboardEvalCallback)
+    cb._is_success_buffer = []
+    cb._passes_buffer = []
+    for passes, done in ((0, False), (3, True), (5, True)):
+        cb._log_success_callback({"done": done, "info": {"passes": passes, "is_success": passes > 0}}, {})
+    assert cb._passes_buffer == [3, 5] and cb._is_success_buffer == [True, True]
+
+
+class _FakeVec:
+    def __init__(self, state):
+        self.state = state
+
+    def env_method(self, name, *args, indices=None):
+        assert name == "telemetry" and indices == [0]
+        return [self.state]
+
+
+def test_state_method_feeds_pose_for_other_envs(tmp_path):
+    state = {"pos": [0.1, 0.2, 0.3], "rpy": [0, 0, 1.0], "target": [0.5, 0.0, 1.2],
+             "hoop_normal": [1.0, 0.0, 0.0], "hoop_radius": 0.15}
+    cb = TelemetryCallback(run_dir=tmp_path, hz=0.001, state_method="telemetry", ctrl_hz=15)
+    cb.num_timesteps = 0
+    fake = _FakeVec(state)
+    cb.model = type("M", (), {"get_env": lambda self: fake})()    # training_env reads model.get_env()
+    _step(cb, np.zeros(40, dtype=np.float32), {"is_success": True, "passes": 1}, True)
+    rec = json.loads((tmp_path / "telemetry.jsonl").read_text().splitlines()[-1])
+    assert rec["pos"] == state["pos"] and rec["target"] == state["target"]
+    assert rec["hoop_radius"] == 0.15 and rec["ctrl_hz"] == 15
+    assert rec["done"] and rec["success"] and rec["passes"] == 1

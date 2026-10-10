@@ -37,9 +37,11 @@ def _expert(env):
 
 def test_obs_shape_and_layout(env):
     obs, _ = env.reset(seed=1)
-    assert obs.shape == (1, 78)
+    assert obs.shape == (1, 82)
     assert np.allclose(obs[0, -3:], env.ring_c - env._getDroneStateVector(0)[:3], atol=1e-5)
-    assert np.isclose(np.linalg.norm(obs[0, -6:-3]), 1.0, atol=1e-5)
+    assert np.isclose(np.linalg.norm(obs[0, -10:-7]), 1.0, atol=1e-5)
+    assert np.allclose(obs[0, -7:-4], env.ring_vel, atol=1e-5)
+    assert np.isclose(obs[0, -4], env.inner_radius, atol=1e-6)
 
 
 @pytest.mark.parametrize("seed", range(8))
@@ -67,7 +69,8 @@ def test_start_override_is_clamped_to_floor():
     e.close()
 
 
-def test_net_bounce_keeps_drone_inside(env):
+def test_net_bounce_keeps_drone_inside():
+    env = HoopNetAviary(seed=0, net_terminate=False)
     env.reset(seed=2)
     for direction in ([0, 0, 1, 1], [1, 0, 0, 1], [-1, 0, 0, 1], [0, 1, 0, 1], [0, -1, 0, 1]):
         env.reset(seed=2)
@@ -81,12 +84,21 @@ def test_net_bounce_keeps_drone_inside(env):
                 break
         if direction[2] == 1:
             assert hit
+    env.close()
 
 
-def test_ceiling_contact_is_penalised_not_terminal(env):
+def test_ceiling_contact_is_penalised_not_terminal_without_net_terminate():
+    env = HoopNetAviary(seed=0, net_terminate=False)
     env.reset(seed=3)
     info, te, tr = _fly(env, lambda e: np.array([[0, 0, 1, 1.0]]), 450)
     assert info["net_contacts"] > 0 and not te
+    env.close()
+
+
+def test_net_contact_ends_the_episode_by_default(env):
+    env.reset(seed=3)
+    info, te, tr = _fly(env, lambda e: np.array([[0, 0, 1, 1.0]]), 450)
+    assert te and info["net_ended"] and info["net_contacts"] == 1 and not info["success"]
 
 
 def test_expert_passes_through_ring(env):
@@ -287,7 +299,7 @@ def test_reversed_episodes_flip_the_required_direction():
     e = HoopNetAviary(seed=0, reverse_prob=1.0, wind=0.0)
     obs, info = e.reset(seed=2)
     assert e._dir == -1.0
-    assert np.allclose(obs[0, -6:-3], -e.ring_n, atol=1e-5)
+    assert np.allclose(obs[0, -10:-7], -e.ring_n, atol=1e-5)
     wins = 0
     for seed in range(3):
         e.reset(seed=seed)
@@ -320,3 +332,198 @@ def test_variety_probabilities():
     assert abs(rev / n - 0.5) < 0.07
     assert abs(flip / n - 0.3) < 0.07
     e.close()
+
+
+def test_ring_velocity_in_obs():
+    e = HoopNetAviary(seed=0, wind=0.0)
+    e.reset(seed=4)
+    for _ in range(10):
+        obs, *_ = e.step(np.array([[0, 0, 0, 0.0]]))
+    assert np.allclose(obs[0, -7:-4], 0.0, atol=1e-6)          # still ring
+    e.close()
+    e = HoopNetAviary(seed=0, wind=1.0)
+    e.reset(seed=5)
+    e._gust = 1.0
+    prev_c, speeds = e.ring_c.copy(), []
+    for _ in range(60):
+        obs, *_ = e.step(np.array([[0, 0, 0, 0.0]]))
+        assert np.allclose(obs[0, -7:-4], (e.ring_c - prev_c) * e.CTRL_FREQ, atol=1e-4)
+        prev_c = e.ring_c.copy()
+        speeds.append(np.linalg.norm(obs[0, -7:-4]))
+    assert max(speeds) > 0.02                                   # swinging ring: seen moving
+    e.close()
+
+
+def _synthetic_step(env, pos):
+    env._prev_pos = env.pos[0].copy()
+    env.pos[0] = pos
+    env.vel[0] = 0
+    env._post_physics()
+    return env._reward, dict(env._ev)
+
+
+def test_shaping_telescopes_over_a_closed_path():
+    """Fly a closed loop that never crosses the opening: shaping sums to ~zero (only the time
+    penalty remains), so circling cannot farm reward."""
+    e = HoopNetAviary(seed=0, wind=0.0)
+    e.reset(seed=0)
+    e._dir = 1.0
+    n, c = e.ring_n, e.ring_c
+    u = np.cross(n, [0, 0, 1.0]); u /= np.linalg.norm(u)
+    start = c - n * 0.6 + u * 0.05
+    e.pos[0] = start
+    e._fresh = True
+    e._post_physics()                                           # seed the potential here
+    path = [c - n * s + u * l for s, l in [(0.4, 0.1), (0.3, 0.0), (0.2, 0.05), (0.45, 0.2), (0.6, 0.3)]]
+    total = sum(_synthetic_step(e, p)[0] for p in path + [start])
+    assert abs(total + 6 * 0.005) < 1e-6
+    e.close()
+
+
+def test_endless_laps_need_rearming():
+    """laps=0: a pass flips the direction; dithering straight back through does not count until
+    the drone has flown clear on the exit side, and the episode never terminates on passes."""
+    e = HoopNetAviary(seed=0, laps=0, wind=0.0, reverse_prob=0.0)
+    e.reset(seed=0)
+    e._dir = 1.0
+    n, c = e.ring_n, e.ring_c
+    e.pos[0] = c - n * 0.1
+    e._fresh = True
+    e._post_physics()
+    _, ev = _synthetic_step(e, c + n * 0.05)                    # pass 1
+    assert ev["passed"] and e.passes == 1 and e._dir == -1.0 and not e._armed
+    _, ev = _synthetic_step(e, c - n * 0.05)                    # straight back: not armed
+    assert not ev["passed"] and e.passes == 1
+    _, ev = _synthetic_step(e, c + n * 0.05)                    # and through again the old way
+    assert ev["wrong"]
+    _synthetic_step(e, c + n * 0.2)
+    _synthetic_step(e, c + n * 0.4)                             # flown clear: re-armed
+    assert e._armed
+    _synthetic_step(e, c + n * 0.1)
+    _, ev = _synthetic_step(e, c - n * 0.05)                    # pass 2, back to front
+    assert ev["passed"] and e.passes == 2 and e._dir == 1.0
+    assert not e._computeTerminated() and e._computeInfo()["success"]
+    e.close()
+
+
+def test_centred_pass_pays_more(env):
+    env.set_wind(0.0)
+    rewards = []
+    for lateral in (0.0, 0.06):
+        env.reset(seed=0)
+        env._dir = 1.0
+        n, c = env.ring_n, env.ring_c
+        u = np.cross(n, [0, 0, 1.0]); u /= np.linalg.norm(u)
+        env.pos[0] = c - n * 0.05 + u * lateral
+        env._fresh = True
+        env._post_physics()
+        r, ev = _synthetic_step(env, c + n * 0.05 + u * lateral)
+        assert ev["passed"]
+        rewards.append(r)
+    assert rewards[0] > rewards[1] + 3
+    env.set_wind(1.0)
+
+
+# ---------------------------------------------------------------- budget reward (MDP v3)
+
+def _budget_env(**kw):
+    e = HoopNetAviary(seed=0, wind=0.0, reward_mode="budget", reverse_prob=0.0, **kw)
+    e.reset(seed=0)
+    return e
+
+
+def test_budget_mode_forces_endless_laps_and_net_end():
+    e = HoopNetAviary(seed=0, reward_mode="budget", laps=1, net_terminate=False)
+    assert e.laps == 0 and e.net_terminate and e.EPISODE_LEN_SEC == 120.0 and e.budget == 3.0
+    e.close()
+    with pytest.raises(ValueError):
+        HoopNetAviary(seed=0, reward_mode="nope")
+
+
+def test_budget_hovering_runs_out_at_minus_budget():
+    e = _budget_env(budget=1.0)
+    total, steps = 0.0, 0
+    for _ in range(400):
+        _, r, te, tr, info = e.step(np.array([[0, 0, 0, 0.0]]))     # sit on the floor
+        total += r
+        steps += 1
+        if te or tr:
+            break
+    assert te and not tr
+    assert steps == 200                                         # 1 / 0.005
+    assert abs(total + 1.0) < 1e-6 and abs(info["score"] + 1.0) < 1e-6
+    e.close()
+
+
+def test_budget_pass_rim_and_net():
+    e = _budget_env()
+    n, c = e.ring_n, e.ring_c
+    e.pos[0] = c - n * 0.1
+    e._fresh = True
+    e._post_physics()
+    r, ev = _synthetic_step(e, c + n * 0.05)                    # a pass: +1, keeps going
+    assert ev["passed"] and abs(r - (1.0 - 0.005)) < 1e-9
+    assert not e._computeTerminated() and e.passes == 1 and abs(e.score - 0.995) < 1e-9
+    u = np.cross(n, [0, 0, 1.0]); u /= np.linalg.norm(u)
+    e.quat[0] = [0, 0, 0, 1]
+    r, ev = _synthetic_step(e, c + u * (e.inner_radius + e.spec.tube_radius))   # on the rim
+    assert ev["rim"] and abs(r - (-0.005 - 0.05)) < 1e-9
+    score_before = e.score
+    r, ev = _synthetic_step(e, np.array([0.99, 0.0, 1.0]))      # into the side net
+    assert ev["net"] and e._computeTerminated()
+    assert abs(r - (-3.0 - score_before)) < 1e-9 and abs(e.score + 3.0) < 1e-9
+    e.close()
+
+
+def test_env_kwargs_from_meta():
+    from hoop_net_env import env_kwargs_from_meta
+    meta = {"sway_deg": 35.0, "reverse_prob": 0.5, "lean_flip_prob": 0.3, "laps": 0,
+            "net_terminate": True, "episode_sec": 120.0, "reward_mode": "budget", "budget": 3.0,
+            "algo": "ppo", "carry_start": None}
+    kw = env_kwargs_from_meta(meta)
+    assert kw == {"sway_deg": 35.0, "reverse_prob": 0.5, "lean_flip_prob": 0.3, "laps": 0,
+                  "net_terminate": True, "episode_sec": 120.0, "reward_mode": "budget", "budget": 3.0}
+    e = HoopNetAviary(seed=0, **kw)
+    assert e.reward_mode == "budget" and e.sway_deg == 35.0
+    e.close()
+    assert env_kwargs_from_meta({"sway_deg": 20.0}) == {"sway_deg": 20.0}     # older runs
+
+
+def test_reward_weights_default_to_the_constants_and_reject_unknown_names():
+    import hoop_net_env as hn
+    w = hn.merge_reward_weights()
+    assert w["pass_bonus"] == hn.PASS_BONUS and w["rim_penalty"] == hn.RIM_PENALTY
+    assert w["budget_pass"] == hn.BUDGET_PASS
+    assert hn.merge_reward_weights({"pass_bonus": 30})["pass_bonus"] == 30.0
+    with pytest.raises(ValueError):
+        hn.merge_reward_weights({"no_such_term": 1})
+
+
+def test_reward_weights_change_the_reward(env):
+    ev = {"net": False, "rim": False, "wrong": False, "passed": True}
+    default = env._shaped_reward(ev, env._prev_phi, 0.0, 0.1)
+    e = HoopNetAviary(seed=0, reward_weights={"pass_bonus": 50.0, "time_penalty": 0.0})
+    try:
+        e.reset(seed=0)
+        custom = e._shaped_reward(ev, e._prev_phi, 0.0, 0.1)
+    finally:
+        e.close()
+    import hoop_net_env as hn
+    assert default == pytest.approx(hn.PASS_BONUS + hn.CENTRE_BONUS - hn.TIME_PENALTY)
+    assert custom == pytest.approx(50.0 + hn.CENTRE_BONUS)
+
+
+def test_info_reports_this_episodes_swing(env):
+    env.set_wind(0.5)
+    env.reset(seed=4)
+    _, _, _, _, info = env.step(np.zeros((1, 4)))
+    assert info["wind_scale"] == 0.5
+    assert info["swing_deg"] == pytest.approx(0.5 * env._gust * env.sway_deg)
+    assert 1.5 <= info["swing_period_s"] <= 3.0
+    env.set_wind(1.0)
+
+
+def test_env_kwargs_from_meta_carries_the_reward_weights():
+    from hoop_net_env import env_kwargs_from_meta
+    kw = env_kwargs_from_meta({"reward_mode": "shaped", "reward_weights": {"pass_bonus": 25.0}})
+    assert kw["reward_weights"] == {"pass_bonus": 25.0}

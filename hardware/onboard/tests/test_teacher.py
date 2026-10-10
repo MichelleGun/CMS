@@ -20,8 +20,8 @@ for p in (HW, CMS / "scripts"):
 # flake8: noqa: E402
 from imitation.record_demo import DemoRecorder, load_demos, parse_source_weights, sample_weights
 from onboard import spec
-from onboard.make_teacher_demos import (PYB_SPEED_LIMIT, TEACHER_OBS_DIM, SimTeacher,
-                                        _rotation_between)
+from onboard.make_teacher_demos import (LEGACY_TEACHER_OBS_DIM, PYB_SPEED_LIMIT, TEACHER_OBS_DIM,
+                                        SimTeacher, _rotation_between)
 from onboard.sim import MAX_SPEED, OnboardSim
 
 
@@ -32,8 +32,8 @@ class _Space:
 
 class FakeModel:
     """Records the observation it is given and returns a fixed action."""
-    def __init__(self, action=(1.0, 0.0, 0.0, 1.0)):
-        self.observation_space = _Space((1, TEACHER_OBS_DIM))
+    def __init__(self, action=(1.0, 0.0, 0.0, 1.0), width=TEACHER_OBS_DIM):
+        self.observation_space = _Space((1, width))
         self.action = np.asarray(action, dtype=np.float32).reshape(1, 4)
         self.seen = None
 
@@ -50,12 +50,12 @@ def _sim(seed=3):
 
 def test_world_frame_obs_matches_hoopnetaviary_layout():
     """Field order must be HoopNetAviary._computeObs's: kin 12 (pos, rpy, vel, ang vel), a
-    15-step action buffer, then the pass-direction normal and ring - pos."""
+    15-step action buffer, then the pass-direction normal, ring velocity, ring radius, ring - pos."""
     t = SimTeacher(FakeModel(), frame="world")
     sim = _sim()
     sim.vel = np.array([0.1, -0.05, 0.02])
     o = t.teacher_obs(sim).reshape(-1)
-    assert o.shape == (78,)
+    assert o.shape == (82,)
     assert np.allclose(o[0:3], sim.pos)
     assert np.allclose(o[3:6], 0) and np.allclose(o[9:12], 0)
     assert np.allclose(o[6:9], sim.vel)
@@ -63,6 +63,16 @@ def test_world_frame_obs_matches_hoopnetaviary_layout():
     n = o[72:75]
     assert np.isclose(np.linalg.norm(n), 1)
     assert np.dot(sim.ring.centre - sim.pos, n) > 0          # it points the way to fly through
+    assert np.allclose(o[75:78], 0)                         # the onboard ring hangs still
+    assert np.isclose(o[78], sim.ring.radius)
+    assert np.allclose(o[79:82], sim.ring.centre - sim.pos, atol=1e-6)
+
+
+def test_legacy_78d_teacher_still_loads():
+    t = SimTeacher(FakeModel(width=LEGACY_TEACHER_OBS_DIM), frame="world")
+    sim = _sim()
+    o = t.teacher_obs(sim).reshape(-1)
+    assert o.shape == (78,)
     assert np.allclose(o[75:78], sim.ring.centre - sim.pos, atol=1e-6)
 
 
@@ -80,7 +90,9 @@ def test_obs_layout_against_the_real_env():
         assert np.allclose(o[0:3], st[0:3], atol=1e-5)
         assert np.allclose(o[6:9], st[10:13], atol=1e-5)
         assert np.allclose(o[72:75], env.ring_n * env._dir, atol=1e-5)
-        assert np.allclose(o[75:78], env.ring_c - st[0:3], atol=1e-5)
+        assert np.allclose(o[75:78], env.ring_vel, atol=1e-5)
+        assert np.isclose(o[78], env.inner_radius, atol=1e-6)
+        assert np.allclose(o[79:82], env.ring_c - st[0:3], atol=1e-5)
     finally:
         env.close()
 
@@ -119,8 +131,8 @@ def test_canonical_frame_puts_the_ring_at_the_nominal_pose():
     nominal = ring_normal(DEFAULT_SPEC.normal_yaw_deg, DEFAULT_SPEC.normal_tilt_deg)
     assert np.allclose(o[72:75], nominal, atol=1e-6)
     # the ring is where the teacher was trained to find it, and distances are preserved
-    assert np.allclose(o[0:3] + o[75:78], DEFAULT_SPEC.centre, atol=1e-6)
-    assert np.isclose(np.linalg.norm(o[75:78]), np.linalg.norm(sim.ring.centre - sim.pos), atol=1e-6)
+    assert np.allclose(o[0:3] + o[79:82], DEFAULT_SPEC.centre, atol=1e-6)
+    assert np.isclose(np.linalg.norm(o[79:82]), np.linalg.norm(sim.ring.centre - sim.pos), atol=1e-6)
 
 
 def test_canonical_command_along_the_axis_flies_along_the_real_axis():
