@@ -311,7 +311,7 @@ def main(argv=None):
     ap.add_argument("--dr", type=float, default=0.0,
                     help="domain randomisation strength 0..1 (drone dynamics and calibration, ring "
                          "placement, a swinging ring, detector noise/latency); see onboard/sim.py")
-    ap.add_argument("--sway-deg", type=float, default=15.0,
+    ap.add_argument("--sway-deg", type=float, default=25.0,
                     help="largest swing of the ring on its rope at full wind (deg), with --dr > 0")
     ap.add_argument("--hard-start-p", type=float, default=0.0,
                     help="share of episodes starting behind / beside / below the ring or anywhere, "
@@ -319,6 +319,9 @@ def main(argv=None):
     ap.add_argument("--dr-steps", type=int, default=500_000,
                     help="timesteps over which --dr and --hard-start-p ramp up from 0 (0 = full "
                          "from the start); evaluation is always at full strength")
+    ap.add_argument("--laps", type=int, default=0,
+                    help="passes per episode: 0 = endless back-and-forth (fly through, clear the ring, "
+                         "turn round, come back through), 1 = the episode ends at the first crossing")
     ap.add_argument("--bc-augment", action=argparse.BooleanOptionalAction, default=True,
                     help="mirror half of each demo batch left/right and add small observation noise")
     ap.add_argument("--seed", type=int, default=0)
@@ -373,6 +376,7 @@ def main(argv=None):
         "init_timesteps": None,
         "learning_rate": lr, "critic_warmup_steps": warmup,
         "reward": dict(REWARD_WEIGHTS),        # the onboard MDP, shown on the dashboard
+        "laps": args.laps,
         "robust": {"dr": args.dr, "sway_deg": args.sway_deg, "hard_start_p": args.hard_start_p,
                    "dr_steps": args.dr_steps, "bc_augment": bool(args.bc_augment)},
         "ctrl_hz": spec.CTRL_HZ,
@@ -384,7 +388,7 @@ def main(argv=None):
     }
     _atomic_write_json(run_dir / "meta.json", meta)
 
-    robust = dict(dr=args.dr, sway_deg=args.sway_deg, hard_start_p=args.hard_start_p)
+    robust = dict(dr=args.dr, sway_deg=args.sway_deg, hard_start_p=args.hard_start_p, laps=args.laps)
     ramped = args.dr_steps > 0 and (args.dr > 0 or args.hard_start_p > 0)
     env_kwargs = dict(profile=args.profile, seed=args.seed * 100_000, **robust,
                       ramp=0.0 if ramped else 1.0)

@@ -157,11 +157,15 @@ const Reward = (() => {
   // that pulls the policy towards the demos (strong at first, fading)
   const ONBOARD_TERMS = [
     ["r_passed", "+ through the opening (ends the episode)"],
-    ["r_struck", "into the noodle (ends it)"],
+    ["r_struck", "touched the noodle anywhere (ends it)"],
+    ["w_rim", "- per step at most, as the drone's edge nears the noodle"],
+    ["rim_margin_m", "clearance (m) at which the rim penalty starts"],
     ["r_missed", "past the ring (ends it)"],
     ["r_out_of_cage", "left the cage (ends it)"],
-    ["w_axial", "x metres flown down the ring's axis"],
-    ["w_radial", "x metres closer to the axis (lining up)"],
+    ["w_shape", "x metres progress: to the point in front, then through to the one behind"],
+    ["axis_pull", "x metres off the axis near the ring (inside the shaping)"],
+    ["r_wrong_way", "back through the opening the wrong way (no pass)"],
+    ["arm_dist_m", "laps: fly this far clear before the next pass counts"],
     ["w_time", "- per control step (15 per second)"],
   ];
 

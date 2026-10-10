@@ -29,18 +29,70 @@ def test_randomised_drones_differ_between_episodes():
 
 
 def test_the_ring_swings_on_its_rope():
-    sim = OnboardSim(seed=0, dr=1.0, sway_deg=15)
-    for s in range(50):                                        # an episode with a real gust
+    sim = OnboardSim(seed=0, dr=1.0)
+    for s in range(10):                                        # every windy episode, not a lucky one
         sim.reset(seed=s)
-        if sim._swing["gust"] > 0.6:
-            break
-    centres = []
-    for _ in range(45):                                        # 3 s
-        sim.step([0, 0, 0, 0])
-        centres.append(sim.ring.centre.copy())
-    centres = np.array(centres)
-    assert centres[:, :2].std(axis=0).max() > 0.01             # it moves sideways
-    assert np.all(centres[:, 2] >= sim.ring0.centre[2] - 1e-9)  # a pendulum only rises
+        sim.pos = np.array([-0.9, -0.9, 0.5])                  # out of the ring's way
+        centres = []
+        for _ in range(45):                                    # 3 s, at least one full period
+            sim.step([0, 0, 0, 0])
+            centres.append(sim.ring.centre.copy())
+        centres = np.array(centres)
+        sideways = np.linalg.norm(centres[:, :2] - sim.ring0.centre[:2], axis=1).max()
+        assert sideways > spec.RING_CLEARANCE_M / 2             # matters against the 8 cm budget
+        assert sideways < 0.20
+        assert np.all(centres[:, 2] >= sim.ring0.centre[2] - 1e-9)  # a pendulum only rises
+
+
+def test_a_ring_swinging_past_a_hovering_drone_is_never_a_pass():
+    """Regression: the plane crossing used to compare the drone's side against the ring's
+    PREVIOUS pose, so parking in the opening while the ring swung scored +20 'passes'."""
+    sim = OnboardSim(seed=0, dr=1.0, profile="ideal")
+    for s in range(30):
+        sim.reset(seed=s)
+        sim.profile = PROFILES["ideal"]
+        sim.pos = sim.ring0.centre.copy()                      # parked right in the opening
+        for _ in range(90):
+            sim.step([0, 0, 0, 0])
+            sim.vel[:] = 0.0
+            sim.pos = sim.ring0.centre.copy()
+            assert not sim.outcome.passed
+            if sim.outcome.done:
+                break
+
+
+def test_every_windy_episode_has_a_real_gust():
+    from onboard.sim import SWING_GUST_MIN
+    sim = OnboardSim(seed=0, dr=1.0)
+    for s in range(30):
+        sim.reset(seed=s)
+        assert sim._swing["gust"] >= SWING_GUST_MIN
+
+
+def test_the_swinging_ring_can_hit_a_hovering_drone():
+    """A drone holding still right beside the noodle is struck when the ring swings into it."""
+    hit = tried = 0
+    sim = OnboardSim(seed=0, dr=1.0, profile="ideal", open_plane=True)
+    for s in range(60):
+        sim.reset(seed=s)
+        sim.profile = PROFILES["ideal"]
+        c, n = sim.ring0.centre, sim.ring0.normal
+        u = np.array([-n[1], n[0], 0.0])
+        wind = np.array([np.cos(sim._swing["dir"]), np.sin(sim._swing["dir"]), 0.0])
+        if abs(wind @ u) < 0.8:                                 # swinging in the ring's own plane
+            continue
+        tried += 1
+        side = np.sign(wind @ u)
+        sim.pos = c + side * u * (sim.ring.radius + sim.ring.noodle_m + sim.drone_radius_m + 0.02)
+        sim._prev_side = sim._plane_side()
+        for _ in range(60):
+            sim.step([0, 0, 0, 0])
+            sim.vel[:] = 0.0
+            if sim.outcome.done:
+                break
+        if sim.outcome.struck:
+            hit += 1
+    assert tried >= 5 and hit >= 0.9 * tried
 
 
 @pytest.mark.parametrize("kind", ["behind", "beside", "below", "anywhere"])
@@ -118,7 +170,7 @@ def test_the_search_bonus_is_paid_once():
     sim.yaw_deg = float(sim.ring.normal_deg)
     sim._prev_pose = (sim.pos.copy(), sim.yaw_deg)
     sim._prev_side = sim._plane_side()
-    env._axial, env._radial = env._axial_radial()
+    env._reset_shaping()
     rewards = [env.step(np.zeros(4))[1] for _ in range(10)]
     assert env._found_once                                      # seen within 10 ticks
     assert sum(r > R_FOUND / 2 for r in rewards) == 1           # paid once, on the first sighting

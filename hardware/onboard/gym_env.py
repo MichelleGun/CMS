@@ -31,29 +31,51 @@ except ImportError as e:                                  # pragma: no cover
 from . import spec
 from .obs import ObsBuilder
 from .ring_detect import DetectorParams
-from .sim import OnboardSim, Ring
+from .sim import DEFAULT_SWAY_DEG, OnboardSim, Ring
 
-# Reward weights. Progress terms are per metre, so they are comparable to each other and
-# to the terminal bonuses.
-W_AXIAL = 3.0
-W_RADIAL = 2.5
+# Reward weights. Shaping is potential-based and per metre (summed over an episode it is
+# phi_end - phi_start, so circling or parking earns nothing), comparable to the bonuses.
+# The potential leads to a point in FRONT of the ring, then to one BEHIND it: it keeps rising
+# through the plane, so stopping at the centre or backing out loses what the approach earned.
+W_SHAPE = 3.0
+AXIS_PULL = 1.0         # near the plane, also pulled onto the axis (x radial metres)
+AXIS_PULL_LEN_M = 0.30
+APPROACH_M = 0.30       # the waypoints in front of / behind the ring
 W_TIME = 0.02
 R_PASSED = 20.0
-R_STRUCK = -10.0
+R_STRUCK = -20.0        # as costly as a pass is worth: a real strike usually ends the flight
 R_MISSED = -5.0
 R_OUT_OF_CAGE = -10.0
 # Once, the first time the ring comes into view in an episode that started without it in
 # view (hard starts: behind / beside / below, facing away). Helps the first searches succeed;
 # it can only be earned once per episode, so turning away and back again earns nothing.
 R_FOUND = 0.5
+# Per step, rising from 0 at RIM_MARGIN_M of clearance to W_RIM at touching. Progress shaping
+# alone pays almost the same for ending 5 cm or 12 cm off-axis; this is the gradient away from
+# the noodle that the single terminal strike penalty does not give.
+W_RIM = 0.3
+RIM_MARGIN_M = 0.08
+# Lap mode (laps != 1): a pass does not end the episode. The required direction flips and the
+# next pass only counts once the drone is ARM_DIST_M clear on the exit side -- the same rules as
+# scripts/hoop_net_env.py. Going back through the opening the wrong way (backing out, or turning
+# straight round before re-arming) costs R_WRONG_WAY and counts for nothing.
+R_WRONG_WAY = -5.0
+ARM_DIST_M = 0.25
 
 MAX_EPISODE_SEC = 30.0
 HARD_START_EPISODE_SEC = 40.0      # searching for the ring and repositioning take longer
+LAP_EPISODE_SEC = 60.0             # each turn-round is ~9 s at the 20 deg/s yaw limit
 
 # the weights above, by name (saved in a run's meta.json so the dashboard can show the MDP)
-REWARD_WEIGHTS = {"w_axial": W_AXIAL, "w_radial": W_RADIAL, "w_time": W_TIME,
+REWARD_WEIGHTS = {"w_shape": W_SHAPE, "axis_pull": AXIS_PULL, "w_time": W_TIME,
                   "r_passed": R_PASSED, "r_struck": R_STRUCK, "r_missed": R_MISSED,
-                  "r_out_of_cage": R_OUT_OF_CAGE, "r_found": R_FOUND}
+                  "r_out_of_cage": R_OUT_OF_CAGE, "r_found": R_FOUND,
+                  "w_rim": W_RIM, "rim_margin_m": RIM_MARGIN_M,
+                  "r_wrong_way": R_WRONG_WAY, "arm_dist_m": ARM_DIST_M}
+
+
+def rim_penalty(rim_distance_m: float) -> float:
+    return W_RIM * float(np.clip(1.0 - rim_distance_m / RIM_MARGIN_M, 0.0, 1.0))
 
 
 class OnboardHoopEnv(gym.Env):
@@ -70,27 +92,35 @@ class OnboardHoopEnv(gym.Env):
                  ring: Optional[Ring] = None, detector: Optional[DetectorParams] = None,
                  max_episode_sec: float = MAX_EPISODE_SEC,
                  drone_width_m: float = spec.DRONE_WIDTH_M,
-                 dr: float = 0.0, sway_deg: float = 15.0, hard_start_p: float = 0.0,
-                 ramp: float = 1.0, open_plane: Optional[bool] = None):
+                 dr: float = 0.0, sway_deg: float = DEFAULT_SWAY_DEG, hard_start_p: float = 0.0,
+                 ramp: float = 1.0, open_plane: Optional[bool] = None, laps: int = 1):
         """dr / sway_deg / hard_start_p / ramp / open_plane: robustness, see sim.py. open_plane
-        defaults to on whenever starts can be away from the front runway."""
+        defaults to on whenever starts can be away from the front runway. laps: passes per
+        episode (1: the episode ends at the first crossing; 0: endless back-and-forth)."""
         super().__init__()
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(spec.OBS_DIM,),
                                             dtype=np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, shape=(spec.ACT_DIM,), dtype=np.float32)
+        self.laps = int(laps)
         if open_plane is None:
-            open_plane = hard_start_p > 0
+            open_plane = hard_start_p > 0 or self.laps != 1   # laps: turning round the outside is fine
         self._kwargs = dict(profile=profile, render=render_frames, ring=ring,
                             detector=detector, drone_width_m=drone_width_m, dr=dr,
                             sway_deg=sway_deg, hard_start_p=hard_start_p, ramp=ramp,
                             open_plane=open_plane)
         self._seed = int(seed)
+        if self.laps != 1:
+            max_episode_sec = max(max_episode_sec, LAP_EPISODE_SEC)
         self.base_ticks = self.max_ticks = int(max_episode_sec * spec.CTRL_HZ)
         self.hard_ticks = int(max(max_episode_sec, HARD_START_EPISODE_SEC) * spec.CTRL_HZ)
         self._found_once = True
         self.sim: Optional[OnboardSim] = None
         self.builder = ObsBuilder()
         self._ticks = 0
+        self.passes = 0
+        self._dir = 0            # required crossing direction along the ring normal; 0 = either
+        self._armed = True
+        self._phi = 0.0
 
     # -- geometry ---------------------------------------------------------------------
     def _axial_radial(self):
@@ -98,6 +128,32 @@ class OnboardHoopEnv(gym.Env):
         axial = float(np.dot(d, self.sim.ring.normal))
         radial = float(np.linalg.norm(d - axial * self.sim.ring.normal))
         return axial, radial
+
+    def _leg_dir(self, axial: float) -> int:
+        if self._dir:
+            return self._dir
+        return -1 if axial > 0 else 1                    # towards and through from this side
+
+    def _potential(self) -> float:
+        """Shaping potential (m, <= 0): minus the distance still to fly via the approach point in
+        front of the ring to the exit point behind it, minus a pull onto the axis near the plane.
+        Same structure as scripts/hoop_net_env.py's MDP v2."""
+        c, n = self.sim.ring.centre, self.sim.ring.normal
+        axial, radial = self._axial_radial()
+        d = self._leg_dir(axial)
+        s_eff = axial * d
+        lined_up = (self._armed and -0.45 < s_eff < 0.05
+                    and radial < 1.2 * self.sim.ring.radius)
+        if lined_up:
+            phi = -float(np.linalg.norm(self.sim.pos - (c + n * d * APPROACH_M)))
+        else:
+            phi = -(float(np.linalg.norm(self.sim.pos - (c - n * d * APPROACH_M))) + 2 * APPROACH_M)
+        return phi - AXIS_PULL * radial * float(np.exp(-(axial / AXIS_PULL_LEN_M) ** 2))
+
+    def _reset_shaping(self):
+        """Restart the potential from where the drone is now (a new episode or a new leg), so a
+        change of target pays nothing."""
+        self._phi = self._potential()
 
     # -- gym api ----------------------------------------------------------------------
     def reset(self, *, seed: Optional[int] = None, options=None):
@@ -111,7 +167,13 @@ class OnboardHoopEnv(gym.Env):
         self._ticks = 0
         self.max_ticks = self.base_ticks if self.sim.start_type == "front" else self.hard_ticks
         self._found_once = bool(ring_obs.found)          # in view from the start: no bonus
-        self._axial, self._radial = self._axial_radial()
+        self.passes = 0
+        self._armed = True
+        axial, _ = self._axial_radial()
+        # through the ring from the side it starts on; starting in (or near) the ring's plane,
+        # beside or below it, either direction counts for the first pass
+        self._dir = 0 if abs(axial) < ARM_DIST_M else (-1 if axial > 0 else 1)
+        self._reset_shaping()
         obs = self.builder.build(ring_obs, self.sim.state(), self.sim.t)
         return obs, {}
 
@@ -122,40 +184,61 @@ class OnboardHoopEnv(gym.Env):
         obs = self.builder.build(ring_obs, self.sim.state(), self.sim.t)
         self._ticks += 1
 
-        axial, radial = self._axial_radial()
-        reward = (W_AXIAL * (abs(self._axial) - abs(axial))
-                  + W_RADIAL * (self._radial - radial)
-                  - W_TIME)
-        self._axial, self._radial = axial, radial
+        if not self._armed:
+            axial, _ = self._axial_radial()
+            if axial * self._dir < -ARM_DIST_M:          # flown clear: the next pass counts
+                self._armed = True
+        phi = self._potential()
+        reward = (W_SHAPE * (phi - self._phi)
+                  - W_TIME
+                  - rim_penalty(self.sim.rim_distance()))
+        self._phi = phi
         if ring_obs.found and not self._found_once:
             self._found_once = True
             reward += R_FOUND
 
         terminated = False
-        info = {"phase": "flying", "start_type": self.sim.start_type}
+        info = {"phase": "flying", "start_type": self.sim.start_type, "wrong_way": False}
         o = self.sim.outcome
-        if o.crossed:
-            terminated = True
+        if o.done:
+            info["contact"] = bool(o.contact)
+            info["radial_m"] = o.radial_m
             if o.passed:
-                reward += R_PASSED
-                info["phase"] = "passed"
+                right_way = self.laps == 1 or (self._armed and self._dir in (0, o.direction))
+                if right_way:
+                    reward += R_PASSED
+                    self.passes += 1
+                    info["phase"] = "passed"
+                    terminated = self.laps > 0 and self.passes >= self.laps
+                    if not terminated:                   # turn round and come back through
+                        self._dir = -o.direction
+                        self._armed = False
+                        self._found_once = False         # finding it again is paid again
+                else:
+                    reward += R_WRONG_WAY
+                    info["phase"] = "wrong_way"
+                    info["wrong_way"] = True
+                if not terminated:
+                    self.sim.clear_outcome()
+                    self._reset_shaping()
             elif o.struck:
+                terminated = True
                 reward += R_STRUCK
                 info["phase"] = "struck"
             else:
+                terminated = True
                 reward += R_MISSED
                 info["phase"] = "missed"
-            info["radial_m"] = o.radial_m
-        elif self.sim.out_of_cage():
+        if not terminated and self.sim.out_of_cage():
             terminated = True
             reward += R_OUT_OF_CAGE
             info["phase"] = "out_of_cage"
 
         truncated = (not terminated) and self._ticks >= self.max_ticks
+        info["passes"] = self.passes                     # the dashboard HUD's pass count
         if terminated or truncated:
             # SB3's EvalCallback reads this at episode end: the dashboard's success rate.
-            info["is_success"] = info["phase"] == "passed"
-            info["passes"] = int(info["is_success"])     # the dashboard HUD's pass count
+            info["is_success"] = self.passes >= 1
         info["reversed"] = False
         info["ring_found"] = bool(ring_obs.found)
         info["range_m"] = float(ring_obs.range_m)

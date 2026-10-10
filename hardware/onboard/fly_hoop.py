@@ -890,7 +890,8 @@ def main(argv=None):
                 o = drone.outcome
                 extra = ("  sim: " + ("PASSED" if o.passed else "struck" if o.struck
                                       else "missed" if o.missed else "no crossing")
-                         + (f" radial {o.radial_m:.3f} m" if o.crossed else ""))
+                         + (" (touched)" if o.contact else "")
+                         + (f" radial {o.radial_m:.3f} m" if o.done else ""))
                 res["sim_outcome"] = ("passed" if o.passed else "struck" if o.struck
                                       else "missed" if o.missed else "no_crossing")
             print(f"[flight] {status}  travel {res.get('travel_m')} m"

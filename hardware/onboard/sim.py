@@ -65,8 +65,11 @@ WALL_MARGIN = 0.05     # starts are kept this far inside the net
 # domain randomisation at full strength (dr = 1)
 SPEED_SCALE_DR = 0.25  # rc -> m/s calibration off by up to +-25 % (RC_PER_MPS is UNVERIFIED)
 YAW_SCALE_DR = 0.20
-SWING_TWIST_DEG = 8.0  # a hanging ring also twists on its rope
+SWING_TWIST_DEG = 12.0  # a hanging ring also twists on its rope
 SWING_PERIOD_S = (1.5, 3.0)
+SWING_GUST_MIN = 0.5   # every windy episode really swings
+KNOT_DRIFT_M = 0.04    # the rope's knot moves too, so the whole ring translates
+DEFAULT_SWAY_DEG = 25.0
 LATENCY_P = 0.15       # chance per episode that the camera lags one tick behind
 NOISE_CXY = 0.02       # detector noise (half-frames), size (fraction), axis ratio
 NOISE_MAJOR = 0.05
@@ -142,7 +145,13 @@ class Outcome:
     passed: bool = False          # through the opening
     struck: bool = False          # hit the noodle itself
     missed: bool = False          # crossed the plane outside the ring
+    contact: bool = False         # struck by touching the noodle, not at a plane crossing
     radial_m: float = float("nan")  # distance from the ring axis at the crossing
+    direction: int = 0            # +1: crossed from the -normal side to the +normal side
+
+    @property
+    def done(self) -> bool:
+        return self.crossed or self.struck
 
 
 def _unit(v):
@@ -162,7 +171,7 @@ class OnboardSim:
                  ring_opening_m: float = spec.RING_OPENING_M,
                  ring_noodle_m: float = spec.RING_NOODLE_M,
                  drone_width_m: float = spec.DRONE_WIDTH_M,
-                 dr: float = 0.0, sway_deg: float = 15.0, hard_start_p: float = 0.0,
+                 dr: float = 0.0, sway_deg: float = DEFAULT_SWAY_DEG, hard_start_p: float = 0.0,
                  ramp: float = 1.0, open_plane: bool = False):
         """dr / sway_deg / hard_start_p / ramp: see the module docstring. open_plane: a crossing
         of the ring's plane clear of the noodle (under it, around it) is not an outcome and the
@@ -213,7 +222,8 @@ class OnboardSim:
         self._swing = None
         if dr > 0:
             self._swing = dict(
-                dir=float(self.rng.uniform(0, 2 * np.pi)), gust=float(self.rng.uniform(0, 1)),
+                dir=float(self.rng.uniform(0, 2 * np.pi)),
+                gust=float(self.rng.uniform(SWING_GUST_MIN, 1)),
                 w=2 * np.pi / float(self.rng.uniform(*SWING_PERIOD_S)),
                 ph=float(self.rng.uniform(0, 2 * np.pi)), ph2=float(self.rng.uniform(0, 2 * np.pi)))
             self.profile = sample_profile(self.rng, dr)
@@ -319,7 +329,8 @@ class OnboardSim:
         twist = k * SWING_TWIST_DEG * math.sin(0.77 * sw["w"] * self.t + sw["ph2"])
         arm = self.ring0.opening_m / 2.0 + self.ring0.noodle_m      # knot -> centre
         s = np.array([math.cos(sw["dir"]), math.sin(sw["dir"]), 0.0])
-        c = (self.ring0.centre + arm * math.sin(ang) * s
+        knot = k * KNOT_DRIFT_M * math.sin(sw["w"] * self.t + sw["ph"] + math.pi / 2)
+        c = (self.ring0.centre + (arm * math.sin(ang) + knot) * s
              + np.array([0.0, 0.0, arm * (1.0 - math.cos(ang))]))
         self.ring = replace(self.ring0, centre=c, normal_deg=self.ring0.normal_deg + twist)
 
@@ -338,10 +349,34 @@ class OnboardSim:
     def _plane_side(self) -> float:
         return float(np.dot(self.pos - self.ring.centre, self.ring.normal))
 
+    def rim_distance(self) -> float:
+        """Gap from the drone's edge to the noodle's surface (m); <= 0 is contact. The noodle
+        is a torus: centre circle radius + noodle/2, tube radius noodle/2."""
+        d = self.pos - self.ring.centre
+        n = self.ring.normal
+        axial = float(np.dot(d, n))
+        radial = float(np.linalg.norm(d - axial * n))
+        tube = self.ring.noodle_m / 2.0
+        to_tube = math.hypot(radial - (self.ring.radius + tube), axial)
+        return to_tube - tube - self.drone_radius_m
+
+    def _check_contact(self):
+        """Touching the noodle anywhere -- before the plane, beside it, or the swinging ring
+        running into the drone -- is a strike, not only a crossing inside the strike band."""
+        if self.outcome.done or self.rim_distance() > 0.0:
+            return
+        d = self.pos - self.ring.centre
+        radial = float(np.linalg.norm(d - np.dot(d, self.ring.normal) * self.ring.normal))
+        self.outcome = Outcome(struck=True, contact=True, radial_m=radial)
+
     def _check_crossing(self, prev_pos):
-        """Did this step cross the ring's plane, and if so where relative to the opening."""
+        """Did this step cross the ring's plane, and if so where relative to the opening.
+
+        Both ends are measured against the ring's CURRENT pose: otherwise a swinging ring sweeping
+        its plane past a still drone reads as a pass (a ring swinging into the drone is a contact)."""
         side = self._plane_side()
-        if self.outcome.crossed or side == 0.0 or np.sign(side) == np.sign(self._prev_side):
+        self._prev_side = float(np.dot(prev_pos - self.ring.centre, self.ring.normal))
+        if self.outcome.done or side == 0.0 or np.sign(side) == np.sign(self._prev_side):
             self._prev_side = side
             return
         # Linear interpolation to the crossing point.
@@ -367,8 +402,13 @@ class OnboardSim:
         self.outcome = Outcome(crossed=True, radial_m=radial,
                                passed=radial <= inner,
                                struck=inner < radial <= outer,
-                               missed=radial > outer)
+                               missed=radial > outer,
+                               direction=1 if side > 0 else -1)
         self._prev_side = side
+
+    def clear_outcome(self):
+        """Score the next crossing too (lap mode: a pass does not end the episode)."""
+        self.outcome = Outcome()
 
     # -- dynamics ---------------------------------------------------------------------
     def step(self, action):
@@ -407,6 +447,7 @@ class OnboardSim:
         self._update_ring()
 
         self._check_crossing(prev_pos)
+        self._check_contact()
         return self.observe()
 
     def out_of_cage(self) -> bool:

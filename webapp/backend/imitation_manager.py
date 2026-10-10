@@ -94,7 +94,7 @@ class ImitationManager:
         return target.relative_to(self.flights).as_posix()
 
     def generate_demos(self, name: str, episodes=60, profile="typical", seed=0,
-                       render=False, dr=0.0, sway_deg=15.0, hard_start_p=0.0) -> str:
+                       render=False, dr=0.0, sway_deg=25.0, hard_start_p=0.0) -> str:
         out = self.demos_dir / f"{_check_name(name)}.npz"
         if out.exists():
             raise ValueError(f"demos/{out.name} already exists; pick another name")

@@ -22,7 +22,7 @@ def fly(seed=0, profile="typical", cfg=None, render=False, max_ticks=500):
     for i in range(max_ticks):
         action, _info = ex(ring, sim.state())
         ring = sim.step(action)
-        if ex.finished or sim.out_of_cage() or sim.outcome.crossed:
+        if ex.finished or sim.out_of_cage() or sim.outcome.done:
             break
     return sim, ex, i
 
@@ -285,6 +285,128 @@ def test_the_drone_is_scored_as_an_aircraft_not_a_point():
     assert cross(0.0).passed, (
         "a zero-width drone must still reproduce the old point-mass scoring, so the "
         "pure-geometry tests keep meaning what they say")
+
+
+def test_brushing_the_noodle_without_crossing_is_a_strike():
+    """The drone flies past the ring's edge, alongside its plane but never through it. It used
+    to go unscored, because strikes were only judged at a plane crossing."""
+    ring = Ring(np.array([0.0, 0.0, 1.0]), 0.0)
+    sim = OnboardSim(ring=ring, profile="ideal", start_pos=[-0.02, -0.5, 1.0],
+                     start_yaw_deg=90.0)                        # sliding along y, in front of the plane
+    for _ in range(200):
+        sim.step([0, 1, 0, 0])
+        if sim.outcome.done:
+            break
+    assert sim.outcome.struck and sim.outcome.contact and not sim.outcome.crossed
+
+
+def test_a_clean_pass_never_touches_the_noodle():
+    ring = Ring(np.array([0.0, 0.0, 1.0]), 0.0)
+    sim = OnboardSim(ring=ring, profile="ideal", start_pos=[-0.5, 0.0, 1.0],
+                     start_yaw_deg=0.0)
+    gaps = []
+    for _ in range(200):
+        sim.step([0, 1, 0, 0])
+        gaps.append(sim.rim_distance())
+        if sim.outcome.done:
+            break
+    assert sim.outcome.passed and not sim.outcome.contact
+    assert min(gaps) > 0.0
+
+
+def test_rim_penalty_grows_towards_the_noodle():
+    from onboard.gym_env import RIM_MARGIN_M, W_RIM, rim_penalty
+    assert rim_penalty(1.0) == 0.0
+    assert rim_penalty(RIM_MARGIN_M) == 0.0
+    assert 0.0 < rim_penalty(RIM_MARGIN_M / 2) < W_RIM
+    assert rim_penalty(0.0) == pytest.approx(W_RIM)
+    ring = Ring(np.array([0.0, 0.0, 1.0]), 0.0)
+    on_axis = OnboardSim(ring=ring, start_pos=[-0.05, 0.0, 1.0], start_yaw_deg=0.0)
+    near_rim = OnboardSim(ring=ring, start_pos=[-0.05, 0.07, 1.0], start_yaw_deg=0.0)
+    assert rim_penalty(on_axis.rim_distance()) == 0.0
+    assert rim_penalty(near_rim.rim_distance()) > 0.0
+
+
+def _lap_env(laps=0):
+    """A still ring at the origin facing +x, the drone 0.5 m in front of it facing it."""
+    from onboard.gym_env import OnboardHoopEnv
+    env = OnboardHoopEnv(ring=Ring(np.array([0.0, 0.0, 1.0]), 0.0), profile="ideal", laps=laps)
+    env.reset(seed=0)
+    env.sim.pos = np.array([-0.5, 0.0, 1.0])
+    env.sim.yaw_deg = 0.0
+    env.sim.vel[:] = 0.0
+    env._dir, env._armed = 1, True
+    env._reset_shaping()
+    return env
+
+
+def _fly(env, fb, ticks, until=None):
+    """Forward (+1) or backward (-1) along the axis; returns the per-step (reward, info)."""
+    out = []
+    for _ in range(ticks):
+        _o, r, term, trunc, info = env.step(np.array([0.0, fb, 0.0, 0.0]))
+        out.append((r, info, term))
+        if term or trunc or (until and until(info)):
+            break
+    return out
+
+
+def test_laps_a_pass_does_not_end_the_episode():
+    from onboard.gym_env import R_PASSED
+    env = _lap_env()
+    steps = _fly(env, 1, 200, until=lambda i: i["phase"] == "passed")
+    r, info, term = steps[-1]
+    assert info["phase"] == "passed" and info["passes"] == 1 and not term
+    assert r > R_PASSED / 2
+    env.close()
+
+
+def test_laps_flying_straight_back_through_is_wrong_way():
+    env = _lap_env()
+    _fly(env, 1, 200, until=lambda i: i["phase"] == "passed")
+    steps = _fly(env, -1, 200, until=lambda i: i["phase"] != "flying")
+    assert steps[-1][1]["wrong_way"] and steps[-1][1]["passes"] == 1
+    env.close()
+
+
+def test_laps_clearing_the_ring_then_coming_back_is_a_second_pass():
+    from onboard.gym_env import ARM_DIST_M
+    env = _lap_env()
+    _fly(env, 1, 200, until=lambda i: i["phase"] == "passed")
+    _fly(env, 1, 200, until=lambda i: env.sim.pos[0] > ARM_DIST_M + 0.10)
+    assert env._armed
+    steps = _fly(env, -1, 300, until=lambda i: i["phase"] != "flying")
+    assert steps[-1][1]["phase"] == "passed" and steps[-1][1]["passes"] == 2
+    env.close()
+
+
+def test_single_lap_still_ends_at_the_first_pass():
+    env = _lap_env(laps=1)
+    steps = _fly(env, 1, 200)
+    assert steps[-1][2] and steps[-1][1]["phase"] == "passed"
+    env.close()
+
+
+def test_parking_at_the_centre_and_backing_out_earns_nothing():
+    """The old shaping peaked at the ring's plane; the new one keeps rising through it, so an
+    approach that stops short and retreats is paid nothing net."""
+    env = _lap_env()
+    total = sum(r for r, _i, _t in _fly(env, 1, 200, until=lambda i: env.sim.pos[0] > -0.06))
+    total += sum(r for r, _i, _t in _fly(env, -1, 400, until=lambda i: env.sim.pos[0] < -0.5))
+    assert env.passes == 0 and total <= 0.0
+    env.close()
+
+
+def test_env_ends_a_contact_as_struck():
+    from onboard.gym_env import R_STRUCK, OnboardHoopEnv
+    ring = Ring(np.array([0.0, 0.0, 1.0]), 0.0)
+    env = OnboardHoopEnv(ring=ring, profile="ideal")
+    env.reset(seed=0)
+    env.sim.pos = np.array([-0.02, 0.17, 1.0])                  # inside the noodle
+    _o, r, term, _t, info = env.step(np.zeros(spec.ACT_DIM))
+    assert term and info["phase"] == "struck" and info["contact"]
+    assert r < R_STRUCK / 2
+    env.close()
 
 
 def test_every_alignment_gate_fits_inside_the_measured_clearance():

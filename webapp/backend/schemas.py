@@ -36,10 +36,11 @@ class StartRunRequest(BaseModel):
     # onboard robustness (hardware/onboard/sim.py): randomisation strength, the ring's swing,
     # the share of hard starts (behind / beside / below / anywhere), the ramp-up, demo augmentation
     onboard_dr: float = Field(1.0, ge=0.0, le=1.0)
-    onboard_sway_deg: float = Field(15.0, ge=0.0, le=45.0)
+    onboard_sway_deg: float = Field(25.0, ge=0.0, le=45.0)
     hard_start_p: float = Field(0.5, ge=0.0, le=1.0)
     dr_steps: int = Field(500_000, ge=0, le=100_000_000)
     bc_augment: bool = True
+    onboard_laps: int = Field(0, ge=0, le=20)        # onboard: passes per episode (0 = endless)
     ring_jitter: float = Field(1.0, ge=0.0, le=2.0)
     radius_start: float = Field(1.5, ge=1.0, le=3.0)
     sway_deg: float = Field(20.0, ge=0.0, le=45.0)   # net env: largest ring swing about its rope knot
@@ -125,7 +126,7 @@ class GenerateDemosRequest(BaseModel):
     seed: int = 0
     render: bool = False
     dr: float = Field(0.0, ge=0.0, le=1.0)              # randomised (robust) task
-    sway_deg: float = Field(15.0, ge=0.0, le=45.0)
+    sway_deg: float = Field(25.0, ge=0.0, le=45.0)
     hard_start_p: float = Field(0.0, ge=0.0, le=1.0)
 
 

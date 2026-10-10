@@ -112,7 +112,7 @@ def start_run(req: StartRunRequest):
             onboard_dr=req.onboard_dr, onboard_sway_deg=req.onboard_sway_deg,
             hard_start_p=req.hard_start_p, dr_steps=req.dr_steps, bc_augment=req.bc_augment,
             wind_steps=req.wind_steps, reward_mode=req.reward_mode, budget=req.budget,
-            laps=req.laps, reward_weights=req.reward_weights,
+            laps=req.laps, reward_weights=req.reward_weights, onboard_laps=req.onboard_laps,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))

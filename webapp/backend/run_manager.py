@@ -143,11 +143,11 @@ class RunManager:
                   lean_flip_prob: float = 0.3, vec: str = "auto",
                   init_run: Optional[str] = None, init_clone: Optional[str] = None,
                   demo_ids=None, human_weight: float = 3.0, bc_coef: float = 1.0,
-                  profile: str = "typical", onboard_dr: float = 1.0, onboard_sway_deg: float = 15.0,
+                  profile: str = "typical", onboard_dr: float = 1.0, onboard_sway_deg: float = 25.0,
                   hard_start_p: float = 0.5, dr_steps: int = 500_000, bc_augment: bool = True,
                   wind_steps: int = 1_500_000,
                   reward_mode: str = "shaped", budget: float = 3.0, laps: int = 1,
-                  reward_weights: Optional[dict] = None) -> str:
+                  reward_weights: Optional[dict] = None, onboard_laps: int = 0) -> str:
         if env == "onboard":
             algo = "ppo"                            # the onboard trainer is PPO (+ demo term)
         if algo not in ALGORITHM_IDS:
@@ -186,6 +186,7 @@ class RunManager:
             argv = [PYTHON_EXE, str(ONBOARD_TRAIN), *common, "--profile", profile,
                     "--dr", str(onboard_dr), "--sway-deg", str(onboard_sway_deg),
                     "--hard-start-p", str(hard_start_p), "--dr-steps", str(int(dr_steps)),
+                    "--laps", str(int(onboard_laps)),
                     "--bc-augment" if bc_augment else "--no-bc-augment"]
             if demos:
                 argv += ["--demos", *(str(p) for p in demos),

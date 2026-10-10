@@ -171,8 +171,8 @@
           <div class="duration-label">Robustness</div>
           <label class="checkbox-row" title="Each episode: a drone somewhere between ideal and harsh (and its speed calibration off by up to 25%), the ring hung a little differently, swinging on its rope, and a noisy, sometimes laggy detector. Evaluation always uses the full strength.">
             <input type="checkbox" id="onboard-dr-toggle" checked> Randomise drone, ring and detector</label>
-          <div class="field-row"><label>Ring swing (max) <span id="onboard-sway-val">15&deg;</span></label>
-            <input type="range" id="onboard-sway" min="0" max="30" step="1" value="15"></div>
+          <div class="field-row"><label>Ring swing (max) <span id="onboard-sway-val">25&deg;</span></label>
+            <input type="range" id="onboard-sway" min="0" max="45" step="1" value="25"></div>
           <div class="field-row" title="Share of episodes that start behind, beside or below the ring, or anywhere in the cage, often facing away: the policy has to find the ring first">
             <label for="hard-start-input">Hard starts (behind / beside / below)</label>
             <input type="number" id="hard-start-input" value="50" min="0" max="100" step="5"><span class="note">%</span></div>
