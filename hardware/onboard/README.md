@@ -284,7 +284,9 @@ peaks at 120–129 cm), `--max-airborne` (default 40 s), `--ring-opening`, `--ri
 
 **Step 8 (optional) — mix your flights with a PyBullet run, then improve the mix with RL.**
 Your flights and the PyBullet runs (`results/hoop/runs/`) are different tasks: the PyBullet policy
-reads 78 numbers of true state, this task 33 camera numbers, and a flight records no true state.
+reads 82 numbers of true state (78 for runs before 2026-10-10 evening; both work as teachers, and
+so do `--reward budget` runs, which use the same 82), this task 33 camera numbers, and a flight
+records no true state.
 So the bridge goes the other way: `make_teacher_demos.py` lets a PyBullet policy fly the onboard
 simulator (which does know the true state) and records what the camera would have seen. The
 scene is first rotated so the ring sits where the PyBullet ring always hangs (`--frame canonical`,
@@ -312,6 +314,75 @@ scratch reached 90% at 60k but then collapsed to 0% for 40k steps before recover
 The simulator cannot tell you whether your style transfers better to the real Tello; `--bc-coef`
 is how much you bet on it. The run's `best_model.zip` flies with `fly_hoop.py --mode policy`
 like a clone, and the dashboard lists it (Training panel: Environment "Onboard camera").
+
+**Looping and landing (planned, not built yet).** PyBullet runs can now learn endless
+back-and-forth passes (`train_hoop_multi.py --laps 0`, see the main README). The onboard side
+still needs the same `laps=0` option in `gym_env.py`/`sim.py`: a pass flips the entry side, and
+the next pass counts once the drone is 0.35 m clear. The teacher's yaw-to-ring controller
+already turns the nose back toward the ring after a pass, so the student can learn the
+turn-round from teacher demos. Landing stays scripted, never learned:
+- force-stop already exists (Ctrl+C, `land.flag`/`kill.flag`, dashboard Stop);
+- landing on a net hit is planned as a `FlightRunner._safety_overrides` check that requests a
+  landing when the IMU sees an impact spike, or when commanded and measured velocity disagree
+  for more than 0.3 s.
+
+## Robust training
+
+The simulator used to be easy in ways the real cage is not: one drone, a ring that barely moved, a
+perfect detector, always the same front runway. `OnboardSim` can now randomise all of that, off by
+default (`dr=0` reproduces the old behaviour exactly, so older tests and demos are unchanged).
+The dashboard's Training panel (Environment "Onboard camera") exposes it and turns it on.
+
+```bash
+python hardware/onboard/train_onboard.py --until-stopped --n-envs 8 --init <run or clone> \
+    --dr 1 --sway-deg 15 --hard-start-p 0.5 --dr-steps 500000 --demos ... --run-id robust --out ...
+```
+
+| Flag | What it does |
+|---|---|
+| `--dr` (0..1) | domain randomisation strength (below) |
+| `--sway-deg` | largest swing of the ring on its rope at full wind (default 15°) |
+| `--hard-start-p` | share of episodes starting away from the front runway |
+| `--dr-steps` | `dr` and the hard starts ramp from 0 to full over this many steps, counted from the run's own start (0 = full at once); evaluation is always at full strength |
+| `--[no-]bc-augment` | mirror half of each demo batch left/right and add small observation noise (default on) |
+
+**What `dr` randomises** (each episode, from the episode's seed):
+- The drone: every `Profile` number is drawn between "ideal" and "harsh", `dr` of the way out from
+  "typical"; speed scale ±25% and yaw-rate scale ±20% (the rc→speed calibration is unverified, which is
+  probably the biggest sim-to-real gap).
+- The ring's placement (height, sideways, yaw) widens, and it swings: a pendulum about the knot at
+  its top along a random horizontal direction, gust 0–1, 1.5–3 s period, with a small twist. The
+  camera, the pass/strike scoring and the dashboard all use its live pose.
+- The detector: noise on cx, cy, size and axis ratio (range follows the size, as in reality), and a
+  one-tick camera lag in 15% of episodes.
+
+**Hard starts** (`start_type` in the step `info`): `front` (the measured runway), `behind`
+(0.45–0.75 m back on the far side), `beside` (in the ring's plane, 0.35–0.7 m to a side), `below`
+(under it, 0.7–0.9 m up) and `anywhere`. Yaw is random, so the ring is often out of view and the
+policy must turn and look (`found`, `age` and `last_centre` in the observation exist for this).
+- With hard starts the ring plane is **open**: crossing it clear of the noodle (under or around the
+  ring) is no outcome and the episode goes on. Passing from either side counts. Only a pass or a
+  strike ends it; there is no "missed".
+- A one-time bonus `R_FOUND` (+0.5) the first time the ring comes into view when it started out of
+  view, and a 40 s episode limit (30 s for front starts). All reward weights are saved in
+  `meta.json` (`reward`, and `robust` for the settings).
+
+**Why the sim starts in the air.** Your human demos begin when the drone already hovers because
+the Tello takes off by itself and the recorder starts at the first ring lock
+(`fly_hoop.py`); the simulated episode starts at that same point. Robust starts add the cases the
+demos don't cover.
+
+**Expert check** (scripted expert, `make_demos.py`, full randomisation): 92% pass from the front
+runway, 24% from "anywhere", 21% beside, 33% behind and 0% below, which is what RL has to learn.
+`make_demos.py --dr 1 --hard-start-p 0.5` keeps only the passed episodes (228 of 400 in the first batch).
+
+**Not done for real flights.** `fly_hoop.py`'s forward-travel budget and "record at the first
+lock" assume a front start. Before flying the real Tello from behind or beside the ring, those
+limits need relaxing.
+
+**Live view.** Onboard runs now write the same files as PyBullet runs (`telemetry.jsonl`,
+`camera_latest.jpg`, the real-time flag), so the dashboard shows the drone and ring, the drone's
+camera and the Reward card while they train.
 
 ## If something goes wrong
 

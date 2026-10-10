@@ -111,6 +111,25 @@ If `uvicorn` is on your PATH, `uvicorn main:app --app-dir backend --port 8000` (
 found even after `conda activate drones`, use the `python -m uvicorn` form above instead, that's
 the one confirmed to work regardless of PATH quirks.
 
+What the Simulator tab gives you while a run trains:
+- **Live far view and drone POV**, for PyBullet net runs and for onboard-camera runs. The HUD
+  shows this episode's ring swing (`ring swing this episode 18° of 45° max · wind ramp 47% ·
+  period 2.1 s`), which is wind ramp × a per-episode gust × the "Ring swing" slider, so the ring
+  can look gentle even at the maximum setting early in a run.
+- **Reward (MDP) block** in the Training panel: the mode (shaped / budget), passes per episode or
+  the budget, and every weight, with a one-line summary and a reset button. Starting from an
+  earlier run pre-fills its reward and warns if you change it (the critic has to re-fit). The run
+  view shows a read-only **Reward** card; the weights are saved in `meta.json`.
+- **Run names and stars.** Every run shows its date and time. Rename it with ✎ and mark keepers
+  with ★ (kept in `label.json`, so the trainer never overwrites it). The **best run** is the one
+  with the highest eval **success rate** on today's env, not the highest reward (reward is not
+  comparable between shaped and budget runs). It is green with a BEST tag, listed first in
+  "Start from", and the History tab can filter to best and starred runs.
+- **Best** replays the open run's own best policy on a fresh random ring, start and wind each time
+  (every replay takes a new seed). History → "Open this run" opens it here.
+- A locked Training panel (a run is loading, or no cores are free) is greyed out and says why.
+- Onboard-camera runs have no PyBullet replay, so Watch and Best are disabled for them with a note.
+
 Full feature list and notes: [webapp/README.md](webapp/README.md).
 
 ### From the command line
@@ -160,6 +179,8 @@ CMS/
 | Replay video generation | `scripts/replay_hoop.py` |
 | Webapp API, subprocess start/stop | `webapp/backend/main.py`, `webapp/backend/run_manager.py` |
 | Webapp interface (3D view, controls, chart) | `webapp/frontend/index.html`, `webapp/frontend/js/*.js` |
+| The Reward (MDP) editor and card | `webapp/frontend/js/reward.js` (defaults come from `DEFAULT_REWARD_WEIGHTS` in `scripts/hoop_net_env.py`, via `GET /api/config`) |
+| Onboard-camera task: what is randomised (drone, swinging ring, hard starts, detector noise) | `hardware/onboard/sim.py`; tests in `hardware/onboard/tests/test_robust.py` |
 | 3D scene shared by the CLI and the webapp's replay generator | `scripts/court.py` (`build_room`, `build_hoop`) |
 | Anything about the real Tello: safety limits, calibration, camera, keyboard flying, imitation, running a policy | `hardware/` (settings in `hardware/config.yaml`) |
 
@@ -211,9 +232,137 @@ Those numbers are for the legacy point-reaching task.
 
 ### Net + ring environment (`scripts/hoop_net_env.py`)
 
-This environment mirrors the real cage. It has a 2×2×2 m net with a vertical ring of 0.30 m opening near the centre. Every episode varies the ring's position, facing and size to cover wind swing and repositioning. The drone always starts on the floor. Success means flying through the opening in the required direction. Touching the net or the rim bounces the drone back with a penalty, and the episode continues. A scripted expert passes through on all test seeds (`scripts/tests/test_hoop_net_env.py`).
+This environment mirrors the real cage. It has a 2×2×2 m net with a hanging ring (0.30 m opening, measured from the phone scan) near the centre. Every episode varies the ring's position, facing and size to cover repositioning, and the ring swings in a per-episode wind about the rope knot at its top. The drone always starts on the floor. Success means flying through the opening in the required direction.
 
-A first 300k-step PPO run (`results/hoop/runs/net_ppo_trial`) learned to take off and fly to the approach point in front of the ring, but has not yet passed through (0/10 evals). It needs longer runs or an imitation warm start.
+**The MDP now (v3, since 2026-10-11):**
+
+| Part | v3 setting |
+|---|---|
+| State / observation | 82 numbers: drone state (12), the last 15 actions (60), the ring's facing (3), **velocity** (3) and **opening radius** (1), and the vector to the ring (3) |
+| Action | unchanged: velocity direction + speed fraction, up to about 0.25 m/s |
+| Reward (`--reward budget`) | −0.005 per step (−1 per 6.7 s), **+1 per pass**, −0.05 per rim clip. No shaping |
+| Passes | never end the episode. After each pass the required direction flips (back-and-forth). The next pass counts once the drone has flown 0.28 m clear of the ring |
+| Termination | the episode's running total reaches **−budget** (default −3), **or** the drone touches the net, **or** the drone tips over, **or** 120 s pass (a safety cap) |
+| Net | touching it ends the episode, and the reward drains whatever budget is left, so the total lands on −budget |
+
+#### MDP changes and why
+
+| Version | Runs | What changed | Why |
+|---|---|---|---|
+| v1 | `ppo_20261010-093427` | 78-number obs. Shaped reward: progress to waypoints +10/m, +20 per pass, rim and net −1 with a bounce. One pass ends the episode. PPO defaults | starting point |
+| v2 | `ppo_20261010-182515` | Obs +ring velocity and radius (82). Potential-based shaping with an axis pull. Pass +20, plus up to +10 for a centred one. Rim −3, net ends the episode with −5. Wind ramp-up. Stabilised PPO settings | v1 stalled at about 6% success: PPO overwrote itself every update, the policy couldn't see the ring swing, and the wind was at full strength from step 0 |
+| v3 | `ppo_20261011-013455`, then `ppo_20261011-024000` / `-025335` / `-032617` (budget 10, +5 per pass, sway 20°, continued each time) | The budget reward above: passes don't end the episode, and there is no shaping | v2 learned to **park 18–31 cm in front of the ring** (0% passes after 14.5M steps). Under v3 the eval success rate is still only 0–20% (about 18.5M steps), so the policy passes occasionally but not reliably |
+
+Why each v3 change was made:
+
+- **No shaping.** v2's shaping paid about +20 just for flying from the floor to the entrance. A
+  pass attempt risked the rim (−3) on a swinging ring, so PPO settled on hovering at the entrance.
+  That was the slowdown at the hoop visible in replays. In v3 hovering earns nothing and only
+  drains the budget, so passing is the only way to score.
+- **Passes don't end the episode.** The goal is to pass through again and again, as many times as
+  possible. Under v2, the episode ended at the first pass (when the drone reached the ring's
+  centre plane), so it never practised a second pass.
+- **The time budget is the termination rule.** It ends episodes that aren't going anywhere,
+  instead of paying the drone to wait out a fixed 20 s. Each pass buys 6.7 s more, and a
+  back-and-forth stroke takes about 3–4 s, so a drone that keeps passing keeps flying.
+- **Why −3 and not −1.** At −0.005 per step, −1 gives only 6.7 s before the first pass. Taking
+  off and reaching the ring at 0.25 m/s takes about 6–8 s, so most episodes would end before a
+  pass was physically possible, and the drone would never see a +1. −3 gives 20 s for the first
+  pass, the same as v1/v2's episode length. `--budget 1` gives the strict version.
+- **Net drains the budget, rather than a flat −0.1.** The real drone lands when it hits the net,
+  so touching it has to end the episode. With a flat −0.1, a drone that can't pass would learn to
+  dive into the net to stop the time penalty. Draining the budget makes that never cheaper than
+  waiting, and the net costs at least 0.1.
+- **Rim −0.05 (was −3).** Clipping the noodle is now cheap, so trying for a pass is worth the risk.
+- **Same observation and action as v2.** So v3 continues from the v2 policy (`--init`), which
+  already flies to the entrance reliably, exactly where a +1 gets discovered. The critic re-fits
+  to the new reward scale over the first updates.
+
+**Kept from v2:**
+- **Curricula:** the opening starts 1.5× wide and shrinks to real size, and the wind ramps from
+  calm to full over 1.5M steps (`--wind-steps`). Evaluation always uses the real size and full wind.
+- **PPO settings for this env** (fresh runs; recorded in `meta.json` → `hyperparams`):
+  - learning rate 1e-4 with `--until-stopped`, otherwise linear 3e-4 → 5e-5;
+  - `target_kl` 0.03, 5 epochs, batch 256;
+  - γ 0.995;
+  - `ent_coef` 0.003, 256×256 networks.
+
+v2's shaped reward is still available as `--reward shaped`, the default for old runs and
+replays. In shaped mode `--laps 0` gives endless laps and `--no-net-terminate` restores the bounce.
+
+**Running v3.** The dashboard's Reward (MDP) block sets all of this (mode, budget, passes, every
+weight); the equivalent from a terminal is below. Any weight can be overridden with
+`--reward-weights '{"budget_pass": 5}'` (names: `DEFAULT_REWARD_WEIGHTS`), and the swing ramp with
+`--wind-steps` (0 = full swing from the first step):
+
+```bash
+python scripts/train_hoop_multi.py --algo ppo --init results/hoop/runs/ppo_20261010-182515 \
+    --reward budget --budget 3 --until-stopped --sway-deg 35 --seed 0 \
+    --eval-freq 25000 --n-eval-episodes 5 --run-id ppo_budget --out results/hoop/runs/ppo_budget
+```
+
+- **Fewer evals:** a looping eval episode can last up to 120 s, which is why evals run every 100k
+  steps with 5 episodes.
+- **Status:** `live_status.json` and `train.log` report **passes per episode** (`latest_mean_passes`,
+  `best_mean_passes`, `max_passes`).
+- **Watching:** the dashboard's watch and replay views rebuild the env the run trained with
+  (`env_kwargs_from_meta`). For budget runs the showcase has no practical time cap, so it shows
+  how many passes the policy strings together before its budget runs out.
+
+Landing is not learned. On the real drone it is a scripted safety action: force-stop already
+exists (Ctrl+C, `land.flag`, dashboard Stop), and landing on a net hit is planned.
+
+A scripted expert passes through on the test seeds (`scripts/tests/test_hoop_net_env.py`).
+
+**Results so far:**
+
+- **`ppo_20261010-093427`** (v1, sway 35°): 12.2M steps. It peaked at 30% eval success, but
+  averaged about 6% over its last 50 evaluations and stopped improving after about 1.5M steps.
+- **`ppo_20261010-182515`** (v2, sway 35°): 14.5M steps. PPO stayed stable (`approx_kl` about
+  0.01–0.03), and eval reward rose to about +20, but **0% passes**. Telemetry showed every
+  episode ending with the drone parked 18–31 cm in front of the ring.
+- **`ppo_20261011-013455`** (v3, continued from 182515 at 14.56M steps, sway 35°, budget 3):
+  started 2026-10-11 at 01:34. _TODO: fill in passes per episode._
+
+#### Onboard-camera task: robust training
+
+The task that can fly the real Tello (`hardware/onboard/`, 33 camera and telemetry numbers, not the
+PyBullet state) trains in its own fast simulator, which used to show the policy one drone, one
+nearly fixed ring, a perfect detector and a still ring, always from the same front runway. Since
+2026-10-11 it can be randomised, and the dashboard's Onboard options turn it on by default:
+
+| Randomised per episode | Range at full strength |
+|---|---|
+| The drone | each dynamics number somewhere between the "ideal" and "harsh" profiles; speed and yaw-rate calibration off by up to ±25% / ±20% (the rc→speed number is unverified) |
+| The ring | hung up to ±10 cm in height, ±15 cm sideways, yaw ±30° |
+| A swinging ring | pendulum about the knot at its top (like the PyBullet env), up to the "Ring swing" setting (15° default), 1.5–3 s period, plus a small twist |
+| The detector | noise on position, size and axis ratio, and a one-tick camera lag in 15% of episodes |
+| The start | 50% of episodes start **behind, beside or below the ring, or anywhere in the cage**, often facing away, so the drone has to search for it; flying under or around the ring is no longer a "miss" |
+
+The difficulty ramps up over 500k steps (counted from the run's own start), and evaluation always
+runs at full strength, so its success rate is the robust one. It starts lower than the 50–90%
+seen on the easy front approach, and the two are not comparable. The few demonstrations are made
+go further by mirroring half of each batch left/right and adding small sensor noise, and
+`make_demos.py --dr 1 --hard-start-p 0.5` adds scripted-expert demos of the harder task (git
+ignores `hardware/flights/`, so regenerate them on each machine):
+
+```bash
+python hardware/onboard/make_demos.py --episodes 400 --dr 1 --hard-start-p 0.5 --seed 7000 \
+    --out hardware/flights/demos/onboard_sim_robust.npz
+```
+
+Details, flags and the caveats for real flights are in
+[hardware/onboard/README.md](hardware/onboard/README.md#robust-training).
+
+#### Training footage
+
+| Stage | Run | Video |
+|---|---|---|
+| Untrained (start of training) | `ppo_20261010-093427` @ 0 steps | _TODO: add video_ (`assets/videos/net_ppo_initial.mp4`) |
+| After ~11M steps (v1) | `ppo_20261010-093427` @ ~11M steps | _TODO: add video_ (`assets/videos/net_ppo_11M.mp4`) |
+| v2, parking at the entrance | `ppo_20261010-182515` @ 14.5M steps | _TODO_ |
+| v3, budget reward, repeated passes | `ppo_20261011-013455` @ _TBD_ | _TODO_ |
+| Onboard task, robust (swinging ring, hard starts) | `onboard_20261011-032612` @ _TBD_ | _TODO_ |
 
 You can preview it in the dashboard's **Environment** tab, which also overlays the phone scan.
 

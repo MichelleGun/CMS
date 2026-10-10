@@ -1,5 +1,85 @@
 # Progress log
 
+## Done (2026-10-11, later)
+
+- **Dashboard fixes.**
+  - The Best replay now plays the **open run's own best policy**, not the all-time best run, and
+    every replay takes a fresh seed (it used to reuse seed 1000, so every replay had the same ring,
+    start and mild wind). History → "Open this run" now selects that run.
+  - Locked controls look greyed out (a run loading, or no free cores) and say why; unchanged
+    "Start from" lists are no longer rebuilt every 2.5 s, which could close an open dropdown.
+  - **The gentle swing at 45°:** the slider is the *largest* angle. The swing is wind ramp (0 → 1 over
+    `--wind-steps`, 1.5M by default) × a per-episode gust 0–1 × the slider. A new "Swing ramps up
+    over" field and a HUD line (`ring swing this episode …`) make that visible.
+- **Reward (MDP) editor** in the Training panel and a read-only card per run:
+  `HoopNetAviary(reward_weights=...)`, `train_hoop_multi.py --reward-weights`, saved in `meta.json`,
+  reused by replays and showcases.
+- **Run names, stars and the best run.** Rename (✎) and star (★), kept in `label.json`. Date and
+  time always show. The best run is picked by eval success rate among runs on today's env
+  (obs size 82), not reward, which is not comparable across reward modes.
+- **Onboard runs look dead in the dashboard: fixed.** `train_onboard.py` used to register only the
+  eval and stop callbacks, so no `telemetry.jsonl` or camera frames were written. It now has the
+  telemetry, camera and real-time callbacks (`OnboardHoopEnv.telemetry()` / `.onboard_frame()`;
+  watching never touches the sim's random stream), and a Reward card with the imitation term.
+- **Onboard robustness** (`hardware/onboard/sim.py`, `gym_env.py`, `train_onboard.py`):
+  - domain randomisation of the drone and its speed calibration, ring placement, a **swinging ring**
+    (like the PyBullet env's wind), detector noise and lag;
+  - **hard starts**: behind, beside, below, or anywhere, often facing away, with an open ring plane
+    (flying under or around is no outcome) and a one-time search bonus;
+  - a ramp-up curriculum counted from each run's own start, evaluation always at full strength;
+  - demo augmentation (mirror left/right, small noise) so the few human demos go further;
+  - robust scripted-expert demos: 228 of 400 passed, 39,839 samples. The expert passes 92% from the
+    front under full randomisation and 0–33% from hard starts.
+  - Details: the "Robust training" section of `hardware/onboard/README.md`.
+- **Tests:** 400 pass (`hardware/onboard/tests` incl. 13 new robustness tests, `scripts/tests`,
+  `webapp/backend/tests`).
+- **Live runs** (started 2026-10-11 03:26, until stopped):
+  - `onboard_20261011-032612`: 8 envs, continued from `onboard_20261011-025518`, six human demos ×10 +
+    teacher + robust expert demos, dr 1, swing 15°, 50% hard starts. First 11 evals: success 20–30%
+    at full difficulty (down from 50–90% on the easy task, which is expected).
+  - `ppo_20261011-032617`: 6 envs, continued from `ppo_20261011-025335`, budget 10, +5 per pass,
+    sway 20°. Success 10–20% at ~18.5M steps. _TODO: update when it moves._
+
+## Done (2026-10-11)
+
+- **MDP v3: a pass budget instead of shaping** (`HoopNetAviary(reward_mode="budget")`,
+  `train_hoop_multi.py --reward budget --budget 3`).
+  - **Reward:** −0.005/step, +1 per pass, −0.05 per rim clip, no shaping.
+  - **Termination:** passes never end the episode (endless back-and-forth). It ends when the
+    running total reaches −3, at the net (which drains the budget), on a tip-over, or at the
+    120 s safety cap.
+  - **Why:** v2 run `ppo_20261010-182515` reached 14.5M steps with 0% passes. Telemetry
+    showed it parking 18–31 cm in front of the ring, because the shaping paid about +20 for
+    getting there and a pass attempt risked −3 at the rim.
+  - **Viewers:** `showcase_hoop.py` and `replay_hoop.py` now rebuild the env from the run's
+    `meta.json` (`env_kwargs_from_meta`). Before, they always ended at the first pass.
+  - **Eval stats:** eval reports passes per episode (`live_status.json`:
+    `latest_mean_passes`, `best_mean_passes`, `max_passes`).
+  - **Tests:** 41 in `scripts/tests` pass.
+  - **New run:** `ppo_20261011-013455` continues from 182515 (sway 35°, until stopped).
+  - **Docs:** README has an "MDP changes and why" table (v1 → v2 → v3).
+
+## Done (2026-10-10, evening)
+
+- **Net-env training fixed and restarted.** `ppo_20261010-093427` was stopped at 12.2M steps.
+  It peaked at 30% eval success but averaged about 6% over its last 50 evaluations, and had
+  been flat since about 1.5M steps. The diagnosis: PPO overwrote the policy every update
+  (`approx_kl` ≈ 0.9, `clip_fraction` ≈ 0.8, action std 0.06), the policy couldn't see the
+  swinging ring's velocity, and the wind was at full strength from step 0. Changes:
+  - `HoopNetAviary` obs is now 82-D (ring velocity and opening radius added before the relative
+    vector, so `obs[-3:]` is unchanged).
+  - Potential-based shaping, a centring-weighted pass bonus (+20, up to +10 more), rim −3.
+  - The net ends the episode with −5 (`net_terminate`, default on).
+  - `laps=0` endless back-and-forth with re-arming, and an `episode_sec` option.
+  - `train_hoop_multi.py`: a PPO preset for the net env, `WindCurriculumCallback` and
+    `--wind-steps`, plus `--laps`, `--episode-sec` and `--[no-]net-terminate`. Everything is
+    recorded in `meta.json`.
+  - The teacher bridge (`make_teacher_demos.py`) and `ObsBuilder` accept the 82-D layout and
+    still accept 78-D.
+  - Tests: 36 in `scripts/tests` and 285 in `hardware/` pass.
+  - New run `ppo_20261010-182515` started (sway 35°, until stopped).
+  - README: new net-env section with training-footage placeholders.
+
 ## Done (2026-10-10, later)
 
 - **Up to 3 training runs side by side, each with truly parallel envs.** Env copies now run in
@@ -136,6 +216,13 @@
 
 ## Next
 
+0. **Looping on the camera drone and net-hit landing** (still open; the onboard sim got
+   randomisation and hard starts, but not `laps=0`).
+   - Onboard `laps=0` in `hardware/onboard/gym_env.py`/`sim.py`.
+   - A net-contact land trigger in `fly_hoop.py` (IMU spike, or commanded vs measured
+     velocity mismatch).
+   - Then train loops in PyBullet with `--init <single-pass run> --laps 0 --episode-sec 45`
+     once single-pass eval success is above about 30%.
 1. **Stabilise training** — drop PPO learning rate to `1e-4`, add a fixed seed sweep,
    confirm the 40k-step reward dip disappears. Log to TensorBoard
    (`pip install tensorboard`, uncomment the `tensorboard_log=` line in
@@ -144,14 +231,22 @@
    and `act="pid"` (position setpoints), compare sample efficiency.
 3. **New task — trajectory following** — switch env to `FlyThruGateAviary` or
    write a custom circular-waypoint reward on top of `BaseRLAviary`.
-4. **Robustness / domain randomisation** — subclass the env to randomise mass,
-   motor gain, and control latency each reset; measure how much hover reward drops.
+4. **Robustness / domain randomisation** — done for the onboard-camera task (see above). Still open
+   for hover / the PyBullet envs: randomise mass, motor gain and control latency each reset and
+   measure how much hover reward drops.
 5. **Compare algorithms** — SAC vs PPO on the same task (SB3 makes this a one-line
    change).
 6. **Report + short video** — record a GUI rollout (`play.py --record_video true`),
    write up method + results for the assignment.
 
 ## Open questions
+
+- Before a real flight from behind or beside the ring: `fly_hoop.py`'s forward-travel budget and
+  "record at the first lock" assume a front start and need relaxing. Monday's new human demos
+  should include other starting positions.
+- How good is good enough on the robust onboard task before trying the real Tello (success rate at
+  full randomisation)? The old 90%-success run `ppo_20261010-011316` is on an older env version
+  (no swing setting, other observation layout), so it is not comparable and is never picked as best.
 
 - ~~Which physical drone flies the 2x2x2 m cage demo?~~ Answered: a DJI Tello, driven with velocity
   commands, so `HoopFindAviary`'s `vel` policy can run on it (see `hardware/`). Still open: how well it transfers
