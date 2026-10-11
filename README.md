@@ -232,18 +232,18 @@ Those numbers are for the legacy point-reaching task.
 
 ### Net + ring environment (`scripts/hoop_net_env.py`)
 
-This environment mirrors the real cage. It has a 2×2×2 m net with a hanging ring (0.30 m opening, measured from the phone scan) near the centre. Every episode varies the ring's position, facing and size to cover repositioning. The drone's prop wash pushes the ring away as the drone comes close, and there is a little residual swing about the rope knot at its top. Training runs start the drone **hovering at about 0.8 m**, where the real Tello hands over to the policy after takeoff. Success means flying through the opening in the required direction, again and again.
+This environment mirrors the real cage. It has a 2×2×2 m net with a hanging ring (0.30 m opening, measured from the phone scan) near the centre. Every episode varies the ring's position, facing and size to cover repositioning. The drone's prop wash pushes the ring away as the drone comes close, and there is a little residual swing about the rope knot at its top. Training runs start the drone **hovering at about 0.8 m**, where the real Tello hands over to the policy after takeoff, and each episode starts in the next of **9 zones** of the cage. Success means flying through the opening, going round the outside and flying through again **from the same side**, as many times in a row as possible.
 
-**The MDP now (v4, since 2026-10-11 night):**
+**The MDP now (v5, since 2026-10-11, late night):**
 
-| Part | v4 setting |
+| Part | v5 setting |
 |---|---|
-| State / observation | **83** numbers: drone state (12), the last 15 actions (60), the ring's facing (3), velocity (3) and opening radius (1), **the lap "armed" flag (1)**, and the vector to the ring (3) |
+| State / observation | **84** numbers: drone state (12), the last 15 actions (60), the ring's facing (3), velocity (3) and opening radius (1), the lap "armed" flag (1), **the passes so far this episode (1, `min(passes, 4) / 4`)**, and the vector to the ring (3) |
 | Action | unchanged: velocity direction + speed fraction, up to about 0.25 m/s |
-| Start | hovering at 0.8 ± 0.1 m (`--start-z 0.8`; `--start-z 0` = the old floor start) |
+| Start | hovering at 0.8 ± 0.1 m, in the next of 9 zones, round-robin (`--start-mode zones`): top-left, top-middle, top-right, middle-right, bottom-right, bottom-middle, bottom-left, middle-left, and right under the hoop. Top is +y and right is +x, as seen from above in the dashboard |
 | Ring | pushed away by prop wash, up to 15° of tilt about the rope (`--wash-deg`), plus up to 5° of residual swing (`--sway-deg`) |
-| Reward (`--reward budget`) | −0.005 per step, **+5 per pass** (`budget_pass`), −0.05 per rim clip, **plus potential-based shaping, 2 per metre** (`--budget-shape`) |
-| Passes | never end the episode. After each pass the required direction flips (back-and-forth). The next pass counts once the drone has flown 0.28 m clear of the ring (re-armed) |
+| Reward (`--reward budget`) | −0.005 per step. **Pass k of the episode pays 5 × min(1 + 0.5·(k−1), 3)**: ×1, ×1.5, ×2, ×2.5, then ×3 (`budget_pass`, `--streak`, `--streak-cap`). −0.05 per rim clip, **−0.5 for going back through the opening the wrong way** (`budget_wrong`), plus potential-based shaping, 2 per metre |
+| Passes | never end the episode. **Every pass goes the same way** (`--lap-dir same`): after a pass the drone has to fly round the outside of the ring, crossing its plane clear of the noodle, back to the side it entered from. The next pass counts once it is 0.28 m in front again |
 | Termination | the time, pass, rim and net terms (shaping excluded) reach **−budget** (10), **or** the drone touches the net, **or** the drone tips over, **or** 120 s pass (a safety cap) |
 | Net | touching it ends the episode, and the reward drains whatever budget is left |
 
@@ -255,6 +255,35 @@ This environment mirrors the real cage. It has a 2×2×2 m net with a hanging ri
 | v2 | `ppo_20261010-182515` | Obs +ring velocity and radius (82). Potential-based shaping with an axis pull. Pass +20, plus up to +10 for a centred one. Rim −3, net ends the episode with −5. Wind ramp-up. Stabilised PPO settings | v1 stalled at about 6% success: PPO overwrote itself every update, the policy couldn't see the ring swing, and the wind was at full strength from step 0 |
 | v3 | `ppo_20261011-013455`, then `ppo_20261011-024000` / `-025335` / `-032617` / `-023958` / `-212417` (budget 10, +5 per pass, sway 20°, continued each time) | The budget reward: passes don't end the episode, and there is no shaping | v2 learned to **park 18–31 cm in front of the ring** (0% passes after 14.5M steps). Under v3 the eval success rate stayed at 0–40%, and **no evaluation ever saw a second pass** (`max_passes` 1 in every run, 38M steps) |
 | v4 | `ppo_20261011-221214` (continued from `-212417` at 38.0M steps) | The lap "armed" flag in the observation (82 → 83). Potential-based shaping added back on top of the budget. Hover starts. The prop-wash ring, with the swing cut from 20° to 5° | See "Why each v4 change was made" below: the policy could not tell when a second pass would count, had no signal for the turn back, and parked in 7 of 10 episodes |
+| v5 | `ppo_20261011-225450` (continued from `-221214` at 39.1M steps) | Same-side laps round the outside. A streak bonus with the pass count in the observation (83 → 84). Starts from 9 zones in turn. The best model and the best run picked by passes per episode | See "Why each v5 change was made" below: v4 still never made a second pass (best 0.7 passes per episode) and mostly passed from one corner |
+
+Why each v5 change was made:
+
+- **Count passes, not reward.** `best_model.zip` was saved on the best mean reward, and the
+  dashboard's best run was picked on success rate, which only means "at least one pass". Reward is not
+  comparable once the reward changes, and a streak bonus makes it noisier. Now:
+  - **Best model:** `best_model.zip` follows the **mean passes per evaluation episode**, ties broken by
+    reward (`DashboardEvalCallback`).
+  - **History:** every evaluation is appended to `passes.json` (mean, max, and per start zone).
+  - **Best run:** the dashboard's best run is the one with the most passes per episode, chosen
+    separately for PyBullet and for the onboard camera task.
+  - **Chart and HUD:** the chart has a passes-per-episode line, and the live HUD shows "passes this
+    episode" with the multiplier the next pass will earn.
+- **A streak bonus.** One pass and five passes used to be worth the same per pass, so stringing
+  passes together had no extra pull. Pass k now pays ×(1 + 0.5·(k−1)), capped at ×3. Each pass
+  in a row is worth more than the last, but no single episode's reward explodes.
+  - **The budget tally keeps only the base +5,** so how long an episode lasts doesn't change.
+  - **The pass count is in the observation**, so the critic can see what the next pass will pay.
+- **Same side every time.** Back-and-forth let the drone dither through the ring and straight back.
+  Going round the outside to come in from the same side is the cleaner "loop" you asked for.
+  - **Wrong way:** back through the opening counts for nothing and costs −0.5.
+  - **Shaping:** it leads round via a point 0.55 m beside the ring, on whichever side has room before
+    the net, then to the approach point.
+- **Start from every area, equally often.** 70% of v4's episodes started where the previous one
+  ended (`carry_start`). A policy that keeps finishing in the same spot keeps practising from that
+  spot, so it passed mostly from one corner. Zone starts walk all 9 zones in turn, each environment
+  copy from its own starting zone. Evaluation (18 episodes) covers every zone twice and logs passes
+  per zone (`zone_passes` in `live_status.json`), so you can see which areas still fail.
 
 Why each v4 change was made. I ran `ppo_20261011-212417` (v3, 37M steps) on 10 evaluation
 episodes and traced what it did:
@@ -328,27 +357,31 @@ Why each v3 change was made:
 v2's shaped reward is still available as `--reward shaped`, the default for old runs and
 replays. In shaped mode `--laps 0` gives endless laps and `--no-net-terminate` restores the bounce.
 
-**Running v4.** The dashboard's Training panel sets all of this: the Reward (MDP) block, "Ring
-push from prop wash", "Ring swing" and "Start hovering". The equivalent from a terminal is below.
-`--start-z 0.8`, `--wash-deg 15`, `--sway-deg 5`, `--armed-obs` and `--budget-shape 2` are the
-defaults now. Any weight can be overridden with `--reward-weights '{"budget_pass": 5}'` (names:
-`DEFAULT_REWARD_WEIGHTS`):
+**Running v5.** The dashboard's Training panel sets all of this: the Reward (MDP) block, "Same side
+every time", "Start from every area", "Streak bonus per extra pass", "Ring push from prop wash",
+"Ring swing" and "Start hovering". The equivalent from a terminal is below.
+- **Defaults now:** `--start-z 0.8`, `--wash-deg 15`, `--sway-deg 5`, `--armed-obs`,
+  `--streak-obs`, `--budget-shape 2`, `--lap-dir same`, `--streak 0.5`, `--streak-cap 3`,
+  `--start-mode zones` and `--n-eval-episodes 18`.
+- **Overriding a weight:** use `--reward-weights '{"budget_pass": 5}'` (names:
+  `DEFAULT_REWARD_WEIGHTS`).
+- **Older parents:** an 82- or 83-number parent is widened automatically, with zero weights on the
+  new inputs.
 
 ```bash
 python scripts/train_hoop_multi.py --algo ppo --until-stopped --n-envs 6 --seed 0 \
-    --init results/hoop/runs/ppo_20261011-212417 --reward budget --budget 10 \
-    --reward-weights '{"budget_pass": 5}' --budget-shape 2 --start-z 0.8 --sway-deg 5 --wash-deg 15 \
-    --eval-freq 5000 --n-eval-episodes 10 --run-id ppo_v4 --out results/hoop/runs/ppo_v4
+    --init results/hoop/runs/ppo_20261011-221214 --reward budget --budget 10 \
+    --reward-weights '{"budget_pass": 5}' --eval-freq 5000 --run-id ppo_v5 --out results/hoop/runs/ppo_v5
 ```
 
 Old runs replay unchanged. The env's own defaults are still the old behaviour (floor start, no
-wash, 82 numbers, no budget shaping), and `env_kwargs_from_meta` rebuilds whatever a run
-recorded in its `meta.json`.
+wash, 82 numbers, no budget shaping, back-and-forth, random starts), and `env_kwargs_from_meta`
+rebuilds whatever a run recorded in its `meta.json`.
 
 - **Fewer evals:** a looping eval episode can last up to 120 s, which is why evals run every 100k
   steps with 5 episodes.
 - **Status:** `live_status.json` and `train.log` report **passes per episode** (`latest_mean_passes`,
-  `best_mean_passes`, `max_passes`).
+  `best_mean_passes`, `max_passes`, `zone_passes`), and `passes.json` keeps the history.
 - **Watching:** the dashboard's watch and replay views rebuild the env the run trained with
   (`env_kwargs_from_meta`). For budget runs the showcase has no practical time cap, so it shows
   how many passes the policy strings together before its budget runs out.
@@ -369,12 +402,15 @@ A scripted expert passes through on the test seeds (`scripts/tests/test_hoop_net
   with `--init`, 14.6M → 38.0M steps): eval success 0–40%, best mean 0.7 passes per episode,
   and **never a second pass** (`max_passes` 1). In 7 of 10 traced episodes the drone parked
   without touching the rim (see v4 above).
-- **`ppo_20261011-221214`** (v4, continued from `-212417`): started 2026-10-11 22:12.
-  _TODO: fill in passes per episode._
+- **`ppo_20261011-221214`** (v4, continued from `-212417`, 38.0M → 39.1M steps): eval success up to
+  70%, best mean 0.7 passes per episode, still **never a second pass** in an evaluation. Mostly
+  successful from one corner.
+- **`ppo_20261011-225450`** (v5, continued from `-221214`): started 2026-10-11 22:54.
+  _TODO: fill in passes per episode and per zone._
 
 #### Onboard-camera task: robust training
 
-The task that can fly the real Tello (`hardware/onboard/`, 34 camera and telemetry numbers, not the
+The task that can fly the real Tello (`hardware/onboard/`, 37 camera and telemetry numbers, not the
 PyBullet state) trains in its own fast simulator, which used to show the policy one drone, one
 nearly fixed ring, a perfect detector and a still ring, always from the same front runway. Since
 2026-10-11 it can be randomised, and the dashboard's Onboard options turn it on by default:
@@ -414,6 +450,7 @@ lap expert. See [Why the policy lined up but didn't go through](hardware/onboard
 | v2, parking at the entrance | `ppo_20261010-182515` @ 14.5M steps | _TODO_ |
 | v3, budget reward, repeated passes | `ppo_20261011-013455` @ _TBD_ | _TODO_ |
 | v4, armed flag + shaping, hover start, prop-wash ring | `ppo_20261011-221214` @ _TBD_ | _TODO_ |
+| v5, same-side laps, streak, 9 start zones | `ppo_20261011-225450` @ _TBD_ | _TODO_ |
 | Onboard task, robust (swinging ring, hard starts) | `onboard_20261011-032612` @ _TBD_ | _TODO_ |
 
 You can preview it in the dashboard's **Environment** tab, which also overlays the phone scan.

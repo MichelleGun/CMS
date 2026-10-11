@@ -1,0 +1,18 @@
+{
+  "run_id": "net_ppo_quick",
+  "algo": "ppo",
+  "env_variant": "continuous_vel",
+  "env": "net",
+  "seed": null,
+  "start_override": null,
+  "target_override": null,
+  "timesteps_requested": 300000,
+  "n_envs": 4,
+  "eval_freq": 5000,
+  "n_eval_episodes": 10,
+  "pid": 28572,
+  "created_at": "2026-10-09T22:22:22.631228",
+  "finished_at": "2026-10-09T22:32:02.231677",
+  "final_status": "completed",
+  "final_timesteps": 303104
+}

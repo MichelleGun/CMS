@@ -116,12 +116,12 @@ def test_upgraded_demos_match_the_builder():
             if term or trunc:
                 break
     full = np.array(rows)
-    sl = spec.OBS_SLICES["pushed"].start
-    legacy = np.delete(full, sl, axis=1)
-    assert legacy.shape[1] == spec.LEGACY_OBS_DIM
-    up = upgrade_obs(legacy, np.array(eps), np.array(ts))
-    assert up.shape == full.shape
-    assert np.allclose(up, full, atol=2e-3)
+    for width in (33, 34):                               # before `pushed`, before the heading memory
+        legacy = full[:, spec.legacy_columns(width)]
+        assert legacy.shape[1] == width
+        up = upgrade_obs(legacy, np.array(eps), np.array(ts))
+        assert up.shape == full.shape
+        assert np.allclose(up, full, atol=2e-3)
     env.close()
 
 
@@ -180,23 +180,25 @@ def test_widened_onboard_policy_acts_like_the_old_one(tmp_path):
     from stable_baselines3 import PPO
     from vec_util import load_for_resume
     from onboard.policy import load_policy
+    from onboard.train_onboard import _widen_index
 
-    class Old(OnboardHoopEnv):
-        def __init__(self):
-            super().__init__(seed=0)
-            self.observation_space = spaces.Box(-np.inf, np.inf, shape=(spec.LEGACY_OBS_DIM,),
-                                                dtype=np.float32)
-    old = PPO("MlpPolicy", Old(), n_steps=64, batch_size=32, seed=0, device="cpu")
-    old.save(tmp_path / "old.zip")
-    new_env = OnboardHoopEnv(seed=0)
-    wide, _ = load_for_resume(PPO, tmp_path / "old.zip", new_env,
-                              widen_at=spec.OBS_SLICES["pushed"].start)
-    legacy_fn = load_policy(tmp_path / "old.zip", algo="ppo")    # old models still fly
-    rng = np.random.default_rng(1)
-    for _ in range(5):
-        o = rng.normal(size=spec.OBS_DIM).astype(np.float32)
-        a_wide, _ = wide.predict(o, deterministic=True)
-        a_old, _ = old.predict(np.delete(o, spec.OBS_SLICES["pushed"].start), deterministic=True)
-        assert np.allclose(a_wide, a_old, atol=1e-6)
-        assert np.allclose(legacy_fn(o), np.clip(a_old, -1, 1), atol=1e-6)
-    new_env.close()
+    for width in (33, 34):
+        class Old(OnboardHoopEnv):
+            def __init__(self):
+                super().__init__(seed=0)
+                self.observation_space = spaces.Box(-np.inf, np.inf, shape=(width,),
+                                                    dtype=np.float32)
+        old = PPO("MlpPolicy", Old(), n_steps=64, batch_size=32, seed=0, device="cpu")
+        old.save(tmp_path / f"old{width}.zip")
+        new_env = OnboardHoopEnv(seed=0)
+        wide, _ = load_for_resume(PPO, tmp_path / f"old{width}.zip", new_env, widen_at=_widen_index)
+        legacy_fn = load_policy(tmp_path / f"old{width}.zip", algo="ppo")   # old models still fly
+        keep = spec.legacy_columns(width)
+        rng = np.random.default_rng(1)
+        for _ in range(5):
+            o = rng.normal(size=spec.OBS_DIM).astype(np.float32)
+            a_wide, _ = wide.predict(o, deterministic=True)
+            a_old, _ = old.predict(o[keep], deterministic=True)
+            assert np.allclose(a_wide, a_old, atol=1e-6)
+            assert np.allclose(legacy_fn(o), np.clip(a_old, -1, 1), atol=1e-6)
+        new_env.close()

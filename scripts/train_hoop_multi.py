@@ -26,6 +26,8 @@ Usage:
         --reward-weights '{"budget_pass": 5}' --budget-shape 2 --start-z 0.8 --sway-deg 5 \
         --wash-deg 15 --init ../results/hoop/runs/ppo_20261011-212417 \
         --run-id ppo_v4 --out ../results/hoop/runs/ppo_v4
+    # MDP v5: same-side laps (round the outside), streak bonus, starts from all 9 zones; these are
+    # the defaults now (--lap-dir same --streak 0.5 --streak-cap 3 --start-mode zones), obs 84
 """
 import argparse
 import json
@@ -44,7 +46,7 @@ from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from hoop_env import HoopFindAviary, ROOM  # noqa: E402
-from hoop_net_env import HoopNetAviary, merge_reward_weights, ARMED_INDEX  # noqa: E402
+from hoop_net_env import HoopNetAviary, merge_reward_weights, LAP_DIRS, START_MODES  # noqa: E402
 from discrete_action_wrapper import HoopFindDiscreteVel  # noqa: E402
 from telemetry_callback import (TelemetryCallback, DashboardEvalCallback, CameraCallback,  # noqa: E402
                                 PaceCallback)
@@ -188,6 +190,9 @@ def _make_env_kwargs(args):
         kwargs["wash_deg"] = args.wash_deg
         kwargs["start_z"] = args.start_z if args.start_z > 0 else None
         kwargs["armed_obs"] = args.armed_obs
+        kwargs["streak_obs"] = args.armed_obs and args.streak_obs
+        kwargs["lap_dir"] = args.lap_dir
+        kwargs["start_mode"] = args.start_mode
         if args.wind_steps > 0:
             kwargs["wind"] = 0.0       # the wind curriculum ramps it up from calm
     if args.seed is not None:
@@ -222,6 +227,20 @@ def main():
     ap.add_argument("--armed-obs", action=argparse.BooleanOptionalAction, default=True,
                      help="net env: put the lap 'armed' flag in the observation (83-D). Without it, "
                           "'just passed, not re-armed' and 'lined up, go' look the same to the policy")
+    ap.add_argument("--streak-obs", action=argparse.BooleanOptionalAction, default=True,
+                     help="net env: put the pass count of the episode in the observation (84-D), so "
+                          "the critic can see what the streak bonus will pay")
+    ap.add_argument("--lap-dir", choices=LAP_DIRS, default="same",
+                     help="net env, laps: 'same' = every pass the same way, flying round the outside "
+                          "of the ring back to the entry side; 'alternate' = back-and-forth (v4)")
+    ap.add_argument("--streak", type=float, default=0.5,
+                     help="net env: pass k of an episode pays x min(1 + STREAK x (k - 1), --streak-cap) "
+                          "(0 = every pass the same)")
+    ap.add_argument("--streak-cap", type=float, default=3.0)
+    ap.add_argument("--start-mode", choices=START_MODES, default="zones",
+                     help="net env: 'zones' = each episode starts in the next of 9 zones (the 8 outer "
+                          "cells of a 3x3 grid and under the hoop), round-robin; 'random' = anywhere / "
+                          "carried over from the last episode (v4)")
     ap.add_argument("--budget-shape", type=float, default=None,
                      help="net env, --reward budget: weight of the potential-based shaping (MDP v4; "
                           "default 2, 0 = plain v3). Overrides budget_shape in --reward-weights")
@@ -273,7 +292,8 @@ def main():
                      help="continue from a saved policy: a .zip, or a run directory "
                           "(latest -> best -> final model). Its step count carries on.")
     ap.add_argument("--eval-freq", type=int, default=2000)
-    ap.add_argument("--n-eval-episodes", type=int, default=10)
+    ap.add_argument("--n-eval-episodes", type=int, default=18,
+                     help="18 = every start zone twice with --start-mode zones")
     ap.add_argument("--run-id", type=str, required=True)
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
@@ -294,6 +314,12 @@ def main():
             elif "budget_shape" not in rw:
                 rw["budget_shape"] = 2.0
             args.reward_weights = rw
+        rw = dict(args.reward_weights or {})
+        rw.setdefault("budget_streak", args.streak)
+        rw.setdefault("budget_streak_cap", args.streak_cap)
+        if args.lap_dir == "same":
+            rw.setdefault("budget_wrong", 0.5)
+        args.reward_weights = rw
         if args.episode_sec is None:
             args.episode_sec = 120.0 if args.reward == "budget" else 20.0
     budget = UNTIL_STOPPED_BUDGET if args.until_stopped else args.timesteps
@@ -342,6 +368,9 @@ def main():
         "wash_deg": args.wash_deg if args.env == "net" else None,
         "start_z": (args.start_z if args.start_z > 0 else None) if args.env == "net" else None,
         "armed_obs": bool(args.armed_obs) if args.env == "net" else None,
+        "streak_obs": bool(args.armed_obs and args.streak_obs) if args.env == "net" else None,
+        "lap_dir": args.lap_dir if args.env == "net" else None,
+        "start_mode": args.start_mode if args.env == "net" else None,
         "obs_dim": None,
         "hyperparams": None,
         "n_envs": args.n_envs,
@@ -387,8 +416,9 @@ def main():
     torch.set_num_threads(1)
     if init_path is not None:
         try:
-            # an older parent without the "armed" flag is widened (zero weights for the new input)
-            widen = ARMED_INDEX + 1 if args.env == "net" and args.armed_obs else None
+            # an older parent without the "armed" flag / pass count is widened (zero weights for the
+            # new inputs, which all sit just before the 3-number vector to the ring)
+            widen = -3 if args.env == "net" and args.armed_obs else None
             model, _ = load_for_resume(algo_cls, init_path, train_env, widen_at=widen)
         except ValueError as e:
             train_env.close()

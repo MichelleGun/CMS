@@ -26,6 +26,15 @@ const RewardChart = (() => {
             tension: 0.15,
             borderDash: [4, 3],
           },
+          {
+            label: "passes / episode",
+            data: [],
+            borderColor: "#3fb68b",
+            backgroundColor: "#3fb68b",
+            pointRadius: 2,
+            tension: 0.15,
+            yAxisID: "y2",
+          },
         ],
       },
       options: {
@@ -44,6 +53,14 @@ const RewardChart = (() => {
             title: { display: true, text: "mean eval reward", color: "#9494ab" },
             ticks: { color: "#9494ab" },
             grid: { color: "#34344a" },
+          },
+          y2: {
+            position: "right",
+            min: 0,
+            suggestedMax: 2,
+            title: { display: true, text: "passes / episode", color: "#3fb68b" },
+            ticks: { color: "#3fb68b" },
+            grid: { drawOnChartArea: false },
           },
         },
         plugins: { legend: { display: false } },
@@ -69,8 +86,25 @@ const RewardChart = (() => {
 
   function clearCurrent() {
     chart.data.datasets[0].data = [];
+    chart.data.datasets[2].data = [];
     chart.update("none");
   }
 
-  return { init, setCurrentCurve, appendCurrentPoint, setBestCurve, clearCurrent };
+  // mean passes per evaluation episode of the viewed run (passes.json), on the right axis
+  function setPasses(points) {
+    chart.data.datasets[2].data = (points || []).filter((p) => p.mean !== null && p.mean !== undefined)
+      .map((p) => ({ x: p.t, y: p.mean }));
+    chart.update("none");
+  }
+
+  function appendPassesPoint(t, mean) {
+    if (mean === null || mean === undefined) return;
+    const d = chart.data.datasets[2].data;
+    if (d.length && d[d.length - 1].x >= t) return;
+    d.push({ x: t, y: mean });
+    chart.update("none");
+  }
+
+  return { init, setCurrentCurve, appendCurrentPoint, setBestCurve, clearCurrent, setPasses,
+           appendPassesPoint };
 })();

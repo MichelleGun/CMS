@@ -1,5 +1,46 @@
 # Progress log
 
+## Done (2026-10-11, late night): count passes, streaks, same side, every area (v5)
+
+- **Why:** v4 still never made a second pass in PyBullet (best 0.7 passes per episode), and both
+  policies passed mostly from one corner:
+  - PyBullet: 70% of episodes started where the last one ended.
+  - Onboard: 50% of episodes started on the front runway.
+  - `best_model.zip` followed reward, and the dashboard's best run followed success rate.
+- **Counting passes** (`scripts/telemetry_callback.py`, `webapp/`):
+  - `best_model.zip` follows mean passes per evaluation episode (ties broken by reward).
+  - Every evaluation goes to `passes.json` (mean, max, per zone); `zone_passes` is in
+    `live_status.json`.
+  - The best run is the one with the most passes per episode, chosen per environment (PyBullet
+    and onboard; `best_run_ids`).
+  - The chart has a passes-per-episode line; the HUD shows passes this episode, the next pass's
+    streak multiplier and the start zone.
+- **Streak bonus:** pass k pays ×min(1 + 0.5·(k−1), 3), in both sims. In PyBullet the extra stays
+  out of the budget tally, and the pass count is in the observation (83 → 84).
+- **Same-side laps** (`lap_dir="same"`, both sims): back round the outside to the entry side
+  before the next pass counts. Back through the opening is wrong-way (PyBullet −0.5). The shaping
+  leads round via a point 0.55 m beside the ring.
+- **Onboard heading memory** (34 → 37 numbers): `pass_heading` and `streak`, from a telemetry-only
+  pass detector (`obs.PassDetector`). A ring looks the same from both sides, so without it the
+  camera drone can't tell front from back.
+  - Old 33/34-wide demos are upgraded on load and old policies widened (or still flyable).
+  - The expert orbits round the ring to the entry side, searches with a full turn at ring height,
+    and moves on if the ring isn't in view.
+  - New demos `onboard_sim_laps_same.npz`: 184/360 episodes kept, 0.77 passes per episode, max 4.
+    Every zone has passes; under the hoop is hardest (8/40).
+- **Start zones** (`start_mode="zones"`, both sims): 9 zones round-robin (8 outer cells of a 3×3
+  grid plus under the hoop). Evaluation is 18 episodes, each zone twice.
+- **Dashboard:** "Same side every time", "Start from every area" and "Streak bonus" in the
+  Training panel. The backend was restarted to serve them (logs in `webapp/dashboard.*.log`).
+- **Tests:** 456 pass (67 `scripts/tests`, 330 `hardware`, 59 `webapp/backend/tests`).
+- **Runs:**
+  - v4 stopped: `ppo_20261011-221214` cleanly at 39.1M steps (best 0.7 passes per episode, max 1).
+    `onboard_v4_20261011-221406` was force-stopped (terminal-started) at 29.8M steps (best 0.65
+    passes per episode, max 3).
+  - Live since 22:54: `ppo_20261011-225450` (v5, from `-221214`, dashboard) and
+    `onboard_v5_20261011-225528` (from `onboard_v4` best, terminal, BC on the new demos + teacher +
+    human ×10). _TODO: passes per episode and per zone._
+
 ## Done (2026-10-11, night): find → align → through → repeat
 
 - **Diagnosis** (read-only traces of the best checkpoints):

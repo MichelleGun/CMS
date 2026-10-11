@@ -84,6 +84,13 @@ NOISE_CXY = 0.02       # detector noise (half-frames), size (fraction), axis rat
 NOISE_MAJOR = 0.05
 NOISE_RATIO = 0.04
 START_TYPES = ("front", "behind", "beside", "below", "anywhere")
+# start_mode="zones": 9 zones round-robin, the 8 outer cells of a 3x3 grid over the cage
+# (top = +y, right = +x: top-left, top-middle, top-right, middle-right, bottom-right,
+# bottom-middle, bottom-left, middle-left) and right under the hoop; facing anywhere.
+ZONE_CELLS = ((-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1), (-1, 0))
+ZONE_NAMES = ("top-left", "top-middle", "top-right", "middle-right", "bottom-right",
+              "bottom-middle", "bottom-left", "middle-left", "under the hoop")
+START_MODES = ("ring", "zones")
 # open_plane: crossing the plane clear of the noodle (under it, around it) is no outcome --
 # in the real cage that is just flying past the ring, not a failure. Only a pass or a strike
 # ends the episode then.
@@ -182,7 +189,8 @@ class OnboardSim:
                  ring_noodle_m: float = spec.RING_NOODLE_M,
                  drone_width_m: float = spec.DRONE_WIDTH_M,
                  dr: float = 0.0, sway_deg: float = DEFAULT_SWAY_DEG, hard_start_p: float = 0.0,
-                 ramp: float = 1.0, open_plane: bool = False, wash_deg: float = 0.0):
+                 ramp: float = 1.0, open_plane: bool = False, wash_deg: float = 0.0,
+                 start_mode: str = "ring"):
         """dr / sway_deg / hard_start_p / ramp: see the module docstring. open_plane: a crossing
         of the ring's plane clear of the noodle (under it, around it) is not an outcome and the
         episode goes on (so there is no "missed"); needed once starts can be beside or below."""
@@ -193,6 +201,13 @@ class OnboardSim:
         self.open_plane = bool(open_plane)
         self.wash_deg = float(wash_deg)
         self._wash = None
+        if start_mode not in START_MODES:
+            raise ValueError(f"start_mode must be one of {START_MODES}")
+        self.start_mode = start_mode
+        # zones: the round-robin starts at a zone set by the seed (parallel envs get different
+        # seeds, so they start spread over the zones); it is not reset with the episode seed
+        self._zone_i = int(seed or 0) % 9
+        self.clear_cross = 0           # open plane: last crossing clear of the noodle (+1 / -1)
         self.speed_scale = self.yaw_scale = 1.0
         self.start_type = "front"
         self._swing = None
@@ -248,7 +263,10 @@ class OnboardSim:
             self._latency = False
         pos, yaw = self._fixed_start
         self.start_type = "front"
-        if pos is None and self.hard_p_eff > 0 and self.rng.random() < self.hard_p_eff:
+        self.clear_cross = 0
+        if pos is None and self.start_mode == "zones":
+            self.start_type = "zone"
+        elif pos is None and self.hard_p_eff > 0 and self.rng.random() < self.hard_p_eff:
             self.start_type = START_TYPES[1 + int(self.rng.integers(len(START_TYPES) - 1))]
         self.pos = np.array(pos, dtype=float) if pos is not None else self._sample_start()
         self.yaw_deg = float(yaw) if yaw is not None else self._sample_yaw()
@@ -295,6 +313,8 @@ class OnboardSim:
         # puts the ring centre near cy = -0.52 at this standoff, with its top edge just
         # outside the frame, so the first detection of every episode is a clipped one and
         # ring_detect's arc-span path is load-bearing at acquisition, not just on approach.
+        if self.start_type == "zone":
+            return self._sample_zone_start()
         if self.start_type != "front":
             return self._sample_hard_start()
         dr = self.dr_eff
@@ -303,6 +323,38 @@ class OnboardSim:
         return np.array([x,
                          self.ring.centre[1] + self.rng.uniform(-wy, wy),
                          TAKEOFF_Z + self.rng.uniform(-wz, wz)])
+
+    def _sample_zone_start(self) -> np.ndarray:
+        """The next zone of the round-robin (sets start_type to zone_1 .. zone_9): a random point
+        in that cell at about takeoff height, re-drawn if within 0.3 m of the ring; zone 9 is
+        under the hoop, kept clear below its bottom."""
+        k = self._zone_i % 9
+        self._zone_i += 1
+        self.start_type = f"zone_{k + 1}"
+        U = self.rng.uniform
+        lim = CAGE_XY - 0.12
+        c = self.ring.centre
+        z = TAKEOFF_Z + U(-0.10, 0.10)
+        if k == 8:
+            xy = c[:2] + np.array([U(-0.15, 0.15), U(-0.15, 0.15)])
+            bottom = c[2] - self.ring.outer_m / 2.0
+            z = min(z, bottom - self.drone_radius_m - 0.08)
+        else:
+            w = 2 * lim / 3
+            col, row = ZONE_CELLS[k]
+            centre = np.array([col, row]) * w
+            for _ in range(20):
+                xy = centre + np.array([U(-w / 2, w / 2), U(-w / 2, w / 2)])
+                if np.hypot(*(xy - c[:2])) > 0.30:
+                    break
+        return np.array([float(np.clip(xy[0], -lim, lim)), float(np.clip(xy[1], -lim, lim)),
+                         float(np.clip(z, 0.30, CAGE_Z[1] - 0.10))])
+
+    def pop_clear_crossing(self) -> int:
+        """+1 / -1: the drone crossed the ring's plane clear of the noodle since the last call
+        (open plane only; the sign is the side it ended on along the normal); else 0."""
+        c, self.clear_cross = self.clear_cross, 0
+        return c
 
     def _sample_hard_start(self) -> np.ndarray:
         """Behind, beside or below the ring, or anywhere: relative to the ring's axis n and
@@ -427,6 +479,7 @@ class OnboardSim:
         if self.open_plane and radial > (self.ring.radius + self.ring.noodle_m
                                          + self.drone_radius_m):
             self._prev_side = side           # cleared the ring (under / around it): fly on
+            self.clear_cross = 1 if side > 0 else -1
             return
         # The drone is an aircraft, not a point, and that distinction is the whole
         # question at a 30 cm opening: its EDGE has to clear the noodle, so the pass band

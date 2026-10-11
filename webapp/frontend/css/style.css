@@ -659,3 +659,5 @@ select:disabled, input:disabled { opacity: 0.45; cursor: not-allowed; }
 .run-row.starred strong { color: #ffd34d; }
 .run-row { padding-right: 30px; }
 .run-row.best-run > strong { display: inline-block; padding-right: 50px; }
+
+.legend-passes { background: #3fb68b; }

@@ -149,7 +149,8 @@ class RunManager:
                   reward_mode: str = "shaped", budget: float = 3.0, laps: int = 1,
                   reward_weights: Optional[dict] = None, onboard_laps: int = 0,
                   onboard_wash_deg: float = 15.0, wash_deg: float = 15.0,
-                  start_z: float = 0.8) -> str:
+                  start_z: float = 0.8, same_side: bool = True, start_zones: bool = True,
+                  streak: float = 0.5) -> str:
         if env == "onboard":
             algo = "ppo"                            # the onboard trainer is PPO (+ demo term)
         if algo not in ALGORITHM_IDS:
@@ -188,6 +189,8 @@ class RunManager:
             argv = [PYTHON_EXE, str(ONBOARD_TRAIN), *common, "--profile", profile,
                     "--dr", str(onboard_dr), "--sway-deg", str(onboard_sway_deg),
                     "--wash-deg", str(onboard_wash_deg),
+                    "--lap-dir", "same" if same_side else "alternate",
+                    "--start-mode", "zones" if start_zones else "ring", "--streak", str(streak),
                     "--hard-start-p", str(hard_start_p), "--dr-steps", str(int(dr_steps)),
                     "--laps", str(int(onboard_laps)),
                     "--bc-augment" if bc_augment else "--no-bc-augment"]
@@ -202,6 +205,9 @@ class RunManager:
                 argv += ["--ring-jitter", str(ring_jitter), "--radius-start", str(radius_start),
                          "--sway-deg", str(sway_deg), "--wash-deg", str(wash_deg),
                          "--start-z", str(start_z),
+                         "--lap-dir", "same" if same_side else "alternate",
+                         "--start-mode", "zones" if start_zones else "random",
+                         "--streak", str(streak),
                          "--carry-start", str(carry_start), "--reverse-prob", str(reverse_prob),
                          "--lean-flip-prob", str(lean_flip_prob),
                          "--wind-steps", str(int(wind_steps)), "--reward", reward_mode,
@@ -294,11 +300,14 @@ class RunManager:
                 "starred": bool(tags.get("starred")),
                 "best_success_rate": self._best_success(d),
                 "best_mean_passes": status_doc.get("best_mean_passes"),
-                "comparable": meta.get("env") == "net" and meta.get("obs_dim") in NET_OBS_DIMS,
+                "comparable": (meta.get("env") == "net" and meta.get("obs_dim") in NET_OBS_DIMS)
+                              or meta.get("env") == "onboard",
             })
         current_run_id = runs[-1]["run_id"] if runs else None
-        best_run_id = _pick_best(runs)
+        best_run_ids = {env: _pick_best(runs, env) for env in ("net", "onboard")}
+        best_run_id = best_run_ids["net"]
         return {"runs": runs, "current_run_id": current_run_id, "best_run_id": best_run_id,
+                "best_run_ids": best_run_ids,
                 "capacity": self.capacity()}
 
     def get_run(self, run_id: str):
@@ -308,7 +317,9 @@ class RunManager:
             return None
         live_status = _read_json(d / "live_status.json")
         curve = _read_curve(d / "evaluations.npz")
+        passes = _read_json(d / "passes.json")
         return {"meta": meta, "live_status": live_status, "curve": curve,
+                "passes": passes if isinstance(passes, list) else None,
                 "label": _read_tags(d).get("label"),
                 "starred": bool(_read_tags(d).get("starred")),
                 "status": self._status(run_id, meta, live_status or {})}
@@ -531,21 +542,27 @@ def _write_tags(run_dir: Path, tags: dict):
     os.replace(tmp, path)
 
 
-def _pick_best(runs):
-    """The run to highlight: among runs on today's net env (comparable), the highest eval success
-    rate, then mean passes, then eval reward. Reward alone is not comparable across reward modes
-    (a budget-mode 2 can beat a shaped-mode 13). Falls back to the highest reward."""
+def _pick_best(runs, env="net"):
+    """The run to highlight for one environment ("net" = PyBullet, "onboard" = camera): among its
+    comparable runs, the most passes per evaluation episode, then eval success rate, then eval
+    reward. Passes are what the task is about (and what a streak bonus rewards); reward is not
+    comparable across reward modes (a budget-mode 2 can beat a shaped-mode 13). For "net", falls
+    back to the highest reward when no run has been evaluated on today's env."""
     def num(v):
         return -1e18 if v is None else float(v)
-    cands = [r for r in runs if r["comparable"] and r["best_success_rate"] is not None]
+    mine = [r for r in runs if r.get("env", "net") == env]
+    cands = [r for r in mine if r["comparable"]
+             and (r["best_mean_passes"] is not None or r["best_success_rate"] is not None)]
     if cands:
         # older runs did not log mean passes: with one pass per episode it equals the success rate
-        best = max(cands, key=lambda r: (num(r["best_success_rate"]),
-                                         num(r["best_mean_passes"] if r["best_mean_passes"] is not None
+        best = max(cands, key=lambda r: (num(r["best_mean_passes"] if r["best_mean_passes"] is not None
                                              else r["best_success_rate"]),
+                                         num(r["best_success_rate"]),
                                          num(r["best_eval_reward"])))
         return best["run_id"]
-    scored = [r for r in runs if r["best_eval_reward"] is not None]
+    if env != "net":
+        return None
+    scored = [r for r in runs if r["best_eval_reward"] is not None and r.get("env") != "onboard"]
     return max(scored, key=lambda r: r["best_eval_reward"])["run_id"] if scored else None
 
 

@@ -467,6 +467,81 @@ commands: its motors only start with the firmware `takeoff` command, which climb
 takeoff would train something the real drone never does. Robustness comes from varying where
 control is handed over: height, position, facing and the hard starts.
 
+### Same side every time, every area, and counting passes (v5)
+
+```bash
+python hardware/onboard/make_demos.py --episodes 360 --dr 1 --sway-deg 5 --wash-deg 15 \
+    --laps 0 --lap-dir same --start-mode zones --seed 2000 \
+    --out hardware/flights/demos/onboard_sim_laps_same.npz
+python hardware/onboard/train_onboard.py --until-stopped --n-envs 8 \
+    --init results/hoop/runs/onboard_v4_20261011-221406/best_model.zip \
+    --demos hardware/flights/demos/onboard_sim_laps_same.npz hardware/flights/demos/teacher_*.npz \
+            hardware/flights/tello_*/demo.npz --source-weight human=10 --critic-warmup-steps 30000 \
+    --dr 1 --sway-deg 5 --wash-deg 15 --laps 0 --run-id onboard_v5 --out ...
+```
+
+`--lap-dir same`, `--start-mode zones`, `--streak 0.5`, `--streak-cap 3` and
+`--n-eval-episodes 18` are the defaults now.
+
+**Same side every time** (`--lap-dir same`). After a pass the drone flies round the outside of
+the ring, crossing its plane clear of the noodle (`OnboardSim.pop_clear_crossing`), back to the
+side it entered from, and goes through the same way again. Going back through the opening is
+wrong-way (`R_WRONG_WAY`) and counts for nothing. The shaping leads round via a point 0.55 m
+beside the ring, on the side with room before the net. While going round, the facing term looks
+at the ring's centre, which rewards circling it while keeping it in view.
+
+**Why the camera drone needs a heading memory.** A ring looks the same from the front and from
+the back, so from the image alone the drone cannot tell whether it is back on the entry side.
+The observation now remembers which way it was going when it last went through (37 numbers,
+was 34):
+
+| New field | Meaning |
+|---|---|
+| `pass_heading` (cos, sin) | the drone's heading minus its heading at the last pass: about (1, 0) means it faces the way it went through, so a ring ahead is the entry side; about (−1, 0) means it is looking at the back of the ring. (0, 0) until the first pass |
+| `streak` | passes so far this episode, `min(passes, 4) / 4`, so the critic can see what the next pass will pay |
+
+- **How a pass is detected:** from telemetry alone, by `obs.PassDetector`. After a sighting closer
+  than 0.8 m, a pass is declared once the blind push (the `pushed` odometer) has gone 0.15 m
+  beyond that range.
+- **Real flights:** they run the same code, using the Tello's own yaw, which drifts only a few
+  degrees a minute. A test checks the detector against the simulator's true pass count on expert
+  flights.
+- **Older data:** older demos (33 or 34 wide) are upgraded on load by replaying the same detector,
+  with the heading integrated from the recorded yaw rate. Older policies are widened (zero weights
+  on the new inputs) or still fly with the new columns dropped (`policy.py`).
+
+**Streak bonus.** Pass k of an episode pays `R_PASSED × min(1 + 0.5·(k−1), 3)`: ×1, ×1.5, ×2,
+×2.5, then ×3. Each pass in a row is worth more than the last, which pulls towards long strings
+of passes. The cap keeps any one episode's reward from exploding.
+
+**Starts from every area** (`--start-mode zones`, `sim.py`).
+- **Before:** half of all episodes started on the measured front runway, so the policy passed
+  mostly from one place.
+- **The zones:** each episode now starts in the next of 9 zones, round-robin: the 8 outer cells of a
+  3×3 grid over the cage (top-left, top-middle, top-right, middle-right, bottom-right,
+  bottom-middle, bottom-left, middle-left; top = +y, right = +x) and right under the hoop
+  (hovering below its bottom), facing anywhere.
+- **Equal frequency:** parallel environment copies start at different zones (from their seeds),
+  so every zone is trained equally often.
+- **Evaluation:** 18 episodes, each zone twice, with passes per zone logged (`zone_passes` in
+  `live_status.json`, `passes.json`).
+
+**The scripted expert does all of this too**, so the demos cover it:
+- **First search:** it now turns a full circle at the ring's usual height. If the ring isn't in
+  view (from right under it, it is above the camera), it flies a little way forward and looks again.
+- **After each pass:** it clears the ring, turns until it finds it (from behind), then **orbits**:
+  strafe, nose on the ring, hold 0.5 m. It goes round until `pass_heading` says it faces the way it
+  went through, then lines up and goes again.
+- **Choosing the way round:** in the simulator the demonstrator is told which side has room (a
+  demo-only hint; the recorded observations are only what the drone measures).
+- **Results:** with full randomisation, the prop wash and zone starts, it kept 184 of 360
+  episodes, 0.77 passes per episode, up to 4. By zone it passed in 30/40 (top-left), 15/40
+  (top-middle), 24/40, 32/40, 15/40, 16/40, 19/40, 25/40 and 8/40 (under the hoop, the hardest).
+
+**Picking by passes.** `best_model.zip` now follows the mean passes per evaluation episode (ties
+broken by reward). The dashboard's BEST tag goes to the onboard run with the most passes per
+episode, chosen separately from the PyBullet runs.
+
 ## If something goes wrong
 
 | What you see | What it means |

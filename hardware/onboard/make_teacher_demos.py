@@ -61,6 +61,7 @@ PYB_ACTION_BUFFER = PYB_CTRL_HZ // 2   # BaseRLAviary.ACTION_BUFFER_SIZE
 TEACHER_OBS_DIM = 12 + 4 * PYB_ACTION_BUFFER + 10         # 82: + normal, ring vel, radius, rel
 LEGACY_TEACHER_OBS_DIM = 12 + 4 * PYB_ACTION_BUFFER + 6   # 78: + normal, rel (older runs)
 ARMED_TEACHER_OBS_DIM = TEACHER_OBS_DIM + 1               # 83: + the lap "armed" flag (v4 runs)
+STREAK_TEACHER_OBS_DIM = TEACHER_OBS_DIM + 2              # 84: + the pass count (v5 runs)
 YAW_K = 1.0 / 35.0                     # rc per degree of heading error
 YAW_MAX = 0.7
 YAW_FREEZE_M = 0.35
@@ -96,7 +97,8 @@ class SimTeacher:
             raise ValueError("frame must be 'canonical' or 'world'")
         self.frame = frame
         shape = tuple(model.observation_space.shape)
-        if shape[-1] not in (TEACHER_OBS_DIM, LEGACY_TEACHER_OBS_DIM, ARMED_TEACHER_OBS_DIM):
+        if shape[-1] not in (TEACHER_OBS_DIM, LEGACY_TEACHER_OBS_DIM, ARMED_TEACHER_OBS_DIM,
+                             STREAK_TEACHER_OBS_DIM):
             raise ValueError(f"teacher expects observations of width {shape[-1]}; a HoopNetAviary "
                              f"(net env) policy has {TEACHER_OBS_DIM} (or {LEGACY_TEACHER_OBS_DIM} "
                              "for older runs). Is this a legacy-env or onboard-task model?")
@@ -136,10 +138,12 @@ class SimTeacher:
         pos = R @ (sim.pos - c) + c_t
         kin = np.concatenate([pos, np.zeros(3), R @ sim.vel, np.zeros(3)])
         ring = [R @ self.pass_dir(sim)]
-        if self.obs_shape[-1] in (TEACHER_OBS_DIM, ARMED_TEACHER_OBS_DIM):   # the ring hangs still
+        if self.obs_shape[-1] != LEGACY_TEACHER_OBS_DIM:   # the ring hangs still
             ring += [np.zeros(3), [sim.ring.radius]]
-        if self.obs_shape[-1] == ARMED_TEACHER_OBS_DIM:  # always armed: each demo is one pass
-            ring += [[1.0]]
+        if self.obs_shape[-1] in (ARMED_TEACHER_OBS_DIM, STREAK_TEACHER_OBS_DIM):
+            ring += [[1.0]]                              # always armed: each demo is one pass
+        if self.obs_shape[-1] == STREAK_TEACHER_OBS_DIM:
+            ring += [[0.0]]                              # ... the first of the episode
         obs = np.concatenate([kin, np.concatenate(list(self.buf)), *ring, R @ (c - sim.pos)])
         return obs.astype(np.float32).reshape(self.obs_shape)
 

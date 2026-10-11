@@ -121,6 +121,7 @@ def mirror_signs():
     obs[sl["vel"].start + 1] = -1         # vgy
     obs[sl["att"].start + 1] = -1         # roll
     obs[sl["att"].start + 2] = -1         # yaw rate
+    obs[sl["pass_heading"].start + 1] = -1    # sin of the heading since the last pass
     a0 = sl["actions"].start
     for k in range(spec.ACT_BUFFER):
         obs[a0 + k * spec.ACT_DIM + spec.ACT_LR] = -1
@@ -141,6 +142,12 @@ def noise_columns():
 
 
 BC_NOISE_STD = 0.02
+
+
+def _widen_index(old_width: int) -> int:
+    """Where an older policy's observation gets the newer fields: 33 wide (before `pushed`) at the
+    end of `last_centre`; 34 wide (before the heading memory) just after `pushed`."""
+    return spec.layout_slices(old_width)["last_centre"].stop + (1 if old_width == 34 else 0)
 
 
 class EvalSeedReset(BaseCallback):
@@ -334,6 +341,16 @@ def main(argv=None):
     ap.add_argument("--laps", type=int, default=0,
                     help="passes per episode: 0 = endless back-and-forth (fly through, clear the ring, "
                          "turn round, come back through), 1 = the episode ends at the first crossing")
+    ap.add_argument("--lap-dir", choices=["alternate", "same"], default="same",
+                    help="laps: 'same' = every pass the same way, round the outside of the ring back to "
+                         "the entry side; 'alternate' = back-and-forth")
+    ap.add_argument("--streak", type=float, default=0.5,
+                    help="pass k of an episode pays R_PASSED x min(1 + STREAK x (k - 1), --streak-cap)")
+    ap.add_argument("--streak-cap", type=float, default=3.0)
+    ap.add_argument("--start-mode", choices=["ring", "zones"], default="zones",
+                    help="'zones' = starts cycle through 9 zones of the cage (8 outer cells of a 3x3 "
+                         "grid and under the hoop), facing anywhere; 'ring' = front runway + "
+                         "--hard-start-p")
     ap.add_argument("--bc-augment", action=argparse.BooleanOptionalAction, default=True,
                     help="mirror half of each demo batch left/right and add small observation noise")
     ap.add_argument("--seed", type=int, default=0)
@@ -342,7 +359,8 @@ def main(argv=None):
     ap.add_argument("--n-envs", type=int, default=8)
     ap.add_argument("--vec", choices=VEC_CHOICES, default="auto")
     ap.add_argument("--eval-freq", type=int, default=2500, help="per env (x n_envs timesteps)")
-    ap.add_argument("--n-eval-episodes", type=int, default=20)
+    ap.add_argument("--n-eval-episodes", type=int, default=18,
+                    help="18 = every start zone twice with --start-mode zones")
     ap.add_argument("--run-id", type=str, required=True)
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
@@ -388,9 +406,10 @@ def main(argv=None):
         "init_timesteps": None,
         "learning_rate": lr, "critic_warmup_steps": warmup,
         "reward": dict(REWARD_WEIGHTS),        # the onboard MDP, shown on the dashboard
-        "laps": args.laps,
+        "laps": args.laps, "lap_dir": args.lap_dir,
+        "streak": args.streak, "streak_cap": args.streak_cap,
         "robust": {"dr": args.dr, "sway_deg": args.sway_deg, "hard_start_p": args.hard_start_p,
-                   "wash_deg": args.wash_deg,
+                   "wash_deg": args.wash_deg, "start_mode": args.start_mode,
                    "dr_steps": args.dr_steps, "bc_augment": bool(args.bc_augment)},
         "obs_dim": spec.OBS_DIM,
         "ctrl_hz": spec.CTRL_HZ,
@@ -403,7 +422,8 @@ def main(argv=None):
     _atomic_write_json(run_dir / "meta.json", meta)
 
     robust = dict(dr=args.dr, sway_deg=args.sway_deg, hard_start_p=args.hard_start_p, laps=args.laps,
-                  wash_deg=args.wash_deg)
+                  wash_deg=args.wash_deg, lap_dir=args.lap_dir, start_mode=args.start_mode,
+                  streak=args.streak, streak_cap=args.streak_cap)
     ramped = args.dr_steps > 0 and (args.dr > 0 or args.hard_start_p > 0)
     env_kwargs = dict(profile=args.profile, seed=args.seed * 100_000, **robust,
                       ramp=0.0 if ramped else 1.0)
@@ -420,10 +440,10 @@ def main(argv=None):
     torch.set_num_threads(1)
     if init_path is not None:
         try:
-            # a parent from before the `pushed` observation field (33 inputs) is widened, with
-            # zero weights on the new input, so it starts out flying exactly as it did
+            # a parent from before the newer observation fields (33 / 34 inputs) is widened, with
+            # zero weights on the new inputs, so it starts out flying exactly as it did
             model, _ = load_for_resume(BCRegularizedPPO, init_path, train_env,
-                                       widen_at=spec.OBS_SLICES["pushed"].start,
+                                       widen_at=_widen_index,
                                        learning_rate=lr, lr_schedule=lambda _: lr)
         except ValueError as e:
             train_env.close()

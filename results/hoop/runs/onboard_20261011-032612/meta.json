@@ -1,0 +1,68 @@
+{
+  "run_id": "onboard_20261011-032612",
+  "algo": "ppo",
+  "env": "onboard",
+  "task": "onboard_hoop",
+  "env_variant": "onboard_rc",
+  "profile": "typical",
+  "seed": 1,
+  "timesteps_requested": null,
+  "until_stopped": true,
+  "n_envs": 8,
+  "vec": "subproc",
+  "eval_freq": 5000,
+  "eval_every_timesteps": 40000,
+  "n_eval_episodes": 20,
+  "init_from": "C:\\Users\\miche\\OneDrive\\Documents\\Michelle\\UTS\\SPR_26\\RL\\ASS3\\CMS\\results\\hoop\\runs\\onboard_20261011-025518\\latest_model.zip",
+  "init_parent": "onboard_20261011-025518",
+  "init_kind": "run",
+  "init_timesteps": 1770000,
+  "learning_rate": 0.0001,
+  "critic_warmup_steps": 0,
+  "reward": {
+    "w_axial": 3.0,
+    "w_radial": 2.5,
+    "w_time": 0.02,
+    "r_passed": 20.0,
+    "r_struck": -10.0,
+    "r_missed": -5.0,
+    "r_out_of_cage": -10.0,
+    "r_found": 0.5
+  },
+  "robust": {
+    "dr": 1.0,
+    "sway_deg": 15.0,
+    "hard_start_p": 0.5,
+    "dr_steps": 500000,
+    "bc_augment": true
+  },
+  "ctrl_hz": 15,
+  "bc": {
+    "demos": [
+      "onboard_sim_robust.npz",
+      "teacher_ppo_20261010-011316.npz",
+      "demo.npz",
+      "demo.npz",
+      "demo.npz",
+      "demo.npz",
+      "demo.npz",
+      "demo.npz"
+    ],
+    "samples": {
+      "human": 1964,
+      "onboard_scripted_expert": 39839,
+      "sim_teacher": 7559
+    },
+    "source_weights": {
+      "human": 10.0
+    },
+    "coef": 3.0,
+    "coef_min": 0.1,
+    "decay_steps": 300000
+  },
+  "pid": 1672,
+  "created_at": "2026-10-11T03:26:18.492432",
+  "finished_at": null,
+  "final_status": null,
+  "final_timesteps": null
+}

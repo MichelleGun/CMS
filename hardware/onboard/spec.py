@@ -7,7 +7,7 @@ This module is the single source of truth. The simulator (sim.py), the real flig
 so the interface cannot drift between "what the expert was recorded doing" and "what a
 policy is asked to do". A test asserts OBS_DIM equals the sum of the field widths.
 
-Why a feature vector and not the image: a 34-float observation trains an MLP on a CPU in
+Why a feature vector and not the image: a 37-float observation trains an MLP on a CPU in
 seconds, keeps demonstration files small, and runs at 15 Hz on this machine. The cost is
 that the policy only ever sees what ring_detect.py chose to measure.
 
@@ -58,13 +58,47 @@ OBS_FIELDS = (
     # ring is still ahead; pushed > last_range means the drone is through. Older 33-wide demos
     # are upgraded on load (obs.upgrade_obs) and older policies widened (vec_util).
     ("pushed", 1),
+    # Heading memory (added 2026-10-11 night, for same-side laps): a ring looks the same from
+    # the front and the back, so the image alone cannot say which side the drone is on. These
+    # remember the heading at the last pass, detected from telemetry alone (obs.PassDetector:
+    # the blind push went clearly past where the ring was last seen close up). pass_heading =
+    # (cos, sin) of yaw minus that heading: ~(1, 0) = facing the way it last went through, so a
+    # ring ahead is the entry side. (0, 0) until the first pass. streak = min(passes, 4) / 4.
+    ("pass_heading", 2),
+    ("streak", 1),
     ("height", 1),       # Tello 'h' (cm) / HEIGHT_NORM
     ("vel", 3),          # Tello vgx/vgy/vgz (cm/s) / VEL_NORM
     ("att", 3),          # pitch, roll (deg) / ATT_NORM, and yaw rate / YAWRATE_NORM
     ("actions", ACT_BUFFER * ACT_DIM),   # executed actions, oldest first, zeros at takeoff
 )
-OBS_DIM = sum(w for _, w in OBS_FIELDS)        # 34 (33 before the `pushed` field)
-LEGACY_OBS_DIM = OBS_DIM - 1                   # 33: demos / policies from before `pushed`
+OBS_DIM = sum(w for _, w in OBS_FIELDS)        # 37 (34 before the heading memory, 33 before `pushed`)
+# Older layouts: the same fields minus the ones added since. Demos recorded with them are
+# upgraded on load (obs.upgrade_obs); policies trained on them are widened (vec_util) or fly
+# with the new columns dropped (policy.py).
+LAYOUT_FIELDS = {
+    33: tuple(f for f in OBS_FIELDS if f[0] not in ("pushed", "pass_heading", "streak")),
+    34: tuple(f for f in OBS_FIELDS if f[0] not in ("pass_heading", "streak")),
+    OBS_DIM: OBS_FIELDS,
+}
+LEGACY_OBS_DIM = 33                            # before `pushed`
+
+
+def layout_slices(width: int) -> dict:
+    """{field: slice} for the observation layout of this width (33, 34 or OBS_DIM)."""
+    out, off = {}, 0
+    for name, w in LAYOUT_FIELDS[width]:
+        out[name] = slice(off, off + w)
+        off += w
+    return out
+
+
+def legacy_columns(width: int) -> list:
+    """Columns of today's observation that an older layout of this width also has, in order."""
+    cols = []
+    for name, _w in LAYOUT_FIELDS[width]:
+        sl = OBS_SLICES[name]
+        cols.extend(range(sl.start, sl.stop))
+    return cols
 
 # Slice for each field, so consumers never hardcode an index.
 OBS_SLICES = {}

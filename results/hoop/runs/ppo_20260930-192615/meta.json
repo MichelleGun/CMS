@@ -1,0 +1,17 @@
+{
+  "run_id": "ppo_20260930-192615",
+  "algo": "ppo",
+  "env_variant": "continuous_vel",
+  "seed": 0,
+  "start_override": null,
+  "target_override": null,
+  "timesteps_requested": 1000000,
+  "n_envs": 4,
+  "eval_freq": 2000,
+  "n_eval_episodes": 10,
+  "pid": 32500,
+  "created_at": "2026-09-30T19:26:21.700125",
+  "finished_at": "2026-09-30T19:27:27.275054",
+  "final_status": "stopped",
+  "final_timesteps": 20452
+}

@@ -1,0 +1,1 @@
+{"status": "training", "current_timestep": 300, "total_timesteps": 300, "latest_eval_reward": -588.8659785, "best_eval_reward": -588.8659785, "elapsed_sec": 5.754475116729736, "updated_at": "2026-09-30T14:15:51.587047"}

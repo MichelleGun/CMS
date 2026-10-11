@@ -182,7 +182,8 @@ def test_mirror_augmentation_flips_exactly_the_lateral_terms():
     sl = spec.OBS_SLICES
     flipped = set(np.flatnonzero(obs < 0))
     want = {sl["centre"].start, sl["last_centre"].start, sl["vel"].start + 1,
-            sl["att"].start + 1, sl["att"].start + 2}
+            sl["att"].start + 1, sl["att"].start + 2,
+            sl["pass_heading"].start + 1}               # sin of the heading since the last pass
     want |= {sl["actions"].start + k * spec.ACT_DIM + j
              for k in range(spec.ACT_BUFFER) for j in (spec.ACT_LR, spec.ACT_YAW)}
     assert flipped == want

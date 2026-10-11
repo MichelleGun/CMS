@@ -153,7 +153,7 @@ def load_for_resume(algo_cls, path, env, widen_at=None, **overrides):
 
     widen_at: if the env's observation is wider than the model's, widen the model first
     (widen_policy_input, new inputs inserted at this index of the old observation) instead of
-    refusing. Used when an env gains an observation field (net env: the lap "armed" flag;
+    refusing. A callable gets the old width and returns the index. Used when an env gains an observation field (net env: the lap "armed" flag;
     onboard: the "pushed" odometer)."""
     zp = resolve_model_path(path)
     if widen_at is not None:
@@ -162,6 +162,8 @@ def load_for_resume(algo_cls, path, env, widen_at=None, **overrides):
         old_w, new_w = _obs_width(data["observation_space"]), _obs_width(env.observation_space)
         if new_w > old_w:
             import tempfile
+            if callable(widen_at):
+                widen_at = widen_at(old_w)
             tmp = Path(tempfile.mkdtemp(prefix="widen_")) / zp.name
             widen_policy_input(zp, env.observation_space, widen_at, tmp)
             print(f"[INFO] widened {zp.name} from {old_w} to {new_w} observation inputs "

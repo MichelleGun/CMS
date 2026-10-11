@@ -33,33 +33,93 @@ def push_step(pushed_m: float, vgx: float, dt: float) -> float:
     return max(0.0, pushed_m + float(vgx) * VGX_TO_MPS * dt)
 
 
-def upgrade_obs(obs, episode=None, t=None) -> np.ndarray:
-    """33-wide observations (recorded before the `pushed` field) -> today's spec.OBS_DIM.
+PASS_DETECT_MAX_RANGE_M = 0.8   # a pass is only declared after a close sighting ...
+PASS_DETECT_MARGIN_M = 0.15     # ... and a blind push this far beyond where the ring was
 
-    Replays ObsBuilder's odometer over each episode from fields the old observation already
-    has: a fresh detection is age == 0, the forward speed is the `vel` field's vgx, and the
-    time step comes from `t` (or spec.CTRL_DT). Wider-by-zero input passes through unchanged."""
+
+class PassDetector:
+    """Declares a pass from telemetry alone, the same way in the sim and on the real drone:
+    after a fresh sighting closer than PASS_DETECT_MAX_RANGE_M, the forward odometer (`pushed`)
+    went PASS_DETECT_MARGIN_M beyond that range. Remembers the heading at that moment."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.passes = 0
+        self.yaw = None                # heading (deg) at the last detected pass
+        self._marked = False           # this blind segment already counted
+
+    def step(self, fresh: bool, last_range, pushed_m: float, yaw: float):
+        if fresh:
+            self._marked = False
+            return
+        if (not self._marked and last_range is not None and last_range < PASS_DETECT_MAX_RANGE_M
+                and pushed_m > last_range + PASS_DETECT_MARGIN_M):
+            self._marked = True
+            self.passes += 1
+            self.yaw = float(yaw)
+
+    def fields(self, yaw: float):
+        """-> ((cos, sin) of yaw minus the heading at the last pass, streak)."""
+        if self.yaw is None:
+            return (0.0, 0.0), 0.0
+        a = np.radians(wrap_deg(float(yaw) - self.yaw))
+        return (float(np.cos(a)), float(np.sin(a))), min(self.passes, 4) / 4.0
+
+
+def upgrade_obs(obs, episode=None, t=None) -> np.ndarray:
+    """Older observations (33 wide: before `pushed`; 34: before the heading memory) -> today's
+    spec.OBS_DIM.
+
+    Replays ObsBuilder's odometer and pass detector over each episode from fields the old
+    observation already has: a fresh detection is age == 0, the forward speed is the `vel`
+    field's vgx, the heading is the integrated yaw rate (only differences matter), and the time
+    step comes from `t` (or spec.CTRL_DT). Input that is already spec.OBS_DIM wide passes
+    through unchanged."""
     obs = np.asarray(obs, dtype=np.float32)
     if obs.ndim != 2 or obs.shape[1] == spec.OBS_DIM:
         return obs
-    if obs.shape[1] != spec.LEGACY_OBS_DIM:
-        raise ValueError(f"cannot upgrade observations of width {obs.shape[1]}")
+    width = obs.shape[1]
+    if width not in spec.LAYOUT_FIELDS:
+        raise ValueError(f"cannot upgrade observations of width {width}")
+    old = spec.layout_slices(width)
     s = spec.OBS_SLICES
-    old = lambda name: s[name].start if s[name].start < s["pushed"].start else s[name].start - 1
-    i_age, i_vgx = old("age"), old("vel")
+    out = np.zeros((len(obs), spec.OBS_DIM), np.float32)
+    for name, sl in old.items():
+        out[:, s[name]] = obs[:, sl]
+    i_age, i_vgx = old["age"].start, old["vel"].start
+    i_last, i_rate = old["last_range"].start, old["att"].start + 2
     ep = np.zeros(len(obs), np.int64) if episode is None else np.asarray(episode)
     tt = np.arange(len(obs)) * spec.CTRL_DT if t is None else np.asarray(t, dtype=float)
-    pushed = np.zeros(len(obs), np.float32)
-    run = 0.0
+    det = PassDetector()
+    run = yaw = 0.0
+    last_range = None
     for i in range(len(obs)):
         new_ep = i == 0 or ep[i] != ep[i - 1]
-        dt = 0.0 if new_ep else float(np.clip(tt[i] - tt[i - 1], 0.0, MAX_PUSH_DT))
-        if new_ep or obs[i, i_age] <= 1e-6:
+        dt_raw = 0.0 if new_ep else float(tt[i] - tt[i - 1])
+        dt = float(np.clip(dt_raw, 0.0, MAX_PUSH_DT))
+        fresh = obs[i, i_age] <= 1e-6
+        if new_ep:
+            det.reset()
+            run = yaw = 0.0
+            last_range = None
+        else:
+            yaw += float(obs[i, i_rate]) * spec.YAWRATE_NORM * dt_raw
+        if "pushed" in old:
+            run = float(obs[i, old["pushed"].start]) * spec.RANGE_NORM
+        elif new_ep or fresh:
             run = 0.0
         else:
             run = push_step(run, obs[i, i_vgx] * spec.VEL_NORM, dt)
-        pushed[i] = min(run / spec.RANGE_NORM, 1.0)
-    return np.insert(obs, s["pushed"].start, pushed, axis=1)
+        if fresh:
+            last_range = float(obs[i, i_last]) * spec.RANGE_NORM
+        det.step(bool(fresh), last_range, run, yaw)
+        (hc, hs), streak = det.fields(yaw)
+        out[i, s["pushed"]] = min(run / spec.RANGE_NORM, 1.0)
+        out[i, s["pass_heading"]] = (hc, hs)
+        out[i, s["streak"]] = streak
+    return out
 
 
 def _num(state: dict, key: str, default: float = 0.0) -> float:
@@ -108,6 +168,7 @@ class ObsBuilder:
         self._ticks_since_seen = spec.AGE_NORM
         self._pushed_m = 0.0               # forward distance since the last fresh detection
         self._prev_build_t = None
+        self.passes = PassDetector()       # heading memory for same-side laps
 
     def push_action(self, action):
         """Record what was actually executed (post-clamp), oldest-first in the buffer."""
@@ -159,6 +220,9 @@ class ObsBuilder:
                               if self._last_seen_range is not None else 1.0)
         o[s["last_centre"]] = (self._last_seen_cx, self._last_seen_cy)
         o[s["pushed"]] = min(self._pushed_m / spec.RANGE_NORM, 1.0)
+        yaw = _num(state, "yaw")
+        self.passes.step(bool(ring.fresh), self._last_seen_range, self._pushed_m, yaw)
+        o[s["pass_heading"]], o[s["streak"]] = self.passes.fields(yaw)
 
         o[s["height"]] = _num(state, "h") / spec.HEIGHT_NORM
         o[s["vel"]] = (_num(state, "vgx") / spec.VEL_NORM,

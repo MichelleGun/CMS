@@ -22,7 +22,7 @@ class StartRunRequest(BaseModel):
     until_stopped: bool = False     # ignore timesteps: train until Stop (overnight)
     n_envs: int = 4
     eval_freq: int = 5000           # per env: with 4 envs, one evaluation every 20k timesteps
-    n_eval_episodes: int = 10
+    n_eval_episodes: int = 18       # every start zone twice (zone starts)
     # net = 2x2x2 net + ring (hoop_net_env.py); onboard = the Tello camera task
     # (hardware/onboard/train_onboard.py: PPO, optionally from a clone and guided by demos)
     env: Literal["net", "legacy", "onboard"] = "net"
@@ -47,6 +47,9 @@ class StartRunRequest(BaseModel):
     sway_deg: float = Field(5.0, ge=0.0, le=45.0)    # net env: largest ring swing about its rope knot
     wash_deg: float = Field(15.0, ge=0.0, le=45.0)   # net env: prop-wash tilt of the ring (0 = off)
     start_z: float = Field(0.8, ge=0.0, le=1.6)      # net env: hover start height (0 = the floor)
+    same_side: bool = True          # laps: every pass the same way, round the outside (else back-and-forth)
+    start_zones: bool = True        # starts cycle through 9 zones of the cage (else random / front runway)
+    streak: float = Field(0.5, ge=0.0, le=5.0)       # pass k pays x min(1 + streak x (k-1), 3)
     carry_start: float = Field(0.7, ge=0.0, le=1.0)  # net env: start where the last episode ended
     reverse_prob: float = Field(0.5, ge=0.0, le=1.0) # net env: fly through back to front
     lean_flip_prob: float = Field(0.3, ge=0.0, le=1.0)  # net env: ring leans the other way

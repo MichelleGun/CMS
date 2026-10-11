@@ -189,6 +189,15 @@
             <button id="teacher-btn" class="secondary-btn" type="button">Make</button></div>
           <div id="teacher-note" class="note"></div>
         </div>
+        <div id="lap-options">
+          <label class="checkbox-row" title="After each pass the drone flies round the outside of the ring and goes through again from the same side it entered (the camera drone uses a heading memory to tell front from back). Unticked: back-and-forth, turning round after each pass.">
+            <input type="checkbox" id="same-side-toggle" checked> Same side every time (round the outside)</label>
+          <label class="checkbox-row" title="Each episode starts in the next of 9 zones: top-left, top-middle, top-right, middle-right, bottom-right, bottom-middle, bottom-left, middle-left, and right under the hoop, so every area is trained equally often. Evaluation goes through the zones too and logs passes per zone.">
+            <input type="checkbox" id="start-zones-toggle" checked> Start from every area (9 zones in turn)</label>
+          <div class="field-row" title="Pass k of an episode pays the pass reward x (1 + this x (k-1)), capped at 3x: each pass in a row is worth more than the last. 0 = every pass the same.">
+            <label for="streak-input">Streak bonus per extra pass</label>
+            <input type="number" id="streak-input" value="0.5" min="0" max="5" step="0.1"></div>
+        </div>
         <div id="net-options">
           <label class="checkbox-row"><input type="checkbox" id="ring-jitter-toggle" checked>
             Ring moves / turns a little each episode</label>
@@ -265,11 +274,12 @@
       </div>
 
       <div class="panel" id="panel-chart">
-        <h2>Reward</h2>
+        <h2>Reward and passes</h2>
         <canvas id="reward-chart"></canvas>
         <div class="legend">
           <span class="legend-dot legend-current"></span> current
           <span class="legend-dot legend-best"></span> best
+          <span class="legend-dot legend-passes"></span> passes / episode (right axis)
         </div>
       </div>
 
@@ -549,14 +559,14 @@
   <script src="js/api.js?v=17"></script>
   <script src="js/scene3d.js?v=17"></script>
   <script src="js/controls.js?v=17"></script>
-  <script src="js/chart.js?v=17"></script>
+  <script src="js/chart.js?v=18"></script>
   <script src="js/tabs.js?v=17"></script>
   <script src="js/keys.js?v=17"></script>
   <script src="js/drone.js?v=17"></script>
   <script src="js/imitation.js?v=17"></script>
-  <script src="js/history.js?v=17"></script>
+  <script src="js/history.js?v=18"></script>
   <script src="js/envview.js?v=17"></script>
   <script src="js/reward.js?v=17"></script>
-  <script src="js/app.js?v=17"></script>
+  <script src="js/app.js?v=18"></script>
 </body>
 </html>

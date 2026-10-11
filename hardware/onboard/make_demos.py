@@ -52,28 +52,37 @@ def _keep_upto(episode_infos, failed) -> int:
 
 def generate(episodes=60, profile="typical", seed=0, keep_failures=False,
              render_frames=False, cfg: ExpertConfig = None, verbose=True,
-             dr=0.0, sway_deg=15.0, hard_start_p=0.0, laps=1, wash_deg=0.0):
+             dr=0.0, sway_deg=15.0, hard_start_p=0.0, laps=1, wash_deg=0.0,
+             lap_dir="alternate", start_mode="ring"):
     """-> (DemoRecorder, tally dict). dr / sway_deg / hard_start_p / wash_deg: the randomised
     (robust) task, see sim.py; only the episodes the expert still passes are kept. laps=0: the
     expert flies laps (ExpertConfig.laps) and episodes run on after each pass; see _keep_upto."""
     env = OnboardHoopEnv(profile=profile, seed=seed, render_frames=render_frames,
                          dr=dr, sway_deg=sway_deg, hard_start_p=hard_start_p, laps=laps,
-                         wash_deg=wash_deg)
+                         wash_deg=wash_deg, lap_dir=lap_dir, start_mode=start_mode)
     if laps != 1:
         from dataclasses import replace as _replace
-        cfg = _replace(cfg or ExpertConfig(), laps=True)
+        cfg = _replace(cfg or ExpertConfig(), laps=True, lap_same=(lap_dir == "same"))
     policy = ExpertPolicy(cfg)
+    if lap_dir == "same":
+        # the demonstrator may use the sim to pick the way round with room (the recorded
+        # observations stay what the drone itself measures): strafe towards the return point
+        def _hint():
+            sim = env.sim
+            return 1.0 if float(np.dot(sim.right, env._return_wp() - sim.pos)) >= 0 else -1.0
+        policy.expert.orbit_hint = _hint
     rec = DemoRecorder(
         meta={"source": "onboard_scripted_expert", "profile": profile,
               "robust": {"dr": dr, "sway_deg": sway_deg, "hard_start_p": hard_start_p,
                          "wash_deg": wash_deg},
-              "laps": laps,
+              "laps": laps, "lap_dir": lap_dir, "start_mode": start_mode,
               "episodes_requested": episodes, "sim": True,
               "expert": (cfg or ExpertConfig()).to_json()},
         obs_dim=spec.OBS_DIM, task=spec.TASK_NAME, obs_shape=(spec.OBS_DIM,))
     tally = {"passed": 0, "struck": 0, "missed": 0, "out_of_cage": 0, "timeout": 0}
     kept = 0
     lap_passes = []
+    zones = {}                       # start type -> passes per episode
 
     try:
         for e in range(episodes):
@@ -91,6 +100,7 @@ def generate(episodes=60, profile="typical", seed=0, keep_failures=False,
                 if term or trunc:
                     phase = info["phase"] if term else "timeout"
                     break
+            zones.setdefault(info.get("start_type", "?"), []).append(int(info["passes"]))
             if laps != 1:
                 lap_passes.append(int(info["passes"]))
                 upto = len(episode) if keep_failures else _keep_upto(infos, failed=bool(term))
@@ -112,6 +122,8 @@ def generate(episodes=60, profile="typical", seed=0, keep_failures=False,
     if lap_passes:
         tally["mean_passes"] = float(np.mean(lap_passes))
         tally["max_passes"] = int(max(lap_passes))
+    tally["by_start"] = {k: {"episodes": len(v), "passed": int(sum(x > 0 for x in v)),
+                             "mean_passes": float(np.mean(v))} for k, v in sorted(zones.items())}
     return rec, tally
 
 
@@ -129,6 +141,10 @@ def main(argv=None):
     ap.add_argument("--laps", type=int, default=1,
                     help="0 = the expert flies laps (through, clear, turn round, find, again) and "
                          "each episode runs on after a pass; 1 = one pass per episode")
+    ap.add_argument("--lap-dir", choices=["alternate", "same"], default="alternate",
+                    help="laps: 'same' = the expert orbits round to the entry side after each pass")
+    ap.add_argument("--start-mode", choices=["ring", "zones"], default="ring",
+                    help="'zones' = starts cycle through the 9 zones of the cage")
     ap.add_argument("--wash-deg", type=float, default=0.0,
                     help="prop-wash push of the ring (deg), see sim.py")
     ap.add_argument("--out", type=Path, default=None,
@@ -145,7 +161,8 @@ def main(argv=None):
 
     rec, tally = generate(a.episodes, a.profile, a.seed, a.keep_failures, a.render,
                           dr=a.dr, sway_deg=a.sway_deg, hard_start_p=a.hard_start_p,
-                          laps=a.laps, wash_deg=a.wash_deg)
+                          laps=a.laps, wash_deg=a.wash_deg, lap_dir=a.lap_dir,
+                          start_mode=a.start_mode)
     if not len(rec):
         sys.exit("[make_demos] no samples recorded: the expert passed through nothing. "
                  "Check the expert's config, or pass --keep-failures to inspect it.")
@@ -157,6 +174,8 @@ def main(argv=None):
           f"{tally['passed']}/{a.episodes} passed"
           + (f", {tally['mean_passes']:.2f} passes/episode (max {tally['max_passes']})"
              if "mean_passes" in tally else "") + f" -> {path}")
+    for k, z in tally["by_start"].items():
+        print(f"  {k:<10} {z['passed']}/{z['episodes']} passed, {z['mean_passes']:.2f} passes/episode")
     return path, tally
 
 

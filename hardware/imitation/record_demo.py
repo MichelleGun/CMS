@@ -91,10 +91,11 @@ def load_demo(path) -> dict:
     if out["meta"].get("task") == "onboard_hoop":
         # onboard demos recorded before the observation gained `pushed` (33 -> 34 wide)
         from onboard import spec as _spec
-        if out["obs"].shape[1] == _spec.LEGACY_OBS_DIM:
+        width = out["obs"].shape[1]
+        if width != _spec.OBS_DIM and width in _spec.LAYOUT_FIELDS:
             from onboard.obs import upgrade_obs
             out["obs"] = upgrade_obs(out["obs"], out["episode"], out["t"])
-            out["meta"]["upgraded_from_obs_dim"] = _spec.LEGACY_OBS_DIM
+            out["meta"]["upgraded_from_obs_dim"] = width
     return out
 
 

@@ -7,6 +7,9 @@ It serves three purposes at once:
   3. it is the baseline a learned policy has to beat.
 
 Phases:  SEARCH -> ALIGN -> APPROACH -> COMMIT -> DONE        (ABORT on repeated loss)
+Same-side laps (cfg.lap_same): after the lap search finds the ring from behind, ORBIT round it
+(strafe, nose on the ring, holding range) until the heading memory (`pass_heading` in the
+observation) says it faces the way it last went through, then ALIGN -> ... as usual.
 Laps (cfg.laps):  ... -> COMMIT (+ lap_clear_m further, to clear the ring) -> SEARCH again,
 turning one way at constant height until the ring is back in view -> ALIGN -> ... The lap
 search is the "turn round and find it" a single-pass expert never shows, so demos made with
@@ -44,8 +47,8 @@ import numpy as np
 from . import spec
 from .ring_detect import RingObs
 
-SEARCH, ALIGN, APPROACH, COMMIT, DONE, ABORT = (
-    "search", "align", "approach", "commit", "done", "abort")
+SEARCH, ALIGN, APPROACH, COMMIT, DONE, ABORT, ORBIT = (
+    "search", "align", "approach", "commit", "done", "abort", "orbit")
 
 
 @dataclass
@@ -161,6 +164,19 @@ class ExpertConfig:
                                   # clear of the noodle and re-armed (gym_env.ARM_DIST_M)
     lap_search_yaw: float = 0.80  # turn one way, at constant height, until the ring is in view
     lap_search_max_ticks: int = 300   # 20 s: a full turn at ~24 deg/s is ~15 s
+    lap_same: bool = False        # same-side laps: orbit round to the entry side before ALIGN
+    orbit_lr: float = 0.70        # strafe while orbiting
+    orbit_range_m: float = 0.50   # range held while orbiting
+    orbit_done_cos: float = 0.906  # cos 25 deg: facing the way it last went through
+    orbit_max_ticks: int = 450    # 30 s
+    # lap mode, the first search (starts anywhere, facing anywhere, even under the ring): turn a
+    # full circle at the ring's usual height; not found -> fly a little way forward and look again
+    search_height_m: float = 1.15
+    k_height: float = 2.0
+    full_turn_ticks: int = 240    # ~360 deg at lap_search_yaw
+    relocate_ticks: int = 40      # ~0.4 m forward
+    relocate_fb: float = 0.6
+    max_relocations: int = 4
 
     # --- staged bring-up (see the plan's stage table) ---
     allow_forward: bool = True    # stage 2 sets False: align only, never translate
@@ -188,6 +204,7 @@ class Expert:
                  hfov_deg: float = spec.CAMERA_HFOV_DEG):
         self.cfg = cfg or ExpertConfig()
         self.hfov_deg = float(hfov_deg)
+        self.orbit_hint = None   # demos only: callable -> +1 / -1, the strafe with room to go round
         self.reset()
 
     def reset(self):
@@ -209,6 +226,12 @@ class Expert:
         self.reason = ""
         self._lap_search = False
         self.laps_done = 0
+        self.pass_cos = None          # heading memory, set by ExpertPolicy from the observation
+        self.height_m = None          # telemetry height, set by ExpertPolicy from the observation
+        self._relocate = 0
+        self._relocations = 0
+        self._orbit_ticks = 0
+        self._orbit_dir = 1.0
 
     # -- helpers ----------------------------------------------------------------------
     def _errors_m(self, ring: RingObs):
@@ -304,6 +327,44 @@ class Expert:
             a[spec.ACT_FB] = fb
         return a
 
+    def _first_search(self) -> np.ndarray:
+        """Lap mode's first search: turn at the ring's height; after a full circle without it, fly
+        forward a little and turn again (from right under the ring it is out of view above)."""
+        c = self.cfg
+        a = np.zeros(spec.ACT_DIM)
+        if self.height_m is not None:
+            a[spec.ACT_UD] = float(np.clip(c.k_height * (c.search_height_m - self.height_m),
+                                           -c.ud_max, c.ud_max))
+        if self._relocate > 0:
+            self._relocate -= 1
+            a[spec.ACT_FB] = c.relocate_fb
+            return a
+        self._search_ticks += 1
+        if self._search_ticks > c.full_turn_ticks:
+            self._relocations += 1
+            if self._relocations > c.max_relocations:
+                self.phase = ABORT
+                self.reason = "ring not found after several moves"
+                return a
+            self._search_ticks = 0
+            self._relocate = c.relocate_ticks
+            self.reason = f"not in view after a full turn: moving ({self._relocations})"
+            return a
+        a[spec.ACT_YAW] = c.lap_search_yaw
+        return a
+
+    def _orbit(self, ring: RingObs) -> np.ndarray:
+        """Circle the ring: strafe sideways, keep the nose on it (yaw on cx), hold the range and
+        the height. Strafing while yawing onto a fixed point traces a circle round it."""
+        c = self.cfg
+        a = np.zeros(spec.ACT_DIM)
+        a[spec.ACT_LR] = c.orbit_lr * self._orbit_dir
+        a[spec.ACT_YAW] = float(np.clip(c.k_yaw * 1.5 * ring.cx, -1.0, 1.0))
+        a[spec.ACT_UD] = float(np.clip(-c.k_ud * ring.cy, -c.ud_max, c.ud_max))
+        rng = ring.range_m if np.isfinite(ring.range_m) else c.orbit_range_m
+        a[spec.ACT_FB] = float(np.clip(c.k_fb * (rng - c.orbit_range_m), -0.6, 0.6))
+        return a
+
     # -- the controller ---------------------------------------------------------------
     def __call__(self, ring: RingObs, state: Optional[dict] = None):
         """-> (action (4,), ExpertInfo). `state` is accepted for signature parity with a
@@ -340,6 +401,15 @@ class Expert:
 
         if not ring.found:
             self._lost += 1
+            if self.phase == ORBIT:
+                if self._lost > spec.LOCK_MAX_AGE:       # lost it going round: turn and look again
+                    self.phase = SEARCH
+                    self._lap_search = True
+                    self._search_ticks = 0
+                    self.reason = "lost the ring while orbiting"
+                else:
+                    a[spec.ACT_LR] = c.orbit_lr * self._orbit_dir
+                return a, self._info(ring)
             if self.phase in (ALIGN, APPROACH) and self._lost > spec.LOCK_MAX_AGE:
                 self._aborts += 1
                 self.phase = SEARCH
@@ -349,6 +419,8 @@ class Expert:
                 if self._aborts > c.max_aborts:
                     self.phase = ABORT
                     self.reason = "lost lock too many times"
+            if self.phase == SEARCH and c.laps and not self._lap_search and self.laps_done == 0:
+                return self._first_search(), self._info(ring)
             if self.phase == SEARCH and self._lap_search:
                 self._search_ticks += 1
                 if self._search_ticks > c.lap_search_max_ticks:
@@ -382,8 +454,28 @@ class Expert:
             self._last_range = ring.range_m
         if self.phase == SEARCH:
             self.phase = ALIGN
-            self._lap_search = False
             self.reason = "acquired"
+            if (c.lap_same and self._lap_search and self.pass_cos is not None
+                    and self.pass_cos < c.orbit_done_cos):
+                self.phase = ORBIT                 # found from the wrong side: go round
+                self._orbit_ticks = 0
+                if self.orbit_hint is not None:
+                    self._orbit_dir = float(self.orbit_hint())
+                else:
+                    self._orbit_dir *= -1.0
+                self.reason = "found from behind: orbiting to the entry side"
+            self._lap_search = False
+        if self.phase == ORBIT:
+            self._orbit_ticks += 1
+            if self.pass_cos is not None and self.pass_cos >= c.orbit_done_cos:
+                self.phase = ALIGN
+                self.reason = "round to the entry side"
+            elif self._orbit_ticks > c.orbit_max_ticks:
+                self.phase = ABORT
+                self.reason = "orbit took too long"
+                return a, self._info(ring)
+            else:
+                return self._orbit(ring), self._info(ring)
 
         if self._can_commit(ring):
             self.phase = COMMIT
@@ -391,7 +483,8 @@ class Expert:
             self._settle_tick = 0
             self._commit_target = self._commit_ticks_for(self._last_range)
             if c.laps:
-                self._commit_target += int(round(c.lap_clear_m / c.commit_speed_mps * spec.CTRL_HZ))
+                clear = c.lap_clear_m * (2.0 if c.lap_same else 1.0)
+                self._commit_target += int(round(clear / c.commit_speed_mps * spec.CTRL_HZ))
             self.reason = (f"commit at {self._last_range:.2f} m "
                            f"({self._commit_target} ticks)")
             a[spec.ACT_FB] = c.commit_fb
@@ -429,6 +522,12 @@ class ExpertPolicy:
 
     def __call__(self, obs) -> np.ndarray:
         from .obs import ring_from_obs
+        o = np.asarray(obs, dtype=float).reshape(-1)
+        s = spec.OBS_SLICES
+        # the heading memory: only meaningful once a pass has been detected (streak > 0)
+        self.expert.pass_cos = (float(o[s["pass_heading"]][0]) if o.shape[0] == spec.OBS_DIM
+                                and o[s["streak"]][0] > 0 else None)
+        self.expert.height_m = float(o[s["height"]][0]) * spec.HEIGHT_NORM / 100.0
         action, self.info = self.expert(ring_from_obs(obs), None)
         return np.asarray(action, dtype=float)
 

@@ -20,6 +20,7 @@ results/hoop/runs/*/*
 !results/hoop/runs/*/label.json
 !results/hoop/runs/*/live_status.json
 !results/hoop/runs/*/evaluations.npz
+!results/hoop/runs/*/passes.json
 *.log
 
 # OS / editor

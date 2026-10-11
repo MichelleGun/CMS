@@ -23,12 +23,14 @@ from .smoothing import wrap_pi
 
 
 class ObsBuilder:
-    def __init__(self, hoop_xyz, lpf_alpha=0.35, hoop_normal=None, hoop_radius=None, armed=None):
+    def __init__(self, hoop_xyz, lpf_alpha=0.35, hoop_normal=None, hoop_radius=None, armed=None,
+                 streak=None):
         """hoop_normal: None -> legacy 75-D layout; a 3-vector -> net-env layout, 82-D with
         hoop_radius (the ring's inner radius, m) or the older 78-D without it.
         On hardware the ring is fixed, so this is the measured facing of the real ring."""
         self.radius = None if hoop_radius is None else float(hoop_radius)
         self.armed = armed           # None: no flag (82-D); True/False: the 83-D layout
+        self.streak = streak         # None: no pass count; a number of passes: the 84-D layout
         self.hoop = np.asarray(hoop_xyz, dtype=float).reshape(3)
         self.normal = None
         if hoop_normal is not None:
@@ -73,5 +75,7 @@ class ObsBuilder:
         if self.radius is None:
             return np.hstack([kin, buf, self.normal, rel]).astype(np.float32).reshape(1, LEGACY_NET_OBS_DIM)
         flag = [] if self.armed is None else [[float(bool(self.armed))]]
+        if self.armed is not None and self.streak is not None:
+            flag.append([min(int(self.streak), 4) / 4.0])
         return np.hstack([kin, buf, self.normal, np.zeros(3), [self.radius], *flag, rel]
                          ).astype(np.float32).reshape(1, NET_OBS_DIM + len(flag))

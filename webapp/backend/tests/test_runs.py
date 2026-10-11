@@ -360,3 +360,37 @@ def test_star_and_name_live_side_by_side(env):
     c.put("/api/runs/ppo_k/star", json={"starred": False})
     assert not (d / "label.json").exists()                           # nothing left to keep
     assert c.put("/api/runs/nope/star", json={"starred": True}).status_code == 404
+
+
+def _with_passes(d: Path, best_mean_passes, env_name="net"):
+    meta = json.loads((d / "meta.json").read_text())
+    meta["env"] = env_name
+    (d / "meta.json").write_text(json.dumps(meta))
+    status = json.loads((d / "live_status.json").read_text()) if (d / "live_status.json").is_file() else {}
+    status["best_mean_passes"] = best_mean_passes
+    (d / "live_status.json").write_text(json.dumps(status))
+
+
+def test_best_run_is_picked_by_passes_per_environment(env):
+    one = _net_run(env["runs"], "ppo_one", obs_dim=84, reward_mode="budget", best_reward=5.0)
+    _evals(one, [[1, 1]], [[5, 5]])                       # every episode passed ... once
+    _with_passes(one, 1.0)
+    many = _net_run(env["runs"], "ppo_many", obs_dim=84, reward_mode="budget", best_reward=3.0)
+    _evals(many, [[1, 0]], [[3, 3]])                      # half passed, but 2.4 passes per episode
+    _with_passes(many, 2.4)
+    cam = _net_run(env["runs"], "onboard_a", best_reward=-20.0)
+    _evals(cam, [[1, 0]], [[-20, -20]])
+    _with_passes(cam, 0.6, env_name="onboard")
+    cam2 = _net_run(env["runs"], "onboard_b", best_reward=-10.0)
+    _evals(cam2, [[1, 1]], [[-10, -10]])
+    _with_passes(cam2, 0.3, env_name="onboard")
+    data = env["client"].get("/api/runs").json()
+    assert data["best_run_id"] == "ppo_many"
+    assert data["best_run_ids"] == {"net": "ppo_many", "onboard": "onboard_a"}
+
+
+def test_run_detail_carries_the_passes_history(env):
+    d = _net_run(env["runs"], "ppo_p", obs_dim=84)
+    (d / "passes.json").write_text(json.dumps([{"t": 1000, "mean": 0.5, "max": 2, "zones": {"1": 1.0}}]))
+    r = env["client"].get("/api/runs/ppo_p").json()
+    assert r["passes"][0]["max"] == 2

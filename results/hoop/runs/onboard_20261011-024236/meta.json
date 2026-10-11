@@ -1,0 +1,48 @@
+{
+  "run_id": "onboard_20261011-024236",
+  "algo": "ppo",
+  "env": "onboard",
+  "task": "onboard_hoop",
+  "env_variant": "onboard_rc",
+  "profile": "typical",
+  "seed": 0,
+  "timesteps_requested": null,
+  "until_stopped": true,
+  "n_envs": 6,
+  "vec": "subproc",
+  "eval_freq": 5000,
+  "eval_every_timesteps": 30000,
+  "n_eval_episodes": 10,
+  "init_from": null,
+  "init_parent": null,
+  "init_kind": null,
+  "init_timesteps": null,
+  "learning_rate": 0.0003,
+  "critic_warmup_steps": 0,
+  "bc": {
+    "demos": [
+      "teacher_ppo_20261010-011316.npz",
+      "demo.npz",
+      "demo.npz",
+      "demo.npz",
+      "demo.npz",
+      "demo.npz",
+      "demo.npz"
+    ],
+    "samples": {
+      "human": 1964,
+      "sim_teacher": 7559
+    },
+    "source_weights": {
+      "human": 7.0
+    },
+    "coef": 3.0,
+    "coef_min": 0.1,
+    "decay_steps": 300000
+  },
+  "pid": 17920,
+  "created_at": "2026-10-11T02:42:40.349197",
+  "finished_at": "2026-10-11T02:43:28.632690",
+  "final_status": "stopped",
+  "final_timesteps": 49158
+}

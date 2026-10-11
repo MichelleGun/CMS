@@ -59,9 +59,9 @@ def load_policy(model_path, algo: Optional[str] = None, deterministic: bool = Tr
     model = cls.load(str(model_path), device="cpu")
 
     got = tuple(model.observation_space.shape)
-    # a policy from before the `pushed` field reads the same observation minus that column
-    legacy = got == (spec.LEGACY_OBS_DIM,)
-    drop = spec.OBS_SLICES["pushed"].start
+    # a policy from before the newer fields reads the same observation minus those columns
+    legacy = len(got) == 1 and got[0] != spec.OBS_DIM and got[0] in spec.LAYOUT_FIELDS
+    keep = spec.legacy_columns(got[0]) if legacy else None
     if got != (spec.OBS_DIM,) and not legacy:
         raise ValueError(
             f"{model_path.name} expects observations of shape {got}, but this task "
@@ -74,7 +74,7 @@ def load_policy(model_path, algo: Optional[str] = None, deterministic: bool = Tr
     def policy_fn(obs: np.ndarray) -> np.ndarray:
         o = np.asarray(obs, dtype=np.float32).reshape(-1)
         if legacy and o.shape[0] == spec.OBS_DIM:
-            o = np.delete(o, drop)
+            o = o[keep]
         a, _ = model.predict(o, deterministic=deterministic)
         return np.clip(np.asarray(a, dtype=float).reshape(-1)[:spec.ACT_DIM], -1.0, 1.0)
 

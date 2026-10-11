@@ -31,6 +31,15 @@ policy lined up but didn't go through"):
     a pass for turning back round; potential-based, so hovering or spinning earns nothing.
   * A pass only counts flown camera-first (forward . pass direction >= PASS_FACING_MIN): no
     blind backwards or sideways passes.
+
+v5 (2026-10-11, later that night):
+  * lap_dir="same": every pass goes the same way. After a pass the drone has to fly round the
+    OUTSIDE of the ring back to the side it entered from (sim.pop_clear_crossing: a crossing of
+    the plane clear of the noodle), then line up and go again. Back through the opening is
+    wrong-way. The shaping leads via a point RETURN_SIDE_M beside the ring, and while going
+    round the facing term looks at the ring's centre (circle it while watching it).
+  * A streak bonus: pass k of an episode pays R_PASSED x min(1 + streak x (k - 1), streak_cap).
+  * start_mode="zones": starts cycle through 9 zones of the cage (sim.py).
 """
 from typing import Optional
 
@@ -86,7 +95,11 @@ ARM_DIST_M = 0.25
 
 MAX_EPISODE_SEC = 30.0
 HARD_START_EPISODE_SEC = 40.0      # searching for the ring and repositioning take longer
-LAP_EPISODE_SEC = 60.0             # each turn-round is ~9 s at the 20 deg/s yaw limit
+LAP_EPISODE_SEC = 90.0             # same-side laps: a way round the ring is ~10-15 s
+STREAK_GAIN = 0.5                  # pass k pays R_PASSED x min(1 + this x (k - 1), STREAK_CAP)
+STREAK_CAP = 3.0
+RETURN_SIDE_M = 0.55               # same-side laps: the way round passes this far beside the ring
+LAP_DIRS = ("alternate", "same")
 
 # the weights above, by name (saved in a run's meta.json so the dashboard can show the MDP)
 REWARD_WEIGHTS = {"w_shape": W_SHAPE, "axis_pull": AXIS_PULL, "w_time": W_TIME,
@@ -95,7 +108,8 @@ REWARD_WEIGHTS = {"w_shape": W_SHAPE, "axis_pull": AXIS_PULL, "w_time": W_TIME,
                   "w_rim": W_RIM, "rim_margin_m": RIM_MARGIN_M,
                   "r_wrong_way": R_WRONG_WAY, "arm_dist_m": ARM_DIST_M,
                   "drain": DRAIN, "w_face": W_FACE, "face_ahead_m": FACE_AHEAD_M,
-                  "pass_facing_min": PASS_FACING_MIN}
+                  "pass_facing_min": PASS_FACING_MIN, "streak": STREAK_GAIN,
+                  "streak_cap": STREAK_CAP, "return_side_m": RETURN_SIDE_M}
 
 
 def rim_penalty(rim_distance_m: float) -> float:
@@ -118,11 +132,18 @@ class OnboardHoopEnv(gym.Env):
                  drone_width_m: float = spec.DRONE_WIDTH_M,
                  dr: float = 0.0, sway_deg: float = DEFAULT_SWAY_DEG, hard_start_p: float = 0.0,
                  ramp: float = 1.0, open_plane: Optional[bool] = None, laps: int = 1,
-                 wash_deg: float = 0.0):
+                 wash_deg: float = 0.0, lap_dir: str = "alternate", start_mode: str = "ring",
+                 streak: float = STREAK_GAIN, streak_cap: float = STREAK_CAP):
         """dr / sway_deg / hard_start_p / ramp / open_plane / wash_deg: see sim.py. open_plane
         defaults to on whenever starts can be away from the front runway. laps: passes per
-        episode (1: the episode ends at the first crossing; 0: endless back-and-forth)."""
+        episode (1: the episode ends at the first crossing; 0: endless). lap_dir: "alternate"
+        (back-and-forth) or "same" (round the outside, same side every time). start_mode: "ring"
+        (front runway / hard starts) or "zones" (sim.py). streak / streak_cap: the streak bonus."""
         super().__init__()
+        if lap_dir not in LAP_DIRS:
+            raise ValueError(f"lap_dir must be one of {LAP_DIRS}")
+        self.lap_dir = lap_dir
+        self.streak, self.streak_cap = float(streak), float(streak_cap)
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(spec.OBS_DIM,),
                                             dtype=np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, shape=(spec.ACT_DIM,), dtype=np.float32)
@@ -132,7 +153,7 @@ class OnboardHoopEnv(gym.Env):
         self._kwargs = dict(profile=profile, render=render_frames, ring=ring,
                             detector=detector, drone_width_m=drone_width_m, dr=dr,
                             sway_deg=sway_deg, hard_start_p=hard_start_p, ramp=ramp,
-                            open_plane=open_plane, wash_deg=wash_deg)
+                            open_plane=open_plane, wash_deg=wash_deg, start_mode=start_mode)
         self._seed = int(seed)
         if self.laps != 1:
             max_episode_sec = max(max_episode_sec, LAP_EPISODE_SEC)
@@ -145,6 +166,9 @@ class OnboardHoopEnv(gym.Env):
         self.passes = 0
         self._dir = 0            # required crossing direction along the ring normal; 0 = either
         self._armed = True
+        self._returned = True    # same-side laps: back round the outside since the last pass
+        self._ret_side = 1.0
+        self.streak_mult = 1.0
         self._phi = 0.0
 
     # -- geometry ---------------------------------------------------------------------
@@ -166,6 +190,12 @@ class OnboardHoopEnv(gym.Env):
         c, n = self.sim.ring.centre, self.sim.ring.normal
         axial, radial = self._axial_radial()
         d = self._leg_dir(axial)
+        if self.lap_dir == "same" and not self._returned:
+            # round the outside: via the point beside the ring, watching the ring as it goes
+            side = self._return_wp()
+            phi = -(float(np.linalg.norm(self.sim.pos - side))
+                    + float(np.linalg.norm(side - (c - n * d * APPROACH_M))) + 2 * APPROACH_M)
+            return phi + W_FACE * self._facing(c)
         s_eff = axial * d
         lined_up = (self._armed and -0.45 < s_eff < 0.05
                     and radial < 1.2 * self.sim.ring.radius)
@@ -175,6 +205,29 @@ class OnboardHoopEnv(gym.Env):
             phi = -(float(np.linalg.norm(self.sim.pos - (c - n * d * APPROACH_M))) + 2 * APPROACH_M)
         return (phi - AXIS_PULL * radial * float(np.exp(-(axial / AXIS_PULL_LEN_M) ** 2))
                 + W_FACE * self._facing(c + n * d * FACE_AHEAD_M))
+
+    def _side_axis(self) -> np.ndarray:
+        n = self.sim.ring.normal
+        u = np.array([-n[1], n[0], 0.0])
+        return u / (np.linalg.norm(u) + 1e-12)
+
+    def _return_wp(self) -> np.ndarray:
+        c = self.sim.ring.centre
+        wp = c + self._ret_side * RETURN_SIDE_M * self._side_axis()
+        wp[2] = c[2]
+        return wp
+
+    def _pick_return_side(self) -> float:
+        """The side of the axis the drone is on, unless that way round runs into the net."""
+        from .sim import CAGE_XY
+        c, u = self.sim.ring.centre, self._side_axis()
+        side = 1.0 if float(np.dot(self.sim.pos - c, u)) >= 0 else -1.0
+        lim = CAGE_XY - 0.17
+        for s in (side, -side):
+            wp = c + s * RETURN_SIDE_M * u
+            if abs(wp[0]) <= lim and abs(wp[1]) <= lim:
+                return s
+        return side
 
     def _facing(self, point) -> float:
         """cos of the horizontal angle from the camera to `point`, faded out within 15 cm of it."""
@@ -207,6 +260,8 @@ class OnboardHoopEnv(gym.Env):
         self._found_once = bool(ring_obs.found)          # in view from the start: no bonus
         self.passes = 0
         self._armed = True
+        self._returned = True
+        self.streak_mult = 1.0
         axial, _ = self._axial_radial()
         # through the ring from the side it starts on; starting in (or near) the ring's plane,
         # beside or below it, either direction counts for the first pass
@@ -222,11 +277,18 @@ class OnboardHoopEnv(gym.Env):
         obs = self.builder.build(ring_obs, self.sim.state(), self.sim.t)
         self._ticks += 1
 
-        if not self._armed:
+        cross = self.sim.pop_clear_crossing()
+        returned_now = False
+        if (self.lap_dir == "same" and not self._returned and self._dir
+                and cross == -self._dir):                # back to the entry side round the outside
+            self._returned = returned_now = True
+        if not self._armed and self._returned:
             axial, _ = self._axial_radial()
             if axial * self._dir < -ARM_DIST_M:          # flown clear: the next pass counts
                 self._armed = True
         phi = self._potential()
+        if returned_now:
+            self._phi = phi                              # a new stage of the lap: no jump paid
         reward = (W_SHAPE * (phi - self._phi)
                   - W_TIME
                   - rim_penalty(self.sim.rim_distance()))
@@ -249,12 +311,18 @@ class OnboardHoopEnv(gym.Env):
                 self._reset_shaping()
             elif o.passed:
                 if right_way:
-                    reward += R_PASSED
+                    self.streak_mult = min(1.0 + self.streak * self.passes, max(1.0, self.streak_cap))
+                    reward += R_PASSED * self.streak_mult
                     self.passes += 1
                     info["phase"] = "passed"
                     terminated = self.laps > 0 and self.passes >= self.laps
-                    if not terminated:                   # turn round and come back through
-                        self._dir = -o.direction
+                    if not terminated:
+                        if self.lap_dir == "same":       # same way in: round the outside first
+                            self._dir = o.direction
+                            self._returned = False
+                            self._ret_side = self._pick_return_side()
+                        else:                            # turn round and come back through
+                            self._dir = -o.direction
                         self._armed = False
                         self._found_once = False         # finding it again is paid again
                 else:
@@ -285,6 +353,9 @@ class OnboardHoopEnv(gym.Env):
         info["reversed"] = False
         info["ring_found"] = bool(ring_obs.found)
         info["wash_tilt_deg"] = self.sim.wash_tilt_deg
+        info["lap_dir"] = self.lap_dir
+        info["returned"] = bool(self._returned)
+        info["streak_mult"] = float(self.streak_mult)
         info["range_m"] = float(ring_obs.range_m)
         return obs, float(reward), terminated, truncated, info
 

@@ -75,7 +75,8 @@ const History = (() => {
     return r;
   }
 
-  let cache = { flights: [], runs: [], jobs: [], bestRunId: null };
+  let cache = { flights: [], runs: [], jobs: [], bestRunIds: [] };
+  const isBest = (id) => cache.bestRunIds.includes(id);
 
   function outcomeTag(f) {
     const ended = ["crashed", "refused", "killed", "interrupted"];
@@ -98,11 +99,11 @@ const History = (() => {
     } else if (f === "runs") {
       const keepersOnly = el.keepers && el.keepers.checked;
       items = [...cache.runs].reverse()
-        .filter((r) => !keepersOnly || r.starred || r.run_id === cache.bestRunId).map((r) =>
+        .filter((r) => !keepersOnly || r.starred || isBest(r.run_id)).map((r) =>
         row(RunNames.title(r),
             `${r.label ? RunNames.when(r.created_at) + " · " : ""}${r.current_timestep ?? 0} / ${r.until_stopped ? "\u221e" : (r.total_timesteps ?? "?")} steps · best ${
               r.best_eval_reward === null || r.best_eval_reward === undefined ? "-" : r.best_eval_reward.toFixed(1)}`,
-            [r.run_id === cache.bestRunId && ["BEST" + (RunNames.success(r) ? " \u00b7 " + RunNames.success(r) : ""), "tag-best"],
+            [isBest(r.run_id) && ["BEST" + (RunNames.success(r) ? " \u00b7 " + RunNames.success(r) : ""), "tag-best"],
              [r.status, r.status === "completed" ? "tag-ok" : ""]],
             () => showRun(r.run_id), "r:" + r.run_id));
     } else {
@@ -121,7 +122,8 @@ const History = (() => {
       Api.getRuns().catch(() => ({ runs: [] })),
       Api.getJobs(100).catch(() => ({ jobs: [] })),
     ]);
-    cache = { flights: flights.flights, runs: runs.runs, jobs: jobs.jobs, bestRunId: runs.best_run_id || null };
+    cache = { flights: flights.flights, runs: runs.runs, jobs: jobs.jobs,
+              bestRunIds: Object.values(runs.best_run_ids || { net: runs.best_run_id }).filter(Boolean) };
     renderList();
   }
 
@@ -207,7 +209,7 @@ const History = (() => {
       showRun(id);
     });
     title.append(" ", star, rename);
-    if (id === cache.bestRunId) title.append(" ", node("span", "tag-best", "BEST"));
+    if (isBest(id)) title.append(" ", node("span", "tag-best", "BEST"));
     d.append(kv([
       ["run id", id], ["started", when(m.created_at)],
       ["algorithm", (m.algo || "").toUpperCase()], ["status", m.final_status || ls.status],

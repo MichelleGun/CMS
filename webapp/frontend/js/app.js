@@ -6,6 +6,8 @@
   let runs = [];
   let currentRunId = null;
   let bestRunId = null;
+  let bestRunIds = {};          // the best run per environment (net, onboard): most passes per episode
+  const isBestRun = (r) => !!r && Object.values(bestRunIds).includes(r.run_id);
   let viewedRunId = null;
   let ws = null;
   let isViewedRunTraining = false;
@@ -189,14 +191,14 @@
       ? `best ${r.best_eval_reward.toFixed(1)}` : "no eval yet";
     const succ = RunNames.success(r);
     const when = r.label ? ` \u00b7 ${RunNames.when(r.created_at)}` : "";
-    const tag = r.run_id === bestRunId ? "BEST \u00b7 " : "";
+    const tag = isBestRun(r) ? "BEST \u00b7 " : "";
     return `${tag}${RunNames.title(r)}${when} (${(r.current_timestep || 0).toLocaleString()} steps, ` +
       `${best}${succ ? ", " + succ : ""})`;
   }
 
   // newest first, but the best run and the starred ones on top, so the keepers are easy to pick
   function keepersFirst(list) {
-    const rank = (r) => (r.run_id === bestRunId ? 0 : r.starred ? 1 : 2);
+    const rank = (r) => (isBestRun(r) ? 0 : r.starred ? 1 : 2);
     return list.slice().reverse().map((r, i) => [r, i])
       .sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([r]) => r);
   }
@@ -410,7 +412,7 @@
     star.textContent = r.starred ? "\u2605" : "\u2606";
     star.classList.toggle("on", !!r.starred);
     star.title = r.starred ? "Unstar this run" : "Star this run (a keeper)";
-    document.getElementById("overlay-best-tag").hidden = r.run_id !== bestRunId;
+    document.getElementById("overlay-best-tag").hidden = !isBestRun(r);
     document.getElementById("overlay-run-name").textContent = RunNames.title(Object.assign({}, r, { starred: false }));
     document.getElementById("overlay-run-when").textContent =
       (r.label ? RunNames.when(r.created_at) + " \u00b7 " : "") + (r.run_id || "");
@@ -468,6 +470,7 @@
     runs = data.runs;
     currentRunId = data.current_run_id;
     bestRunId = data.best_run_id;
+    bestRunIds = data.best_run_ids || { net: data.best_run_id };
     capacity = data.capacity || null;
     renderRunList();
     if (document.activeElement !== initSelect && document.activeElement !== teacherRunSelect) {
@@ -487,8 +490,9 @@
     // the Training panel is ready to use (finished runs are one click away in the list).
     const trainingRun = runs.find((r) => r.status === "training");
     if (!viewedRunId && trainingRun && autoSelectEnabled) selectRun(trainingRun.run_id);
-    if (bestRunId) {
-      Api.getRun(bestRunId).then((r) => {
+    const bestForView = (viewed && bestRunIds[viewed.env]) || bestRunId;
+    if (bestForView) {
+      Api.getRun(bestForView).then((r) => {
         if (r.curve) RewardChart.setBestCurve(r.curve.timesteps, r.curve.mean_reward);
       }).catch(() => {});
     }
@@ -498,7 +502,7 @@
     runListEl.innerHTML = "";
     runs.slice().reverse().forEach((r) => {
       const row = document.createElement("div");
-      const isBest = r.run_id === bestRunId;
+      const isBest = isBestRun(r);
       row.className = "run-row" +
         (r.run_id === viewedRunId ? " selected" : "") +
         (r.status === "training" ? " active-training" : "") +
@@ -514,8 +518,9 @@
         const tag = document.createElement("span");
         tag.className = "tag-best";
         tag.textContent = "BEST";
-        tag.title = "Highest eval success on today's env" + (RunNames.success(r) ? ` (${RunNames.success(r)})` : "") +
-          ": passes through the ring";
+        tag.title = "Most passes per evaluation episode for this environment" +
+          (r.best_mean_passes !== null && r.best_mean_passes !== undefined
+            ? ` (${r.best_mean_passes.toFixed(2)})` : "") + (RunNames.success(r) ? `, ${RunNames.success(r)}` : "");
         row.append(tag);
       }
       const best = r.best_eval_reward !== null && r.best_eval_reward !== undefined
@@ -567,6 +572,10 @@
       isViewedRunTraining = status === "training";
       setStatusPill(status);
       if (r.curve) RewardChart.setCurrentCurve(r.curve.timesteps, r.curve.mean_reward);
+      RewardChart.setPasses(r.passes);
+      const rw = r.meta.reward_weights || {};
+      live.streakGain = rw.budget_streak !== undefined ? rw.budget_streak
+        : (r.meta.streak !== undefined ? r.meta.streak : 0);
       if (r.meta.target_override) Scene3D.setHoop(r.meta.target_override);
       renderOverlayTitle(Object.assign({}, r.meta, { label: r.label, starred: r.starred }));
       Reward.renderCard(r.meta);
@@ -636,6 +645,7 @@
           renderHud();
         }
         RewardChart.appendCurrentPoint(msg.current_timestep, msg.latest_eval_reward);
+        RewardChart.appendPassesPoint(msg.current_timestep, msg.latest_mean_passes);
         const prevBest = lastBestSeen[runId];
         if (msg.best_eval_reward !== undefined && msg.best_eval_reward !== null) {
           if (prevBest !== undefined && msg.best_eval_reward > prevBest) showBestToast();
@@ -670,9 +680,21 @@
     hudLine.textContent =
       `episode ${live.ep === null ? "-" : live.ep + 1}  \u00b7  ${t} s  \u00b7  ` +
       `${live.reversed ? "back\u2192front  \u00b7  " : ""}` +
+      `passes this episode ${live.epPasses || 0}${streakText(live.epPasses)}  \u00b7  ` +
+      (live.zone ? `start: ${live.zone}  \u00b7  ` : "") +
       `passes seen ${live.passes}/${live.episodes}  \u00b7  eval success ${sr}  \u00b7  step ${live.lastT}` +
       (live.swing ? `\n${live.swing}` : "") +
       (extra ? `  \u00b7  ${extra}` : "");
+  }
+
+  const ZONE_NAMES = ["top-left", "top-middle", "top-right", "middle-right", "bottom-right",
+                      "bottom-middle", "bottom-left", "middle-left", "under the hoop"];
+
+  // the multiplier the NEXT pass will be paid with (streak bonus, capped at 3x)
+  function streakText(n) {
+    const g = live.streakGain || 0;
+    if (!g || !n) return "";
+    return ` (next \u00d7${Math.min(1 + g * n, 3).toFixed(1)})`;
   }
 
   function eventMarks(msg, key) {
@@ -687,6 +709,8 @@
     live.lastT = msg.t || live.lastT;
     if (msg.step !== undefined) live.simT = msg.step / (msg.ctrl_hz || 30);
     if (msg.reversed !== undefined) live.reversed = msg.reversed;
+    if (msg.passes !== undefined) live.epPasses = msg.passes;
+    if (msg.start_zone) live.zone = ZONE_NAMES[msg.start_zone - 1] || `zone ${msg.start_zone}`;
     if (msg.swing_deg !== undefined) {
       // why the ring may look calm: wind ramp x this episode's gust x the run's "Max swing"
       live.swing = `ring swing this episode ${msg.swing_deg.toFixed(0)}\u00b0` +
@@ -809,6 +833,9 @@
       sway_deg: parseFloat(document.getElementById("train-sway-deg").value),
       wash_deg: parseFloat(document.getElementById("train-wash-deg").value) || 0,
       start_z: document.getElementById("hover-start-toggle").checked ? 0.8 : 0.0,
+      same_side: document.getElementById("same-side-toggle").checked,
+      start_zones: document.getElementById("start-zones-toggle").checked,
+      streak: Math.max(0, parseFloat(document.getElementById("streak-input").value) || 0),
       carry_start: document.getElementById("carry-start-toggle").checked ? 0.7 : 0.0,
       reverse_prob: document.getElementById("reverse-toggle").checked ? 0.5 : 0.0,
       lean_flip_prob: document.getElementById("lean-flip-toggle").checked ? 0.3 : 0.0,

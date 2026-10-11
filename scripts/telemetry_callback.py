@@ -122,6 +122,9 @@ class TelemetryCallback(BaseCallback):
             record["score"] = round(float(info["score"]), 4)
         if "reversed" in info:
             record["reversed"] = bool(info["reversed"])
+        zone = _start_zone(info)
+        if zone:
+            record["start_zone"] = zone
         # this episode's ring swing (HoopNetAviary): the dashboard HUD shows it, since the swing is
         # wind ramp x per-episode gust x the "Max swing" setting, often well under the setting
         for k in ("wind_scale", "swing_deg", "swing_period_s"):
@@ -137,6 +140,9 @@ class TelemetryCallback(BaseCallback):
         if state is not None:
             record["hoop_normal"] = state.get("hoop_normal")
             record["hoop_radius"] = state.get("hoop_radius")
+        elif obs_i.size == 84:     # + streak_obs: [..., radius, armed, streak, relative vector]
+            record["hoop_normal"] = obs_i[-12:-9].tolist()
+            record["hoop_radius"] = float(obs_i[-6])
         elif obs_i.size == 83:     # HoopNetAviary(armed_obs=True): [..., radius, armed, relative vector]
             record["hoop_normal"] = obs_i[-11:-8].tolist()
             record["hoop_radius"] = float(obs_i[-5])
@@ -192,9 +198,18 @@ class DashboardEvalCallback(EvalCallback):
     place the backend reads "is training still going, what's the current/best
     number", so it never has to parse stdout or race-read evaluations.npz
     mid-write.
+
+    best_model.zip follows PASSES (2026-10-11 night): the highest mean passes per evaluation
+    episode, ties broken by mean reward. Reward is not comparable across reward changes and a
+    streak bonus makes it noisy; passes are what the task is about. Envs that report no passes
+    (the legacy point-reaching env) fall back to reward, as before. Every evaluation is also
+    appended to passes.json (mean / max passes, and per start zone when the env reports one).
     """
 
     def __init__(self, *args, run_dir: Path, total_timesteps: int, t0: float, **kwargs):
+        # this class saves best_model.zip itself (by passes); SB3's own save is by reward
+        self._best_path = kwargs.pop("best_model_save_path", None)
+        kwargs["best_model_save_path"] = None
         super().__init__(*args, **kwargs)
         self.run_dir = Path(run_dir)
         self.live_status_path = Path(run_dir) / "live_status.json"
@@ -204,28 +219,52 @@ class DashboardEvalCallback(EvalCallback):
         self.latest_mean_passes = None
         self.best_mean_passes = None
         self.max_passes = None            # most passes in any one evaluation episode so far
+        self._zone_buffer = []            # (start zone, passes) per episode in the current evaluation
+        self.zone_passes = None           # {zone: mean passes} of the latest evaluation
+        self._best_key = None             # (mean passes, mean reward) of best_model.zip
+        self._history = []                # passes.json
 
     def _log_success_callback(self, locals_, globals_):
         super()._log_success_callback(locals_, globals_)
         if locals_["done"]:
-            passes = locals_["info"].get("passes")
+            info = locals_["info"]
+            passes = info.get("passes")
             if passes is not None:
                 self._passes_buffer.append(int(passes))
+                zone = _start_zone(info)
+                if zone:
+                    self._zone_buffer.append((zone, int(passes)))
 
     def _on_step(self) -> bool:
         evaluating = self.eval_freq > 0 and self.n_calls % self.eval_freq == 0
         if evaluating:
             self._passes_buffer = []
+            self._zone_buffer = []
         continue_training = super()._on_step()
         if evaluating and self._passes_buffer:
             self.latest_mean_passes = float(np.mean(self._passes_buffer))
             self.best_mean_passes = max(self.best_mean_passes or 0.0, self.latest_mean_passes)
             self.max_passes = max(self.max_passes or 0, max(self._passes_buffer))
+            if self._zone_buffer:
+                zones = {}
+                for z, n in self._zone_buffer:
+                    zones.setdefault(z, []).append(n)
+                self.zone_passes = {str(z): float(np.mean(v)) for z, v in sorted(zones.items())}
             if self.verbose:
                 print(f"Passes per episode: mean {self.latest_mean_passes:.2f}, "
                       f"this eval {self._passes_buffer}, best mean {self.best_mean_passes:.2f}, "
-                      f"max ever {self.max_passes}")
+                      f"max ever {self.max_passes}"
+                      + (f", per zone {self.zone_passes}" if self._zone_buffer else ""))
+            self._history.append({"t": int(self.num_timesteps), "mean": self.latest_mean_passes,
+                                  "max": int(max(self._passes_buffer)),
+                                  "zones": self.zone_passes if self._zone_buffer else None})
+            try:
+                _atomic_write_text(self.run_dir / "passes.json", json.dumps(self._history))
+            except OSError as e:
+                if self.verbose:
+                    print(f"[DashboardEvalCallback] passes.json write failed: {e}")
         if evaluating:
+            self._maybe_save_best()
             # latest_model.zip = the policy as of this eval, so the dashboard's "watch current
             # policy" always has something to load (best_model.zip only changes on a new best).
             try:
@@ -248,6 +287,8 @@ class DashboardEvalCallback(EvalCallback):
                 "latest_mean_passes": self.latest_mean_passes,
                 "best_mean_passes": self.best_mean_passes,
                 "max_passes": self.max_passes,
+                "zone_passes": self.zone_passes,
+                "best_by": "passes" if self._passes_buffer else "reward",
                 "elapsed_sec": time.time() - self.t0,
                 "updated_at": datetime.now().isoformat(),
             }
@@ -257,6 +298,40 @@ class DashboardEvalCallback(EvalCallback):
                 if self.verbose:
                     print(f"[DashboardEvalCallback] status write failed: {e}")
         return continue_training
+
+    def _maybe_save_best(self):
+        """best_model.zip on a new best (mean passes, mean reward), or (mean reward) without passes."""
+        if self._best_path is None or self.last_mean_reward == -np.inf:
+            return
+        reward = float(self.last_mean_reward)
+        key = (self.latest_mean_passes, reward) if self._passes_buffer else (reward,)
+        if self._best_key is not None and len(self._best_key) == len(key) and key <= self._best_key:
+            return
+        self._best_key = key
+        try:
+            os.makedirs(self._best_path, exist_ok=True)
+            self.model.save(os.path.join(self._best_path, "best_model"))
+            if self.verbose:
+                print("New best model (" + (f"{key[0]:.2f} passes per episode, " if len(key) == 2 else "")
+                      + f"reward {reward:.2f})")
+        except OSError as e:
+            if self.verbose:
+                print(f"[DashboardEvalCallback] best model save failed: {e}")
+
+
+def _start_zone(info) -> int:
+    """The start zone (1-9) an episode began in: HoopNetAviary's start_zone, or the onboard env's
+    start_type 'zone_<k>'. 0 when the env does not use zone starts."""
+    z = info.get("start_zone")
+    if z:
+        return int(z)
+    st = info.get("start_type")
+    if isinstance(st, str) and st.startswith("zone_"):
+        try:
+            return int(st[5:])
+        except ValueError:
+            return 0
+    return 0
 
 
 class CameraCallback(BaseCallback):
