@@ -73,7 +73,7 @@
   },
   "pid": 35376,
   "created_at": "2026-10-11T22:14:09.940224",
-  "finished_at": null,
-  "final_status": null,
-  "final_timesteps": null
+  "finished_at": "2026-10-11T22:54:22",
+  "final_status": "stopped",
+  "final_timesteps": 29790000
 }
