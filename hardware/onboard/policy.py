@@ -59,7 +59,10 @@ def load_policy(model_path, algo: Optional[str] = None, deterministic: bool = Tr
     model = cls.load(str(model_path), device="cpu")
 
     got = tuple(model.observation_space.shape)
-    if got != (spec.OBS_DIM,):
+    # a policy from before the `pushed` field reads the same observation minus that column
+    legacy = got == (spec.LEGACY_OBS_DIM,)
+    drop = spec.OBS_SLICES["pushed"].start
+    if got != (spec.OBS_DIM,) and not legacy:
         raise ValueError(
             f"{model_path.name} expects observations of shape {got}, but this task "
             f"produces {(spec.OBS_DIM,)}. A shape of (1, 75) means it was trained on the "
@@ -69,8 +72,10 @@ def load_policy(model_path, algo: Optional[str] = None, deterministic: bool = Tr
                          f"{tuple(model.action_space.shape)}, expected {(spec.ACT_DIM,)}")
 
     def policy_fn(obs: np.ndarray) -> np.ndarray:
-        a, _ = model.predict(np.asarray(obs, dtype=np.float32).reshape(-1),
-                             deterministic=deterministic)
+        o = np.asarray(obs, dtype=np.float32).reshape(-1)
+        if legacy and o.shape[0] == spec.OBS_DIM:
+            o = np.delete(o, drop)
+        a, _ = model.predict(o, deterministic=deterministic)
         return np.clip(np.asarray(a, dtype=float).reshape(-1)[:spec.ACT_DIM], -1.0, 1.0)
 
     policy_fn.model = model          # kept for tests and for introspection

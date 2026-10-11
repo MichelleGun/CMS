@@ -1,5 +1,53 @@
 # Progress log
 
+## Done (2026-10-11, night): find → align → through → repeat
+
+- **Diagnosis** (read-only traces of the best checkpoints):
+  - PyBullet `ppo_20261011-212417` (v3, 37M steps): 3 of 10 episodes passed once, none twice
+    (`max_passes` 1 in every run, ever), and 7 of 10 parked without touching the rim.
+    - The lap "armed" flag (the next pass counts only 0.28 m clear) was not in the observation.
+    - Budget mode has no signal for the 4–6 s turn back.
+  - Onboard `onboard_laps` (best): 23 of 30 front starts ended in a strike, 10 of 12 traced
+    strikes came right after a pass, and 18 of 30 hard starts ended in the net.
+    - Out-of-cage (−10) was cheaper than searching (−12 to −18).
+    - Strike (−20) equalled a pass (+20), so the policy only attempted when more than 50% sure:
+      it lined up and hovered.
+    - The 25–45° pendulum swing against 8 cm of clearance made passes luck.
+    - "Just before the plane" and "just through it" looked identical with the ring out of view.
+- **PyBullet (MDP v4):**
+  - The `armed_obs` flag (82 → 83). Older policies are widened with zero weights
+    (`vec_util.widen_policy_input`).
+  - `budget_shape` potential shaping on top of the budget, kept out of the budget tally.
+  - `start_z` hover starts (0.8 ± 0.1 m), like the Tello after its automatic takeoff.
+  - The `wash_deg` prop-wash ring push.
+  - Swing 5° (was 20°).
+- **Onboard:**
+  - Failures drain the rest of the episode's time cost (strike −8, out of cage −10, miss −5,
+    plus the drain).
+  - A facing ("find it") potential.
+  - Passes count only camera-first.
+  - New observation `pushed` (33 → 34): forward distance since the ring was last seen. Old
+    demos are upgraded on load and old policies widened or still flyable.
+  - The prop-wash ring with a tilting face.
+  - The scripted expert flies laps; new demos `hardware/flights/demos/onboard_sim_laps.npz`
+    (190/300 kept, 1.59 passes per episode, max 5).
+- **Dashboard:** "Ring push from prop wash" and "Start hovering" in the Training panel. The swing
+  defaults to 5°. Budget runs default to `budget_shape` 2. 83-input runs are comparable for
+  "best run". Robust demo generation now makes lap demos.
+- **Why each change, in detail:** README "Why each v4 change was made", and
+  `hardware/onboard/README.md` "Why the policy lined up but didn't go through".
+- **Tests:** 441 pass (60 `scripts/tests` incl. 14 new, 324 `hardware` incl. 12 new or updated,
+  57 `webapp/backend/tests`).
+- **Live runs** (started 2026-10-11 22:12 / 22:14, until stopped; `ppo_20261011-212417` and
+  `onboard_20261011-212643` were stopped cleanly):
+  - `ppo_20261011-221214`: v4, continued from `-212417` at 38.0M steps, 6 envs, budget 10,
+    +5 per pass, shaping 2, hover start, wash 15°, swing 5°. _TODO: passes per episode._
+  - `onboard_v4_20261011-221406`: from `onboard_laps/best_model.zip` (widened), 8 envs, laps,
+    dr 1, wash 15°, swing 5°, 50% hard starts, BC on lap-expert + teacher + human demos
+    (human ×10), critic warm-up 30k. _TODO: passes per episode._
+- **GitHub:** model checkpoints and run summaries under `results/hoop/runs/` are now committed
+  (see `.gitignore`), so teammates get the latest training files.
+
 ## Done (2026-10-11, later)
 
 - **Dashboard fixes.**
@@ -216,13 +264,15 @@
 
 ## Next
 
-0. **Looping on the camera drone and net-hit landing** (still open; the onboard sim got
-   randomisation and hard starts, but not `laps=0`).
-   - Onboard `laps=0` in `hardware/onboard/gym_env.py`/`sim.py`.
+0. **Loops on the real drone and net-hit landing.** Lap training is done in both sims
+   (2026-10-11 night). Still open for real flights:
    - A net-contact land trigger in `fly_hoop.py` (IMU spike, or commanded vs measured
      velocity mismatch).
-   - Then train loops in PyBullet with `--init <single-pass run> --laps 0 --episode-sec 45`
-     once single-pass eval success is above about 30%.
+   - Relax `fly_hoop.py`'s forward-travel budget and "record at the first lock" for laps and
+     for starts away from the front runway.
+   - Measure the real prop-wash tilt from a video of an approach and set `--wash-deg` to match
+     (15° is an estimate).
+   - Verify the `vgx` unit (the `pushed` odometer and the `vel` field both assume cm/s).
 1. **Stabilise training** — drop PPO learning rate to `1e-4`, add a fixed seed sweep,
    confirm the 40k-step reward dip disappears. Log to TensorBoard
    (`pip install tensorboard`, uncomment the `tensorboard_log=` line in

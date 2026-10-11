@@ -137,6 +137,9 @@ class TelemetryCallback(BaseCallback):
         if state is not None:
             record["hoop_normal"] = state.get("hoop_normal")
             record["hoop_radius"] = state.get("hoop_radius")
+        elif obs_i.size == 83:     # HoopNetAviary(armed_obs=True): [..., radius, armed, relative vector]
+            record["hoop_normal"] = obs_i[-11:-8].tolist()
+            record["hoop_radius"] = float(obs_i[-5])
         elif obs_i.size == 82:     # HoopNetAviary: [..., normal, ring vel, ring radius, relative vector]
             record["hoop_normal"] = obs_i[-10:-7].tolist()
             record["hoop_radius"] = float(obs_i[-4])

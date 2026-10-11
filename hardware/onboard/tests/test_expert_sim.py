@@ -375,8 +375,25 @@ def test_laps_clearing_the_ring_then_coming_back_is_a_second_pass():
     _fly(env, 1, 200, until=lambda i: i["phase"] == "passed")
     _fly(env, 1, 200, until=lambda i: env.sim.pos[0] > ARM_DIST_M + 0.10)
     assert env._armed
-    steps = _fly(env, -1, 300, until=lambda i: i["phase"] != "flying")
+    env.sim.yaw_deg = 180.0                      # turned round: camera on the ring again
+    env.sim.vel[:] = 0.0
+    env._reset_shaping()
+    steps = _fly(env, 1, 300, until=lambda i: i["phase"] != "flying")
     assert steps[-1][1]["phase"] == "passed" and steps[-1][1]["passes"] == 2
+    env.close()
+
+
+def test_laps_reversing_blind_through_the_ring_does_not_count():
+    """Camera-first rule: coming back through by flying backwards (camera facing away) is no
+    pass, no direction flip and no reward; the drone has to turn round and look."""
+    from onboard.gym_env import ARM_DIST_M
+    env = _lap_env()
+    _fly(env, 1, 200, until=lambda i: i["phase"] == "passed")
+    _fly(env, 1, 200, until=lambda i: env.sim.pos[0] > ARM_DIST_M + 0.10)
+    steps = _fly(env, -1, 300, until=lambda i: i["phase"] != "flying")
+    r, info, term = steps[-1]
+    assert info["phase"] == "blind_pass" and info["passes"] == 1 and not term
+    assert env._dir == -1 and r < 1.0
     env.close()
 
 

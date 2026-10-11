@@ -94,7 +94,7 @@ class ImitationManager:
         return target.relative_to(self.flights).as_posix()
 
     def generate_demos(self, name: str, episodes=60, profile="typical", seed=0,
-                       render=False, dr=0.0, sway_deg=25.0, hard_start_p=0.0) -> str:
+                       render=False, dr=0.0, sway_deg=5.0, hard_start_p=0.0) -> str:
         out = self.demos_dir / f"{_check_name(name)}.npz"
         if out.exists():
             raise ValueError(f"demos/{out.name} already exists; pick another name")
@@ -106,8 +106,10 @@ class ImitationManager:
         if render:
             argv.append("--render")
         if dr > 0 or hard_start_p > 0:
+            # robust demos = today's training task: prop-wash ring, and the expert flying laps
+            # (through, clear, turn round, find it again), so a clone learns the after-pass part
             argv += ["--dr", float(dr), "--sway-deg", float(sway_deg),
-                     "--hard-start-p", float(hard_start_p)]
+                     "--hard-start-p", float(hard_start_p), "--wash-deg", 15.0, "--laps", 0]
         robust = " robust" if dr > 0 or hard_start_p > 0 else ""
         return self.jobs.start("demos", argv, f"Simulated{robust} demos '{name}' ({episodes} episodes)",
                                outputs={"demo": out.relative_to(self.flights).as_posix()})

@@ -807,6 +807,8 @@
       ring_jitter: document.getElementById("ring-jitter-toggle").checked ? 1.0 : 0.0,
       radius_start: document.getElementById("radius-curriculum-toggle").checked ? 1.5 : 1.0,
       sway_deg: parseFloat(document.getElementById("train-sway-deg").value),
+      wash_deg: parseFloat(document.getElementById("train-wash-deg").value) || 0,
+      start_z: document.getElementById("hover-start-toggle").checked ? 0.8 : 0.0,
       carry_start: document.getElementById("carry-start-toggle").checked ? 0.7 : 0.0,
       reverse_prob: document.getElementById("reverse-toggle").checked ? 0.5 : 0.0,
       lean_flip_prob: document.getElementById("lean-flip-toggle").checked ? 0.3 : 0.0,
@@ -820,6 +822,7 @@
       payload.profile = document.getElementById("onboard-profile").value;
       payload.onboard_dr = document.getElementById("onboard-dr-toggle").checked ? 1.0 : 0.0;
       payload.onboard_sway_deg = parseFloat(document.getElementById("onboard-sway").value) || 0;
+      payload.onboard_wash_deg = parseFloat(document.getElementById("onboard-wash").value) || 0;
       payload.hard_start_p = Math.min(100, Math.max(0, parseFloat(document.getElementById("hard-start-input").value) || 0)) / 100;
       payload.dr_steps = Math.max(0, parseInt(document.getElementById("dr-steps-input").value, 10) || 0);
       payload.bc_augment = document.getElementById("bc-augment-toggle").checked;
@@ -1034,6 +1037,10 @@
     onboardSway.addEventListener("input", () => {
       document.getElementById("onboard-sway-val").textContent = `${onboardSway.value}°`;
     });
+    for (const [inp, val] of [["onboard-wash", "onboard-wash-val"], ["train-wash-deg", "train-wash-val"]]) {
+      const el = document.getElementById(inp);
+      el.addEventListener("input", () => { document.getElementById(val).textContent = `${el.value}°`; });
+    }
     document.getElementById("star-btn").addEventListener("click", () => {
       const r = runs.find((x) => x.run_id === viewedRunId);
       if (r) toggleStar(r);

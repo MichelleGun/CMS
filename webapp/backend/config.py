@@ -55,12 +55,16 @@ HOOP_SPEC = {
 # + the ring terms. Runs saved with another size come from an older env version: their scores
 # are not comparable, so they are never picked as the best run (they can still be starred).
 NET_OBS_DIM = 72 + hoop_env.OBS_EXTRA
+# + the lap "armed" flag (armed_obs, runs since 2026-10-11 night): the same task, so comparable
+NET_OBS_DIMS = (NET_OBS_DIM, NET_OBS_DIM + 1)
 
 # The net env's reward (MDP), for the Training panel's editable "Reward" block and the run
 # overlay's read-only card: the default weights, and which mode uses which with a one-liner each.
 REWARD_INFO = {
     "modes": list(hoop_env.REWARD_MODES),
-    "defaults": dict(hoop_env.DEFAULT_REWARD_WEIGHTS),
+    # budget_shape: the env's own default stays 0 (old runs replay unchanged), but new runs from
+    # the dashboard start from MDP v4 (train_hoop_multi.py's --budget-shape default)
+    "defaults": dict(hoop_env.DEFAULT_REWARD_WEIGHTS, budget_shape=2.0),
     "terms": {
         "shaped": [
             ["pass_bonus", "+ per pass through the ring"],
@@ -78,6 +82,7 @@ REWARD_INFO = {
             ["budget_time", "- per control step"],
             ["budget_rim", "- per rim clip"],
             ["budget_net", "- at least this for the net, which also ends the episode at -budget"],
+            ["budget_shape", "x metres of progress towards / through the ring (MDP v4, potential-based; 0 = v3)"],
         ],
     },
 }

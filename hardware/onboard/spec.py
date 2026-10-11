@@ -7,7 +7,7 @@ This module is the single source of truth. The simulator (sim.py), the real flig
 so the interface cannot drift between "what the expert was recorded doing" and "what a
 policy is asked to do". A test asserts OBS_DIM equals the sum of the field widths.
 
-Why a feature vector and not the image: a 33-float observation trains an MLP on a CPU in
+Why a feature vector and not the image: a 34-float observation trains an MLP on a CPU in
 seconds, keeps demonstration files small, and runs at 15 Hz on this machine. The cost is
 that the policy only ever sees what ring_detect.py chose to measure.
 
@@ -50,12 +50,21 @@ OBS_FIELDS = (
     # 0/12. These fields persist after the lock is lost, which separates the two cases.
     ("last_range", 1),   # range at the last fresh detection / RANGE_NORM (1.0 if never)
     ("last_centre", 2),  # cx, cy at the last fresh detection
+    # Forward distance flown since that last fresh detection (integrated from the Tello's own
+    # forward speed vgx) / RANGE_NORM, clipped to [0, 1]. Added 2026-10-11 night: with the
+    # ring out of view, "just before the plane, keep pushing" and "just through it, clear the
+    # ring and turn round" looked identical (measured: 10 of 12 strikes in lap mode came right
+    # after a pass, the drone stopping 4-10 cm past the plane). pushed < last_range means the
+    # ring is still ahead; pushed > last_range means the drone is through. Older 33-wide demos
+    # are upgraded on load (obs.upgrade_obs) and older policies widened (vec_util).
+    ("pushed", 1),
     ("height", 1),       # Tello 'h' (cm) / HEIGHT_NORM
     ("vel", 3),          # Tello vgx/vgy/vgz (cm/s) / VEL_NORM
     ("att", 3),          # pitch, roll (deg) / ATT_NORM, and yaw rate / YAWRATE_NORM
     ("actions", ACT_BUFFER * ACT_DIM),   # executed actions, oldest first, zeros at takeoff
 )
-OBS_DIM = sum(w for _, w in OBS_FIELDS)        # 33
+OBS_DIM = sum(w for _, w in OBS_FIELDS)        # 34 (33 before the `pushed` field)
+LEGACY_OBS_DIM = OBS_DIM - 1                   # 33: demos / policies from before `pushed`
 
 # Slice for each field, so consumers never hardcode an index.
 OBS_SLICES = {}

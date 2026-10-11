@@ -20,7 +20,7 @@ import psutil
 
 import jobs
 from config import (SCRIPTS_DIR, RUNS_DIR, CMS_DIR, ALGORITHM_IDS, START_MARGIN, FLIGHTS_DIR,
-                    HARDWARE_DIR, NET_OBS_DIM, bounds_ok)
+                    HARDWARE_DIR, NET_OBS_DIMS, bounds_ok)
 
 PYTHON_EXE = sys.executable  # the drones env's own interpreter, since this
                               # backend process runs inside that same env
@@ -138,7 +138,7 @@ class RunManager:
     def start_run(self, algo: str, seed: Optional[int], start_pos, target_pos,
                   timesteps: int, n_envs: int, eval_freq: int, n_eval_episodes: int,
                   env: str = "net", ring_jitter: float = 1.0, radius_start: float = 1.5,
-                  sway_deg: float = 20.0, until_stopped: bool = False,
+                  sway_deg: float = 5.0, until_stopped: bool = False,
                   carry_start: float = 0.7, reverse_prob: float = 0.5,
                   lean_flip_prob: float = 0.3, vec: str = "auto",
                   init_run: Optional[str] = None, init_clone: Optional[str] = None,
@@ -147,7 +147,9 @@ class RunManager:
                   hard_start_p: float = 0.5, dr_steps: int = 500_000, bc_augment: bool = True,
                   wind_steps: int = 1_500_000,
                   reward_mode: str = "shaped", budget: float = 3.0, laps: int = 1,
-                  reward_weights: Optional[dict] = None, onboard_laps: int = 0) -> str:
+                  reward_weights: Optional[dict] = None, onboard_laps: int = 0,
+                  onboard_wash_deg: float = 15.0, wash_deg: float = 15.0,
+                  start_z: float = 0.8) -> str:
         if env == "onboard":
             algo = "ppo"                            # the onboard trainer is PPO (+ demo term)
         if algo not in ALGORITHM_IDS:
@@ -185,6 +187,7 @@ class RunManager:
         if env == "onboard":
             argv = [PYTHON_EXE, str(ONBOARD_TRAIN), *common, "--profile", profile,
                     "--dr", str(onboard_dr), "--sway-deg", str(onboard_sway_deg),
+                    "--wash-deg", str(onboard_wash_deg),
                     "--hard-start-p", str(hard_start_p), "--dr-steps", str(int(dr_steps)),
                     "--laps", str(int(onboard_laps)),
                     "--bc-augment" if bc_augment else "--no-bc-augment"]
@@ -197,7 +200,8 @@ class RunManager:
                     "--env", env, *common]
             if env == "net":
                 argv += ["--ring-jitter", str(ring_jitter), "--radius-start", str(radius_start),
-                         "--sway-deg", str(sway_deg),
+                         "--sway-deg", str(sway_deg), "--wash-deg", str(wash_deg),
+                         "--start-z", str(start_z),
                          "--carry-start", str(carry_start), "--reverse-prob", str(reverse_prob),
                          "--lean-flip-prob", str(lean_flip_prob),
                          "--wind-steps", str(int(wind_steps)), "--reward", reward_mode,
@@ -290,7 +294,7 @@ class RunManager:
                 "starred": bool(tags.get("starred")),
                 "best_success_rate": self._best_success(d),
                 "best_mean_passes": status_doc.get("best_mean_passes"),
-                "comparable": meta.get("env") == "net" and meta.get("obs_dim") == NET_OBS_DIM,
+                "comparable": meta.get("env") == "net" and meta.get("obs_dim") in NET_OBS_DIMS,
             })
         current_run_id = runs[-1]["run_id"] if runs else None
         best_run_id = _pick_best(runs)

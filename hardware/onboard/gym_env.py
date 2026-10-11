@@ -16,7 +16,21 @@ matter, which is the whole difference between reaching a point and going through
 
 The episode ends when the drone crosses the ring's plane, and the terminal reward says
 which of the three things happened: through the opening, into the noodle, or past the
-ring entirely.
+ring entirely. (Lap mode, laps != 1: a pass does not end it; see below.)
+
+Changed 2026-10-11 night, after measuring why a trained policy lined up with the ring but would
+not go through, and flew into the net from hard starts (hardware/onboard/README.md, "Why the
+policy lined up but didn't go through"):
+  * A failure (strike, out of the cage, a miss) now also costs the time penalty of every tick
+    left in the episode (`drain`), on top of a fixed penalty. Before, a strike (-20) cost exactly
+    what a pass earned (+20), so attempting only paid above 50 % confidence, and out-of-cage
+    (-10) was cheaper than the -12..-18 of searching to the time limit, so the net was a shortcut.
+    Now ending an episode early is never cheaper than flying on, and an attempt pays from ~29 %.
+  * The potential has a facing term: the camera pointing at the point just behind the ring
+    (along the pass direction). It pays for turning towards a ring that is out of view, and after
+    a pass for turning back round; potential-based, so hovering or spinning earns nothing.
+  * A pass only counts flown camera-first (forward . pass direction >= PASS_FACING_MIN): no
+    blind backwards or sideways passes.
 """
 from typing import Optional
 
@@ -43,9 +57,17 @@ AXIS_PULL_LEN_M = 0.30
 APPROACH_M = 0.30       # the waypoints in front of / behind the ring
 W_TIME = 0.02
 R_PASSED = 20.0
-R_STRUCK = -20.0        # as costly as a pass is worth: a real strike usually ends the flight
+R_STRUCK = -8.0         # plus the drain below: a real strike usually ends the flight (was -20)
 R_MISSED = -5.0
 R_OUT_OF_CAGE = -10.0
+# Failures also cost W_TIME x the ticks left in the episode, so ending early is never cheaper
+# than flying on (the PyBullet budget mode's "drain the budget" idea).
+DRAIN = True
+# Facing potential (x W_SHAPE, like the metres terms): cos of the angle between the camera and
+# the direction to the point FACE_AHEAD_M behind the ring along the pass direction.
+W_FACE = 0.5
+FACE_AHEAD_M = 0.30
+PASS_FACING_MIN = 0.5   # a pass counts only with forward . pass direction >= this
 # Once, the first time the ring comes into view in an episode that started without it in
 # view (hard starts: behind / beside / below, facing away). Helps the first searches succeed;
 # it can only be earned once per episode, so turning away and back again earns nothing.
@@ -71,7 +93,9 @@ REWARD_WEIGHTS = {"w_shape": W_SHAPE, "axis_pull": AXIS_PULL, "w_time": W_TIME,
                   "r_passed": R_PASSED, "r_struck": R_STRUCK, "r_missed": R_MISSED,
                   "r_out_of_cage": R_OUT_OF_CAGE, "r_found": R_FOUND,
                   "w_rim": W_RIM, "rim_margin_m": RIM_MARGIN_M,
-                  "r_wrong_way": R_WRONG_WAY, "arm_dist_m": ARM_DIST_M}
+                  "r_wrong_way": R_WRONG_WAY, "arm_dist_m": ARM_DIST_M,
+                  "drain": DRAIN, "w_face": W_FACE, "face_ahead_m": FACE_AHEAD_M,
+                  "pass_facing_min": PASS_FACING_MIN}
 
 
 def rim_penalty(rim_distance_m: float) -> float:
@@ -93,8 +117,9 @@ class OnboardHoopEnv(gym.Env):
                  max_episode_sec: float = MAX_EPISODE_SEC,
                  drone_width_m: float = spec.DRONE_WIDTH_M,
                  dr: float = 0.0, sway_deg: float = DEFAULT_SWAY_DEG, hard_start_p: float = 0.0,
-                 ramp: float = 1.0, open_plane: Optional[bool] = None, laps: int = 1):
-        """dr / sway_deg / hard_start_p / ramp / open_plane: robustness, see sim.py. open_plane
+                 ramp: float = 1.0, open_plane: Optional[bool] = None, laps: int = 1,
+                 wash_deg: float = 0.0):
+        """dr / sway_deg / hard_start_p / ramp / open_plane / wash_deg: see sim.py. open_plane
         defaults to on whenever starts can be away from the front runway. laps: passes per
         episode (1: the episode ends at the first crossing; 0: endless back-and-forth)."""
         super().__init__()
@@ -107,7 +132,7 @@ class OnboardHoopEnv(gym.Env):
         self._kwargs = dict(profile=profile, render=render_frames, ring=ring,
                             detector=detector, drone_width_m=drone_width_m, dr=dr,
                             sway_deg=sway_deg, hard_start_p=hard_start_p, ramp=ramp,
-                            open_plane=open_plane)
+                            open_plane=open_plane, wash_deg=wash_deg)
         self._seed = int(seed)
         if self.laps != 1:
             max_episode_sec = max(max_episode_sec, LAP_EPISODE_SEC)
@@ -148,7 +173,20 @@ class OnboardHoopEnv(gym.Env):
             phi = -float(np.linalg.norm(self.sim.pos - (c + n * d * APPROACH_M)))
         else:
             phi = -(float(np.linalg.norm(self.sim.pos - (c - n * d * APPROACH_M))) + 2 * APPROACH_M)
-        return phi - AXIS_PULL * radial * float(np.exp(-(axial / AXIS_PULL_LEN_M) ** 2))
+        return (phi - AXIS_PULL * radial * float(np.exp(-(axial / AXIS_PULL_LEN_M) ** 2))
+                + W_FACE * self._facing(c + n * d * FACE_AHEAD_M))
+
+    def _facing(self, point) -> float:
+        """cos of the horizontal angle from the camera to `point`, faded out within 15 cm of it."""
+        g = (point - self.sim.pos)[:2]
+        dist = float(np.linalg.norm(g))
+        if dist < 1e-6:
+            return 0.0
+        return float(np.dot(self.sim.forward[:2], g / dist)) * min(1.0, dist / 0.15)
+
+    def _drain(self) -> float:
+        """The time penalty of every tick left in this episode (0 with DRAIN off)."""
+        return W_TIME * max(0, self.max_ticks - self._ticks) if DRAIN else 0.0
 
     def _reset_shaping(self):
         """Restart the potential from where the drone is now (a new episode or a new leg), so a
@@ -203,8 +241,13 @@ class OnboardHoopEnv(gym.Env):
         if o.done:
             info["contact"] = bool(o.contact)
             info["radial_m"] = o.radial_m
-            if o.passed:
-                right_way = self.laps == 1 or (self._armed and self._dir in (0, o.direction))
+            facing = float(np.dot(self.sim.forward, self.sim.ring.normal * o.direction))
+            right_way = self.laps == 1 or (self._armed and self._dir in (0, o.direction))
+            if o.passed and right_way and facing < PASS_FACING_MIN:
+                info["phase"] = "blind_pass"             # backwards / sideways: counts for nothing
+                self.sim.clear_outcome()
+                self._reset_shaping()
+            elif o.passed:
                 if right_way:
                     reward += R_PASSED
                     self.passes += 1
@@ -223,15 +266,15 @@ class OnboardHoopEnv(gym.Env):
                     self._reset_shaping()
             elif o.struck:
                 terminated = True
-                reward += R_STRUCK
+                reward += R_STRUCK - self._drain()
                 info["phase"] = "struck"
             else:
                 terminated = True
-                reward += R_MISSED
+                reward += R_MISSED - self._drain()
                 info["phase"] = "missed"
         if not terminated and self.sim.out_of_cage():
             terminated = True
-            reward += R_OUT_OF_CAGE
+            reward += R_OUT_OF_CAGE - self._drain()
             info["phase"] = "out_of_cage"
 
         truncated = (not terminated) and self._ticks >= self.max_ticks
@@ -241,6 +284,7 @@ class OnboardHoopEnv(gym.Env):
             info["is_success"] = self.passes >= 1
         info["reversed"] = False
         info["ring_found"] = bool(ring_obs.found)
+        info["wash_tilt_deg"] = self.sim.wash_tilt_deg
         info["range_m"] = float(ring_obs.range_m)
         return obs, float(reward), terminated, truncated, info
 
@@ -255,7 +299,7 @@ class OnboardHoopEnv(gym.Env):
                 "rpy": [0.0, 0.0, float(np.radians(self.sim.yaw_deg))],
                 "target": [float(v) for v in r.centre],
                 "hoop_normal": [float(v) for v in r.normal],
-                "hoop_radius": float(r.radius)}
+                "hoop_radius": float(r.radius), "passes": int(self.passes)}
 
     def onboard_frame(self, res=(200, 150)):
         """What the drone's camera sees (RGB uint8), for the dashboard's POV. Leaves the
@@ -276,6 +320,11 @@ class OnboardHoopEnv(gym.Env):
         self._kwargs["ramp"] = float(ramp)
         if self.sim is not None:
             self.sim.ramp = float(ramp)
+
+    def set_wash_deg(self, deg: float):
+        self._kwargs["wash_deg"] = float(deg)
+        if self.sim is not None:
+            self.sim.wash_deg = float(deg)
 
     def set_sway_deg(self, deg: float):
         self._kwargs["sway_deg"] = float(deg)

@@ -110,6 +110,7 @@ def start_run(req: StartRunRequest):
             init_run=req.init_run, init_clone=req.init_clone, demo_ids=req.demo_ids,
             human_weight=req.human_weight, bc_coef=req.bc_coef, profile=req.profile,
             onboard_dr=req.onboard_dr, onboard_sway_deg=req.onboard_sway_deg,
+            onboard_wash_deg=req.onboard_wash_deg, wash_deg=req.wash_deg, start_z=req.start_z,
             hard_start_p=req.hard_start_p, dr_steps=req.dr_steps, bc_augment=req.bc_augment,
             wind_steps=req.wind_steps, reward_mode=req.reward_mode, budget=req.budget,
             laps=req.laps, reward_weights=req.reward_weights, onboard_laps=req.onboard_laps,

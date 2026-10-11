@@ -186,7 +186,7 @@ const Imitation = (() => {
     el.genBtn.addEventListener("click", () => startJob(() => Api.generateDemos({
       name: el.genName.value.trim(), episodes: Number(el.genEpisodes.value) || 60,
       profile: el.genProfile.value, render: el.genRender.checked,
-      ...($("gen-robust") && $("gen-robust").checked ? { dr: 1.0, sway_deg: 25, hard_start_p: 0.5 } : {}) })));
+      ...($("gen-robust") && $("gen-robust").checked ? { dr: 1.0, sway_deg: 5, hard_start_p: 0.5 } : {}) })));
     el.trainBtn.addEventListener("click", () => startJob(() => Api.trainClone({
       name: el.trainName.value.trim(), demo_ids: [...ticked],
       epochs: Number(el.trainEpochs.value) || 200, lr: Number(el.trainLr.value) || 0.003,

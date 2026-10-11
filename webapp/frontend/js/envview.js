@@ -11,7 +11,7 @@ const EnvView = (() => {
   const REVERSE_PROB = 0.5, LEAN_FLIP_PROB = 0.3, START_MARGIN = 0.12;
   const shownN = (n) => n.map((x) => x * dirSign);   // normal pointing the way to fly through
   let wind = null;                 // live sway preview: {dir, axis, gust, w, phase, t0}
-  let swayDeg = 20;                // largest swing about the rope knot (the "Max swing" sliders)
+  let swayDeg = 5;                 // largest swing about the rope knot (the "Max swing" sliders)
   let flying = null;               // {t0, pts, seg, total, speed}
   let scanObj = null, scanLoading = false;
   let start = [-0.6, -0.5, 0.03];

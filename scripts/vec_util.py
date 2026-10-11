@@ -110,14 +110,71 @@ def resolve_model_path(path) -> Path:
     raise FileNotFoundError(f"no such model or directory: {p}")
 
 
-def load_for_resume(algo_cls, path, env, **overrides):
+def _obs_width(space) -> int:
+    return int(space.shape[-1])
+
+
+def widen_policy_input(zp, new_space, insert_at, out_path):
+    """Write a copy of the saved model `zp` whose policy takes `new_space`'s wider observation.
+
+    The extra inputs are inserted at index `insert_at` of the old observation (negative counts
+    from its end) and get all-zero weights in every first layer that reads the observation, so
+    the widened policy acts and values exactly like the old one until training uses them. The
+    optimizer's running moments belong to the old shapes, so they are dropped (Adam restarts them).
+    Returns out_path."""
+    import torch
+    from stable_baselines3.common.save_util import load_from_zip_file, save_to_zip_file
+
+    data, params, variables = load_from_zip_file(str(zp), device="cpu")
+    old_w, new_w = _obs_width(data["observation_space"]), _obs_width(new_space)
+    k = new_w - old_w
+    if k <= 0:
+        raise ValueError(f"cannot widen a {old_w}-wide policy to {new_w}")
+    at = insert_at if insert_at >= 0 else old_w + insert_at
+    widened = 0
+    for name, t in list(params["policy"].items()):
+        if t.ndim == 2 and t.shape[1] == old_w and name.endswith(".0.weight"):
+            zeros = torch.zeros(t.shape[0], k, dtype=t.dtype)
+            params["policy"][name] = torch.cat([t[:, :at], zeros, t[:, at:]], dim=1)
+            widened += 1
+    if not widened:
+        raise ValueError(f"no first layer of width {old_w} found in {zp}")
+    if "policy.optimizer" in params:
+        params["policy.optimizer"] = {"state": {},
+                                      "param_groups": params["policy.optimizer"]["param_groups"]}
+    data["observation_space"] = new_space
+    save_to_zip_file(str(out_path), data=data, params=params, pytorch_variables=variables)
+    return out_path
+
+
+def load_for_resume(algo_cls, path, env, widen_at=None, **overrides):
     """Load a saved model onto a new env, refusing one whose spaces do not match.
-    `overrides` (e.g. learning_rate) replace the saved hyper-parameters."""
+    `overrides` (e.g. learning_rate) replace the saved hyper-parameters.
+
+    widen_at: if the env's observation is wider than the model's, widen the model first
+    (widen_policy_input, new inputs inserted at this index of the old observation) instead of
+    refusing. Used when an env gains an observation field (net env: the lap "armed" flag;
+    onboard: the "pushed" odometer)."""
     zp = resolve_model_path(path)
+    if widen_at is not None:
+        from stable_baselines3.common.save_util import load_from_zip_file
+        data, _, _ = load_from_zip_file(str(zp), device="cpu", load_data=True)
+        old_w, new_w = _obs_width(data["observation_space"]), _obs_width(env.observation_space)
+        if new_w > old_w:
+            import tempfile
+            tmp = Path(tempfile.mkdtemp(prefix="widen_")) / zp.name
+            widen_policy_input(zp, env.observation_space, widen_at, tmp)
+            print(f"[INFO] widened {zp.name} from {old_w} to {new_w} observation inputs "
+                  f"(new inputs at index {widen_at}, zero weights: same actions to start)")
+            zp_load = tmp
+        else:
+            zp_load = zp
+    else:
+        zp_load = zp
     # Passing env to load() (rather than set_env afterwards) rebuilds the rollout/replay
     # buffers for THIS env's number of copies; SB3 also checks the spaces match there.
     try:
-        model = algo_cls.load(str(zp), env=env, device="cpu", custom_objects=overrides or None)
+        model = algo_cls.load(str(zp_load), env=env, device="cpu", custom_objects=overrides or None)
     except ValueError as e:
         raise ValueError(f"cannot continue from {zp}: {e} (a model from a different task, env "
                          f"or algorithm?)") from e

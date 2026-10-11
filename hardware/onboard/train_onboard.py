@@ -12,6 +12,14 @@ behaviour clone and kept close to the demonstrations while it improves.
     # continue that run later (its latest -> best -> final model, steps carry on)
     python hardware/onboard/train_onboard.py --init results/hoop/runs/onboard_mixed --demos ... \
         --run-id onboard_mixed2 --out results/hoop/runs/onboard_mixed2
+    # v4 (2026-10-11 night): laps, prop-wash ring, little swing, lap expert demos; a 33-input
+    # parent is widened to the 34-input observation (the `pushed` field) automatically
+    python hardware/onboard/make_demos.py --episodes 300 --dr 1 --sway-deg 5 --wash-deg 15 \
+        --hard-start-p 0.3 --laps 0 --out hardware/flights/demos/onboard_sim_laps.npz
+    python hardware/onboard/train_onboard.py --until-stopped --init results/hoop/runs/onboard_laps \
+        --demos hardware/flights/demos/onboard_sim_laps.npz hardware/flights/tello_*/demo.npz \
+        --dr 1 --sway-deg 5 --wash-deg 15 --hard-start-p 0.5 --laps 0 \
+        --run-id onboard_v4 --out results/hoop/runs/onboard_v4
 
 Why the demo term. PPO started from a clone tends to forget it: the first updates are
 driven by a value function that knows nothing yet, and a few bad updates undo what the clone
@@ -311,8 +319,12 @@ def main(argv=None):
     ap.add_argument("--dr", type=float, default=0.0,
                     help="domain randomisation strength 0..1 (drone dynamics and calibration, ring "
                          "placement, a swinging ring, detector noise/latency); see onboard/sim.py")
-    ap.add_argument("--sway-deg", type=float, default=25.0,
-                    help="largest swing of the ring on its rope at full wind (deg), with --dr > 0")
+    ap.add_argument("--sway-deg", type=float, default=5.0,
+                    help="largest swing of the ring on its rope at full wind (deg), with --dr > 0. "
+                         "The real noodle hardly swings on its own (default 5, was 25)")
+    ap.add_argument("--wash-deg", type=float, default=15.0,
+                    help="largest tilt of the ring when the drone's prop wash pushes it away (deg, "
+                         "0 = off): the real noodle tilts up about its rope as the drone nears")
     ap.add_argument("--hard-start-p", type=float, default=0.0,
                     help="share of episodes starting behind / beside / below the ring or anywhere, "
                          "often facing away (the ring must be searched for)")
@@ -378,7 +390,9 @@ def main(argv=None):
         "reward": dict(REWARD_WEIGHTS),        # the onboard MDP, shown on the dashboard
         "laps": args.laps,
         "robust": {"dr": args.dr, "sway_deg": args.sway_deg, "hard_start_p": args.hard_start_p,
+                   "wash_deg": args.wash_deg,
                    "dr_steps": args.dr_steps, "bc_augment": bool(args.bc_augment)},
+        "obs_dim": spec.OBS_DIM,
         "ctrl_hz": spec.CTRL_HZ,
         "bc": ({"demos": [Path(f).name for f in demo_files], "samples": counts, "source_weights": sw,
                 "coef": args.bc_coef, "coef_min": args.bc_coef_min,
@@ -388,7 +402,8 @@ def main(argv=None):
     }
     _atomic_write_json(run_dir / "meta.json", meta)
 
-    robust = dict(dr=args.dr, sway_deg=args.sway_deg, hard_start_p=args.hard_start_p, laps=args.laps)
+    robust = dict(dr=args.dr, sway_deg=args.sway_deg, hard_start_p=args.hard_start_p, laps=args.laps,
+                  wash_deg=args.wash_deg)
     ramped = args.dr_steps > 0 and (args.dr > 0 or args.hard_start_p > 0)
     env_kwargs = dict(profile=args.profile, seed=args.seed * 100_000, **robust,
                       ramp=0.0 if ramped else 1.0)
@@ -405,7 +420,10 @@ def main(argv=None):
     torch.set_num_threads(1)
     if init_path is not None:
         try:
+            # a parent from before the `pushed` observation field (33 inputs) is widened, with
+            # zero weights on the new input, so it starts out flying exactly as it did
             model, _ = load_for_resume(BCRegularizedPPO, init_path, train_env,
+                                       widen_at=spec.OBS_SLICES["pushed"].start,
                                        learning_rate=lr, lr_schedule=lambda _: lr)
         except ValueError as e:
             train_env.close()

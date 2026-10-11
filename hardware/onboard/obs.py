@@ -21,6 +21,45 @@ from .ring_detect import RingObs
 
 MIN_DT = 0.02           # s; below this, reuse the previous yaw rate instead of dividing
 MAX_YAW_RATE = 360.0    # deg/s, clamp
+MAX_PUSH_DT = 0.5       # s; a telemetry gap longer than this is not integrated as distance
+VGX_TO_MPS = 0.01       # Tello vgx -> m/s. UNVERIFIED unit: the sim reports cm/s, the same
+                        # assumption the `vel` field's VEL_NORM makes (config.yaml has dm/s);
+                        # calibrate_speed.py's result must be applied to both together.
+
+
+def push_step(pushed_m: float, vgx: float, dt: float) -> float:
+    """One step of the forward odometer: forward speed x dt, never below zero (backing up
+    takes distance off, but the drone cannot be "behind" where it last saw the ring)."""
+    return max(0.0, pushed_m + float(vgx) * VGX_TO_MPS * dt)
+
+
+def upgrade_obs(obs, episode=None, t=None) -> np.ndarray:
+    """33-wide observations (recorded before the `pushed` field) -> today's spec.OBS_DIM.
+
+    Replays ObsBuilder's odometer over each episode from fields the old observation already
+    has: a fresh detection is age == 0, the forward speed is the `vel` field's vgx, and the
+    time step comes from `t` (or spec.CTRL_DT). Wider-by-zero input passes through unchanged."""
+    obs = np.asarray(obs, dtype=np.float32)
+    if obs.ndim != 2 or obs.shape[1] == spec.OBS_DIM:
+        return obs
+    if obs.shape[1] != spec.LEGACY_OBS_DIM:
+        raise ValueError(f"cannot upgrade observations of width {obs.shape[1]}")
+    s = spec.OBS_SLICES
+    old = lambda name: s[name].start if s[name].start < s["pushed"].start else s[name].start - 1
+    i_age, i_vgx = old("age"), old("vel")
+    ep = np.zeros(len(obs), np.int64) if episode is None else np.asarray(episode)
+    tt = np.arange(len(obs)) * spec.CTRL_DT if t is None else np.asarray(t, dtype=float)
+    pushed = np.zeros(len(obs), np.float32)
+    run = 0.0
+    for i in range(len(obs)):
+        new_ep = i == 0 or ep[i] != ep[i - 1]
+        dt = 0.0 if new_ep else float(np.clip(tt[i] - tt[i - 1], 0.0, MAX_PUSH_DT))
+        if new_ep or obs[i, i_age] <= 1e-6:
+            run = 0.0
+        else:
+            run = push_step(run, obs[i, i_vgx] * spec.VEL_NORM, dt)
+        pushed[i] = min(run / spec.RANGE_NORM, 1.0)
+    return np.insert(obs, s["pushed"].start, pushed, axis=1)
 
 
 def _num(state: dict, key: str, default: float = 0.0) -> float:
@@ -67,6 +106,8 @@ class ObsBuilder:
         self._last_seen_cx = 0.0
         self._last_seen_cy = 0.0
         self._ticks_since_seen = spec.AGE_NORM
+        self._pushed_m = 0.0               # forward distance since the last fresh detection
+        self._prev_build_t = None
 
     def push_action(self, action):
         """Record what was actually executed (post-clamp), oldest-first in the buffer."""
@@ -93,13 +134,17 @@ class ObsBuilder:
 
         # Remember the last real sighting. This is what keeps the final blind push
         # distinguishable from an initial search; see spec.OBS_FIELDS.
+        dt = 0.0 if self._prev_build_t is None else float(np.clip(t - self._prev_build_t, 0.0, MAX_PUSH_DT))
+        self._prev_build_t = t
         if ring.fresh:
             self._ticks_since_seen = 0
             self._last_seen_cx, self._last_seen_cy = ring.cx, ring.cy
             if np.isfinite(ring.range_m):
                 self._last_seen_range = ring.range_m
+            self._pushed_m = 0.0
         else:
             self._ticks_since_seen = min(self._ticks_since_seen + 1, spec.AGE_NORM)
+            self._pushed_m = push_step(self._pushed_m, _num(state, "vgx"), dt)
 
         o[s["found"]] = 1.0 if ring.found else 0.0
         o[s["centre"]] = (ring.cx, ring.cy)
@@ -113,6 +158,7 @@ class ObsBuilder:
         o[s["last_range"]] = (min(self._last_seen_range / spec.RANGE_NORM, 1.0)
                               if self._last_seen_range is not None else 1.0)
         o[s["last_centre"]] = (self._last_seen_cx, self._last_seen_cy)
+        o[s["pushed"]] = min(self._pushed_m / spec.RANGE_NORM, 1.0)
 
         o[s["height"]] = _num(state, "h") / spec.HEIGHT_NORM
         o[s["vel"]] = (_num(state, "vgx") / spec.VEL_NORM,

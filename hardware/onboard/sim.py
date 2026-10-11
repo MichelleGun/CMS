@@ -28,6 +28,10 @@ that is uncertain about the real setup -- the drone's dynamics (each episode a p
 between "ideal" and "harsh", and the unverified rc->speed / yaw-rate calibration off by up to
 25 / 20 %), where the ring hangs, a ring that swings on its rope in a per-episode wind (about
 the knot at its top, like scripts/hoop_net_env.py's), and detector noise and latency.
+`wash_deg` models what the real noodle does (observed in the cage, 2026-10-11): it hardly swings
+on its own, but the drone's prop wash pushes it away as the drone comes close, tilting it up about
+the rope at its top (the bottom moves away from the drone, the face tilts up). The tilt follows
+the push through a damped spring and settles back once the drone has gone.
 `hard_start_p` is the chance an episode starts somewhere other than the measured front
 runway: behind, beside or below the ring, or anywhere in the cage, often facing away, so the
 ring has to be searched for. `ramp` in [0, 1] scales both (the training curriculum). At
@@ -70,6 +74,11 @@ SWING_PERIOD_S = (1.5, 3.0)
 SWING_GUST_MIN = 0.5   # every windy episode really swings
 KNOT_DRIFT_M = 0.04    # the rope's knot moves too, so the whole ring translates
 DEFAULT_SWAY_DEG = 25.0
+WASH_RANGE_M = 0.45    # Gaussian reach of the prop-wash push from the ring centre
+WASH_STRENGTH = (0.5, 1.5)   # per-episode multiplier of wash_deg
+WASH_PERIOD_S = 2.2
+WASH_DAMPING = 0.6
+WASH_SIDE_SOFT_M = 0.10   # the push direction fades through the ring's plane over about this
 LATENCY_P = 0.15       # chance per episode that the camera lags one tick behind
 NOISE_CXY = 0.02       # detector noise (half-frames), size (fraction), axis ratio
 NOISE_MAJOR = 0.05
@@ -122,6 +131,7 @@ class Ring:
     normal_deg: float             # heading of the ring's axis, deg; 0 = axis along +x
     opening_m: float = spec.RING_OPENING_M      # the clear gap: decides pass vs strike
     noodle_m: float = spec.RING_NOODLE_M
+    tilt_deg: float = 0.0         # face tilted up (+) / down (-), e.g. pushed by prop wash
 
     @property
     def radius(self) -> float:
@@ -134,8 +144,8 @@ class Ring:
 
     @property
     def normal(self) -> np.ndarray:
-        r = math.radians(self.normal_deg)
-        return np.array([math.cos(r), math.sin(r), 0.0])
+        r, t = math.radians(self.normal_deg), math.radians(self.tilt_deg)
+        return np.array([math.cos(t) * math.cos(r), math.cos(t) * math.sin(r), math.sin(t)])
 
 
 @dataclass
@@ -172,7 +182,7 @@ class OnboardSim:
                  ring_noodle_m: float = spec.RING_NOODLE_M,
                  drone_width_m: float = spec.DRONE_WIDTH_M,
                  dr: float = 0.0, sway_deg: float = DEFAULT_SWAY_DEG, hard_start_p: float = 0.0,
-                 ramp: float = 1.0, open_plane: bool = False):
+                 ramp: float = 1.0, open_plane: bool = False, wash_deg: float = 0.0):
         """dr / sway_deg / hard_start_p / ramp: see the module docstring. open_plane: a crossing
         of the ring's plane clear of the noodle (under it, around it) is not an outcome and the
         episode goes on (so there is no "missed"); needed once starts can be beside or below."""
@@ -181,6 +191,8 @@ class OnboardSim:
         self.dr, self.sway_deg, self.hard_start_p = float(dr), float(sway_deg), float(hard_start_p)
         self.ramp = float(ramp)
         self.open_plane = bool(open_plane)
+        self.wash_deg = float(wash_deg)
+        self._wash = None
         self.speed_scale = self.yaw_scale = 1.0
         self.start_type = "front"
         self._swing = None
@@ -247,6 +259,10 @@ class OnboardSim:
         self._drift = np.zeros(3)
         self._pending = []                       # (apply_time, action) command delay
         self._applied = np.zeros(spec.ACT_DIM)
+        # prop wash: drawn last and only when on, so runs without it keep their random streams
+        self._wash = None
+        if self.wash_deg > 0 and self._fixed_ring is None:
+            self._wash = dict(k=float(self.rng.uniform(*WASH_STRENGTH)), ang=0.0, rate=0.0)
         self._prev_side = self._plane_side()
         self.battery = 85.0
         if self._tracker is not None:
@@ -321,18 +337,40 @@ class OnboardSim:
     def _update_ring(self):
         """The ring swinging on its rope (dr > 0): a pendulum about the knot at its top, along
         this episode's wind direction, plus a little twist."""
-        sw = self._swing
-        if sw is None or self._fixed_ring is not None:
+        sw, wa = self._swing, self._wash
+        if (sw is None and wa is None) or self._fixed_ring is not None:
             return
-        k = self.dr_eff * sw["gust"]
-        ang = math.radians(k * self.sway_deg * math.sin(sw["w"] * self.t + sw["ph"]))
-        twist = k * SWING_TWIST_DEG * math.sin(0.77 * sw["w"] * self.t + sw["ph2"])
         arm = self.ring0.opening_m / 2.0 + self.ring0.noodle_m      # knot -> centre
-        s = np.array([math.cos(sw["dir"]), math.sin(sw["dir"]), 0.0])
-        knot = k * KNOT_DRIFT_M * math.sin(sw["w"] * self.t + sw["ph"] + math.pi / 2)
-        c = (self.ring0.centre + (arm * math.sin(ang) + knot) * s
-             + np.array([0.0, 0.0, arm * (1.0 - math.cos(ang))]))
-        self.ring = replace(self.ring0, centre=c, normal_deg=self.ring0.normal_deg + twist)
+        c, ndeg, tilt = self.ring0.centre.copy(), self.ring0.normal_deg, 0.0
+        if sw is not None:
+            k = self.dr_eff * sw["gust"]
+            ang = math.radians(k * self.sway_deg * math.sin(sw["w"] * self.t + sw["ph"]))
+            twist = k * SWING_TWIST_DEG * math.sin(0.77 * sw["w"] * self.t + sw["ph2"])
+            s = np.array([math.cos(sw["dir"]), math.sin(sw["dir"]), 0.0])
+            knot = k * KNOT_DRIFT_M * math.sin(sw["w"] * self.t + sw["ph"] + math.pi / 2)
+            c = (c + (arm * math.sin(ang) + knot) * s
+                 + np.array([0.0, 0.0, arm * (1.0 - math.cos(ang))]))
+            ndeg = ndeg + twist
+        if wa is not None:
+            # positive angle = bottom pushed towards +normal (away from a drone on the -normal side)
+            n0 = self.ring0.normal
+            d = self.pos - self.ring.centre
+            side = float(np.dot(d, n0))
+            # tanh, not sign: inside the opening the push has no side, so the ring does not snap
+            # back into a drone that is halfway through
+            target = (-math.tanh(side / WASH_SIDE_SOFT_M) * self.wash_deg * self.ramp * wa["k"]
+                      * math.exp(-(float(np.linalg.norm(d)) / WASH_RANGE_M) ** 2))
+            w = 2 * math.pi / WASH_PERIOD_S
+            wa["rate"] += (w * w * (target - wa["ang"]) - 2 * WASH_DAMPING * w * wa["rate"]) * spec.CTRL_DT
+            wa["ang"] += wa["rate"] * spec.CTRL_DT
+            b = math.radians(wa["ang"])
+            c = c + arm * math.sin(b) * n0 + np.array([0.0, 0.0, arm * (1.0 - math.cos(b))])
+            tilt = wa["ang"]
+        self.ring = replace(self.ring0, centre=c, normal_deg=ndeg, tilt_deg=tilt)
+
+    @property
+    def wash_tilt_deg(self) -> float:
+        return 0.0 if self._wash is None else float(self._wash["ang"])
 
     # -- geometry ---------------------------------------------------------------------
     @property

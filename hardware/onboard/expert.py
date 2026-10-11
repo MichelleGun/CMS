@@ -7,6 +7,10 @@ It serves three purposes at once:
   3. it is the baseline a learned policy has to beat.
 
 Phases:  SEARCH -> ALIGN -> APPROACH -> COMMIT -> DONE        (ABORT on repeated loss)
+Laps (cfg.laps):  ... -> COMMIT (+ lap_clear_m further, to clear the ring) -> SEARCH again,
+turning one way at constant height until the ring is back in view -> ALIGN -> ... The lap
+search is the "turn round and find it" a single-pass expert never shows, so demos made with
+it teach a clone what to do after a pass (2026-10-11 night).
 
 Two control ideas drive the design, and both are easy to get wrong.
 
@@ -151,6 +155,13 @@ class ExpertConfig:
                                           # drives in from outside the error budget.
     forward_axis_ratio_min: float = 0.40  # nor drive in while this far off-axis
 
+    # --- laps: fly on, turn round, find the ring and go again ---
+    laps: bool = False
+    lap_clear_m: float = 0.15     # extra blind push past the commit distance, so the drone is
+                                  # clear of the noodle and re-armed (gym_env.ARM_DIST_M)
+    lap_search_yaw: float = 0.80  # turn one way, at constant height, until the ring is in view
+    lap_search_max_ticks: int = 300   # 20 s: a full turn at ~24 deg/s is ~15 s
+
     # --- staged bring-up (see the plan's stage table) ---
     allow_forward: bool = True    # stage 2 sets False: align only, never translate
     allow_commit: bool = True     # stage 3 sets False: approach but never push through
@@ -196,6 +207,8 @@ class Expert:
         self._last_range = float("inf")
         self.commit_clamped = False
         self.reason = ""
+        self._lap_search = False
+        self.laps_done = 0
 
     # -- helpers ----------------------------------------------------------------------
     def _errors_m(self, ring: RingObs):
@@ -310,8 +323,19 @@ class Expert:
                 return a, self._info()
             self._settle_tick += 1
             if self._settle_tick >= c.settle_ticks:
-                self.phase = DONE
-                self.reason = "commit complete"
+                if c.laps:                         # through: turn round and find it again
+                    self.laps_done += 1
+                    self.phase = SEARCH
+                    self._lap_search = True
+                    self._search_ticks = 0
+                    self._search_sweep_tick = 0
+                    self._search_dir = 1.0
+                    self._aborts = 0
+                    self._lost = 0
+                    self.reason = f"lap {self.laps_done}: turning to find the ring"
+                else:
+                    self.phase = DONE
+                    self.reason = "commit complete"
             return a, self._info()
 
         if not ring.found:
@@ -325,6 +349,14 @@ class Expert:
                 if self._aborts > c.max_aborts:
                     self.phase = ABORT
                     self.reason = "lost lock too many times"
+            if self.phase == SEARCH and self._lap_search:
+                self._search_ticks += 1
+                if self._search_ticks > c.lap_search_max_ticks:
+                    self.phase = ABORT
+                    self.reason = "ring not found again after the pass"
+                else:
+                    a[spec.ACT_YAW] = c.lap_search_yaw        # keep turning; hold height
+                return a, self._info(ring)
             if self.phase == SEARCH:
                 self._search_ticks += 1
                 if self._search_ticks > c.search_max_ticks:
@@ -350,6 +382,7 @@ class Expert:
             self._last_range = ring.range_m
         if self.phase == SEARCH:
             self.phase = ALIGN
+            self._lap_search = False
             self.reason = "acquired"
 
         if self._can_commit(ring):
@@ -357,6 +390,8 @@ class Expert:
             self._commit_tick = 0
             self._settle_tick = 0
             self._commit_target = self._commit_ticks_for(self._last_range)
+            if c.laps:
+                self._commit_target += int(round(c.lap_clear_m / c.commit_speed_mps * spec.CTRL_HZ))
             self.reason = (f"commit at {self._last_range:.2f} m "
                            f"({self._commit_target} ticks)")
             a[spec.ACT_FB] = c.commit_fb

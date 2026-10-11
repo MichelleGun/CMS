@@ -171,8 +171,11 @@
           <div class="duration-label">Robustness</div>
           <label class="checkbox-row" title="Each episode: a drone somewhere between ideal and harsh (and its speed calibration off by up to 25%), the ring hung a little differently, swinging on its rope, and a noisy, sometimes laggy detector. Evaluation always uses the full strength.">
             <input type="checkbox" id="onboard-dr-toggle" checked> Randomise drone, ring and detector</label>
-          <div class="field-row"><label>Ring swing (max) <span id="onboard-sway-val">25&deg;</span></label>
-            <input type="range" id="onboard-sway" min="0" max="45" step="1" value="25"></div>
+          <div class="field-row"><label>Ring swing (max) <span id="onboard-sway-val">5&deg;</span></label>
+            <input type="range" id="onboard-sway" min="0" max="45" step="1" value="5"></div>
+          <div class="field-row" title="The real noodle hardly swings on its own, but the drone's prop wash pushes it away as the drone comes close: it tilts up about its rope, bottom away from the drone, and settles back once the drone has gone. This is the largest tilt (each episode draws 50-150% of it).">
+            <label>Ring push from prop wash (max) <span id="onboard-wash-val">15&deg;</span></label>
+            <input type="range" id="onboard-wash" min="0" max="45" step="1" value="15"></div>
           <div class="field-row" title="Share of episodes that start behind, beside or below the ring, or anywhere in the cage, often facing away: the policy has to find the ring first">
             <label for="hard-start-input">Hard starts (behind / beside / below)</label>
             <input type="number" id="hard-start-input" value="50" min="0" max="100" step="5"><span class="note">%</span></div>
@@ -197,8 +200,13 @@
             <input type="checkbox" id="reverse-toggle" checked> Fly through from both sides (50%)</label>
           <label class="checkbox-row" title="30% of episodes the ring leans the other way, as if the wind held it over">
             <input type="checkbox" id="lean-flip-toggle" checked> Ring sometimes leans the other way (30%)</label>
-          <div class="field-row"><label>Ring swing (max) <span class="sway-deg-val">20&deg;</span></label>
-            <input type="range" id="train-sway-deg" class="sway-deg-input" min="0" max="45" step="1" value="20"></div>
+          <div class="field-row"><label>Ring swing (max) <span class="sway-deg-val">5&deg;</span></label>
+            <input type="range" id="train-sway-deg" class="sway-deg-input" min="0" max="45" step="1" value="5"></div>
+          <div class="field-row" title="The real noodle hardly swings on its own, but the drone's prop wash pushes it away as the drone comes close: it tilts up about its rope, bottom away from the drone, and settles back once the drone has gone. This is the largest tilt (each episode draws 50-150% of it).">
+            <label>Ring push from prop wash (max) <span id="train-wash-val">15&deg;</span></label>
+            <input type="range" id="train-wash-deg" min="0" max="45" step="1" value="15"></div>
+          <label class="checkbox-row" title="Start hovering at about 0.8 m, where the real Tello hands over to the policy after its automatic takeoff (it cannot be flown off the floor with stick commands). Unticked: start on the floor.">
+            <input type="checkbox" id="hover-start-toggle" checked> Start hovering (like the Tello after takeoff)</label>
           <div class="field-row" title="The ring starts still and its wind grows to full over this many steps, so the policy learns a still ring first. 0 = full swing from the first step. A run continued past this point is already at full wind.">
             <label for="wind-steps-input">Swing ramps up over</label>
             <input type="number" id="wind-steps-input" value="1500000" min="0" step="100000"></div>
@@ -481,8 +489,8 @@
           <button id="env-nominal-btn" class="secondary-btn" type="button">Nominal ring</button>
         </div>
         <label class="checkbox-row"><input type="checkbox" id="env-wind-chk"> Wind sway (live, within an episode)</label>
-        <div class="field-row"><label>Max swing <span class="sway-deg-val">20&deg;</span></label>
-          <input type="range" id="env-sway-deg" class="sway-deg-input" min="0" max="45" step="1" value="20"></div>
+        <div class="field-row"><label>Max swing <span class="sway-deg-val">5&deg;</span></label>
+          <input type="range" id="env-sway-deg" class="sway-deg-input" min="0" max="45" step="1" value="5"></div>
         <div class="button-row">
           <button id="env-fly-btn" class="primary-btn" type="button">Play example flight</button>
         </div>

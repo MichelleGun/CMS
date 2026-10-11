@@ -232,18 +232,20 @@ Those numbers are for the legacy point-reaching task.
 
 ### Net + ring environment (`scripts/hoop_net_env.py`)
 
-This environment mirrors the real cage. It has a 2×2×2 m net with a hanging ring (0.30 m opening, measured from the phone scan) near the centre. Every episode varies the ring's position, facing and size to cover repositioning, and the ring swings in a per-episode wind about the rope knot at its top. The drone always starts on the floor. Success means flying through the opening in the required direction.
+This environment mirrors the real cage. It has a 2×2×2 m net with a hanging ring (0.30 m opening, measured from the phone scan) near the centre. Every episode varies the ring's position, facing and size to cover repositioning. The drone's prop wash pushes the ring away as the drone comes close, and there is a little residual swing about the rope knot at its top. Training runs start the drone **hovering at about 0.8 m**, where the real Tello hands over to the policy after takeoff. Success means flying through the opening in the required direction, again and again.
 
-**The MDP now (v3, since 2026-10-11):**
+**The MDP now (v4, since 2026-10-11 night):**
 
-| Part | v3 setting |
+| Part | v4 setting |
 |---|---|
-| State / observation | 82 numbers: drone state (12), the last 15 actions (60), the ring's facing (3), **velocity** (3) and **opening radius** (1), and the vector to the ring (3) |
+| State / observation | **83** numbers: drone state (12), the last 15 actions (60), the ring's facing (3), velocity (3) and opening radius (1), **the lap "armed" flag (1)**, and the vector to the ring (3) |
 | Action | unchanged: velocity direction + speed fraction, up to about 0.25 m/s |
-| Reward (`--reward budget`) | −0.005 per step (−1 per 6.7 s), **+1 per pass**, −0.05 per rim clip. No shaping |
-| Passes | never end the episode. After each pass the required direction flips (back-and-forth). The next pass counts once the drone has flown 0.28 m clear of the ring |
-| Termination | the episode's running total reaches **−budget** (default −3), **or** the drone touches the net, **or** the drone tips over, **or** 120 s pass (a safety cap) |
-| Net | touching it ends the episode, and the reward drains whatever budget is left, so the total lands on −budget |
+| Start | hovering at 0.8 ± 0.1 m (`--start-z 0.8`; `--start-z 0` = the old floor start) |
+| Ring | pushed away by prop wash, up to 15° of tilt about the rope (`--wash-deg`), plus up to 5° of residual swing (`--sway-deg`) |
+| Reward (`--reward budget`) | −0.005 per step, **+5 per pass** (`budget_pass`), −0.05 per rim clip, **plus potential-based shaping, 2 per metre** (`--budget-shape`) |
+| Passes | never end the episode. After each pass the required direction flips (back-and-forth). The next pass counts once the drone has flown 0.28 m clear of the ring (re-armed) |
+| Termination | the time, pass, rim and net terms (shaping excluded) reach **−budget** (10), **or** the drone touches the net, **or** the drone tips over, **or** 120 s pass (a safety cap) |
+| Net | touching it ends the episode, and the reward drains whatever budget is left |
 
 #### MDP changes and why
 
@@ -251,7 +253,43 @@ This environment mirrors the real cage. It has a 2×2×2 m net with a hanging ri
 |---|---|---|---|
 | v1 | `ppo_20261010-093427` | 78-number obs. Shaped reward: progress to waypoints +10/m, +20 per pass, rim and net −1 with a bounce. One pass ends the episode. PPO defaults | starting point |
 | v2 | `ppo_20261010-182515` | Obs +ring velocity and radius (82). Potential-based shaping with an axis pull. Pass +20, plus up to +10 for a centred one. Rim −3, net ends the episode with −5. Wind ramp-up. Stabilised PPO settings | v1 stalled at about 6% success: PPO overwrote itself every update, the policy couldn't see the ring swing, and the wind was at full strength from step 0 |
-| v3 | `ppo_20261011-013455`, then `ppo_20261011-024000` / `-025335` / `-032617` (budget 10, +5 per pass, sway 20°, continued each time) | The budget reward above: passes don't end the episode, and there is no shaping | v2 learned to **park 18–31 cm in front of the ring** (0% passes after 14.5M steps). Under v3 the eval success rate is still only 0–20% (about 18.5M steps), so the policy passes occasionally but not reliably |
+| v3 | `ppo_20261011-013455`, then `ppo_20261011-024000` / `-025335` / `-032617` / `-023958` / `-212417` (budget 10, +5 per pass, sway 20°, continued each time) | The budget reward: passes don't end the episode, and there is no shaping | v2 learned to **park 18–31 cm in front of the ring** (0% passes after 14.5M steps). Under v3 the eval success rate stayed at 0–40%, and **no evaluation ever saw a second pass** (`max_passes` 1 in every run, 38M steps) |
+| v4 | `ppo_20261011-221214` (continued from `-212417` at 38.0M steps) | The lap "armed" flag in the observation (82 → 83). Potential-based shaping added back on top of the budget. Hover starts. The prop-wash ring, with the swing cut from 20° to 5° | See "Why each v4 change was made" below: the policy could not tell when a second pass would count, had no signal for the turn back, and parked in 7 of 10 episodes |
+
+Why each v4 change was made. I ran `ppo_20261011-212417` (v3, 37M steps) on 10 evaluation
+episodes and traced what it did:
+
+- **3 of 10 passed once, 0 passed twice, and the other 7 hovered for 66 s with zero rim contacts**
+  until the budget ran out. After a pass the drone drifted sideways (5 → 56 cm off the ring's
+  axis) instead of backing straight out and coming round.
+- **The "armed" flag was hidden.** A second pass only counts once the drone has flown 0.28 m
+  clear on the exit side. That flag was not in the observation, so "just went through, not
+  re-armed" looked exactly like "lined up, go now", but flying back through earned nothing.
+  The policy saw the same state pay +5 one time and 0 the next, so it could never learn what to
+  do after a pass. The flag is now the 83rd number. Older 82-number policies are **widened**
+  when continued: the new input gets zero weights, so the policy starts out flying exactly as
+  before and learns to use the flag (`scripts/vec_util.py`, `widen_policy_input`).
+- **Shaping is back, but it cannot buy parking any more.** v3's +5 per pass is too sparse to
+  learn a 4–6 s "fly clear, come round, line up, go" between passes. The v2 potential already
+  describes that path: the approach point, then through, then after a pass out to the next
+  approach point on the other side. Being potential-based, a closed loop or hovering earns
+  nothing. v2 parked because a rim clip cost −3 and the shaping weight was 10/m. Now a rim clip
+  costs −0.05 and the weight is 2/m. Shaping is also **kept out of the budget tally**, so it
+  never changes when an episode ends.
+- **Hover starts.** The Tello cannot take off on stick commands: its motors only start with
+  the firmware `takeoff` command, which climbs to about 0.8 m by itself, and `fly_hoop.py` only
+  hands over to the policy after that (takeoff → about 2 s settle → policy). Learning to take off
+  in PyBullet trains something the real drone never uses, and the Crazyflie's takeoff in PyBullet
+  doesn't look like the Tello's anyway. Robustness comes from **where** control is handed over:
+  the start height is randomised (0.7–0.9 m), as are position, carried-over starts and
+  direction.
+- **Prop wash instead of a pendulum.** Watching the real noodle, it does not swing back and forth
+  on its own. The drone pushes it away as it comes close: the ring tilts up about the rope at
+  its top, its bottom moving away from the drone, and settles back once the drone has gone.
+  `wash_deg` (15° by default, ×0.5–1.5 per episode, fading over about 0.45 m) models exactly
+  that. The pendulum swing stays as a small residual (5°, was 20–35°). At a 30 cm opening with
+  8 cm of clearance, a 20°+ swing made passing largely luck. 15° is an estimate: measure the
+  real tilt from a video of an approach and set `--wash-deg` to match.
 
 Why each v3 change was made:
 
@@ -290,16 +328,22 @@ Why each v3 change was made:
 v2's shaped reward is still available as `--reward shaped`, the default for old runs and
 replays. In shaped mode `--laps 0` gives endless laps and `--no-net-terminate` restores the bounce.
 
-**Running v3.** The dashboard's Reward (MDP) block sets all of this (mode, budget, passes, every
-weight); the equivalent from a terminal is below. Any weight can be overridden with
-`--reward-weights '{"budget_pass": 5}'` (names: `DEFAULT_REWARD_WEIGHTS`), and the swing ramp with
-`--wind-steps` (0 = full swing from the first step):
+**Running v4.** The dashboard's Training panel sets all of this: the Reward (MDP) block, "Ring
+push from prop wash", "Ring swing" and "Start hovering". The equivalent from a terminal is below.
+`--start-z 0.8`, `--wash-deg 15`, `--sway-deg 5`, `--armed-obs` and `--budget-shape 2` are the
+defaults now. Any weight can be overridden with `--reward-weights '{"budget_pass": 5}'` (names:
+`DEFAULT_REWARD_WEIGHTS`):
 
 ```bash
-python scripts/train_hoop_multi.py --algo ppo --init results/hoop/runs/ppo_20261010-182515 \
-    --reward budget --budget 3 --until-stopped --sway-deg 35 --seed 0 \
-    --eval-freq 25000 --n-eval-episodes 5 --run-id ppo_budget --out results/hoop/runs/ppo_budget
+python scripts/train_hoop_multi.py --algo ppo --until-stopped --n-envs 6 --seed 0 \
+    --init results/hoop/runs/ppo_20261011-212417 --reward budget --budget 10 \
+    --reward-weights '{"budget_pass": 5}' --budget-shape 2 --start-z 0.8 --sway-deg 5 --wash-deg 15 \
+    --eval-freq 5000 --n-eval-episodes 10 --run-id ppo_v4 --out results/hoop/runs/ppo_v4
 ```
+
+Old runs replay unchanged. The env's own defaults are still the old behaviour (floor start, no
+wash, 82 numbers, no budget shaping), and `env_kwargs_from_meta` rebuilds whatever a run
+recorded in its `meta.json`.
 
 - **Fewer evals:** a looping eval episode can last up to 120 s, which is why evals run every 100k
   steps with 5 episodes.
@@ -321,12 +365,16 @@ A scripted expert passes through on the test seeds (`scripts/tests/test_hoop_net
 - **`ppo_20261010-182515`** (v2, sway 35°): 14.5M steps. PPO stayed stable (`approx_kl` about
   0.01–0.03), and eval reward rose to about +20, but **0% passes**. Telemetry showed every
   episode ending with the drone parked 18–31 cm in front of the ring.
-- **`ppo_20261011-013455`** (v3, continued from 182515 at 14.56M steps, sway 35°, budget 3):
-  started 2026-10-11 at 01:34. _TODO: fill in passes per episode._
+- **`ppo_20261011-013455` → … → `ppo_20261011-212417`** (v3, budget 10, +5 per pass, chained
+  with `--init`, 14.6M → 38.0M steps): eval success 0–40%, best mean 0.7 passes per episode,
+  and **never a second pass** (`max_passes` 1). In 7 of 10 traced episodes the drone parked
+  without touching the rim (see v4 above).
+- **`ppo_20261011-221214`** (v4, continued from `-212417`): started 2026-10-11 22:12.
+  _TODO: fill in passes per episode._
 
 #### Onboard-camera task: robust training
 
-The task that can fly the real Tello (`hardware/onboard/`, 33 camera and telemetry numbers, not the
+The task that can fly the real Tello (`hardware/onboard/`, 34 camera and telemetry numbers, not the
 PyBullet state) trains in its own fast simulator, which used to show the policy one drone, one
 nearly fixed ring, a perfect detector and a still ring, always from the same front runway. Since
 2026-10-11 it can be randomised, and the dashboard's Onboard options turn it on by default:
@@ -335,7 +383,7 @@ nearly fixed ring, a perfect detector and a still ring, always from the same fro
 |---|---|
 | The drone | each dynamics number somewhere between the "ideal" and "harsh" profiles; speed and yaw-rate calibration off by up to ±25% / ±20% (the rc→speed number is unverified) |
 | The ring | hung up to ±10 cm in height, ±15 cm sideways, yaw ±30° |
-| A swinging ring | pendulum about the knot at its top (like the PyBullet env), up to the "Ring swing" setting (15° default), 1.5–3 s period, plus a small twist |
+| The ring moving | **pushed away by prop wash** as the drone nears it, tilting up about its rope (up to 15°, "Ring push from prop wash"), plus a small residual pendulum swing (5°, was 25°) and twist |
 | The detector | noise on position, size and axis ratio, and a one-tick camera lag in 15% of episodes |
 | The start | 50% of episodes start **behind, beside or below the ring, or anywhere in the cage**, often facing away, so the drone has to search for it; flying under or around the ring is no longer a "miss" |
 
@@ -352,7 +400,10 @@ python hardware/onboard/make_demos.py --episodes 400 --dr 1 --hard-start-p 0.5 -
 ```
 
 Details, flags and the caveats for real flights are in
-[hardware/onboard/README.md](hardware/onboard/README.md#robust-training).
+[hardware/onboard/README.md](hardware/onboard/README.md#robust-training). The 2026-10-11 night
+changes are explained there too: why the policy lined up with the ring but would not go
+through (reward arithmetic), the new `pushed` observation, the camera-first pass rule, and the
+lap expert. See [Why the policy lined up but didn't go through](hardware/onboard/README.md#why-the-policy-lined-up-but-didnt-go-through).
 
 #### Training footage
 
@@ -362,6 +413,7 @@ Details, flags and the caveats for real flights are in
 | After ~11M steps (v1) | `ppo_20261010-093427` @ ~11M steps | _TODO: add video_ (`assets/videos/net_ppo_11M.mp4`) |
 | v2, parking at the entrance | `ppo_20261010-182515` @ 14.5M steps | _TODO_ |
 | v3, budget reward, repeated passes | `ppo_20261011-013455` @ _TBD_ | _TODO_ |
+| v4, armed flag + shaping, hover start, prop-wash ring | `ppo_20261011-221214` @ _TBD_ | _TODO_ |
 | Onboard task, robust (swinging ring, hard starts) | `onboard_20261011-032612` @ _TBD_ | _TODO_ |
 
 You can preview it in the dashboard's **Environment** tab, which also overlays the phone scan.

@@ -88,6 +88,13 @@ def load_demo(path) -> dict:
     d = np.load(path, allow_pickle=False)
     out = {k: d[k] for k in ("obs", "intent", "executed", "t", "episode")}
     out["meta"] = json.loads(str(d["meta"]))
+    if out["meta"].get("task") == "onboard_hoop":
+        # onboard demos recorded before the observation gained `pushed` (33 -> 34 wide)
+        from onboard import spec as _spec
+        if out["obs"].shape[1] == _spec.LEGACY_OBS_DIM:
+            from onboard.obs import upgrade_obs
+            out["obs"] = upgrade_obs(out["obs"], out["episode"], out["t"])
+            out["meta"]["upgraded_from_obs_dim"] = _spec.LEGACY_OBS_DIM
     return out
 
 

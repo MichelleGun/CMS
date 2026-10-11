@@ -9,6 +9,17 @@ env/
 results_quickstart/
 runs/
 tb/
+# ... except the dashboard's training runs: keep what a teammate needs to use or continue a run
+# (models + summaries), not the bulky live files (telemetry, camera frames, logs, replays)
+!results/hoop/runs/
+results/hoop/runs/*/*
+!results/hoop/runs/*/best_model.zip
+!results/hoop/runs/*/latest_model.zip
+!results/hoop/runs/*/final_model.zip
+!results/hoop/runs/*/meta.json
+!results/hoop/runs/*/label.json
+!results/hoop/runs/*/live_status.json
+!results/hoop/runs/*/evaluations.npz
 *.log
 
 # OS / editor

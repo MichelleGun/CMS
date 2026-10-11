@@ -20,6 +20,12 @@ Usage:
     # continue an earlier run's policy (its latest -> best -> final model) in a new run dir
     python train_hoop_multi.py --algo ppo --init ../results/hoop/runs/ppo_20261010-023538 \
         --run-id ppo_more --out ../results/hoop/runs/ppo_more
+    # MDP v4 (2026-10-11 night): budget + shaping, hover starts, prop-wash ring, "armed" in the obs
+    # (an 82-D parent is widened to 83 inputs automatically)
+    python train_hoop_multi.py --algo ppo --until-stopped --n-envs 6 --reward budget --budget 10 \
+        --reward-weights '{"budget_pass": 5}' --budget-shape 2 --start-z 0.8 --sway-deg 5 \
+        --wash-deg 15 --init ../results/hoop/runs/ppo_20261011-212417 \
+        --run-id ppo_v4 --out ../results/hoop/runs/ppo_v4
 """
 import argparse
 import json
@@ -38,7 +44,7 @@ from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from hoop_env import HoopFindAviary, ROOM  # noqa: E402
-from hoop_net_env import HoopNetAviary, merge_reward_weights  # noqa: E402
+from hoop_net_env import HoopNetAviary, merge_reward_weights, ARMED_INDEX  # noqa: E402
 from discrete_action_wrapper import HoopFindDiscreteVel  # noqa: E402
 from telemetry_callback import (TelemetryCallback, DashboardEvalCallback, CameraCallback,  # noqa: E402
                                 PaceCallback)
@@ -179,6 +185,9 @@ def _make_env_kwargs(args):
         kwargs["reward_mode"] = args.reward
         kwargs["budget"] = args.budget
         kwargs["reward_weights"] = args.reward_weights
+        kwargs["wash_deg"] = args.wash_deg
+        kwargs["start_z"] = args.start_z if args.start_z > 0 else None
+        kwargs["armed_obs"] = args.armed_obs
         if args.wind_steps > 0:
             kwargs["wind"] = 0.0       # the wind curriculum ramps it up from calm
     if args.seed is not None:
@@ -201,8 +210,21 @@ def main():
     ap.add_argument("--radius-start", type=float, default=1.5,
                      help="net env: opening scale at the start of training, shrinking to 1.0 over "
                           "the first half (1.0 disables the curriculum)")
-    ap.add_argument("--sway-deg", type=float, default=20.0,
-                     help="net env: largest swing of the ring about its rope knot at full gust (deg)")
+    ap.add_argument("--sway-deg", type=float, default=5.0,
+                     help="net env: largest swing of the ring about its rope knot at full gust (deg). "
+                          "The real noodle hardly swings on its own (default 5, was 20)")
+    ap.add_argument("--wash-deg", type=float, default=15.0,
+                     help="net env: largest tilt of the ring when the drone's prop wash pushes it away "
+                          "(deg, 0 = off). The real noodle tilts up about its rope as the drone nears")
+    ap.add_argument("--start-z", type=float, default=0.8,
+                     help="net env: start hovering at this height (m, +-0.1), where the real Tello hands "
+                          "over after its automatic takeoff; 0 = start on the floor (the old behaviour)")
+    ap.add_argument("--armed-obs", action=argparse.BooleanOptionalAction, default=True,
+                     help="net env: put the lap 'armed' flag in the observation (83-D). Without it, "
+                          "'just passed, not re-armed' and 'lined up, go' look the same to the policy")
+    ap.add_argument("--budget-shape", type=float, default=None,
+                     help="net env, --reward budget: weight of the potential-based shaping (MDP v4; "
+                          "default 2, 0 = plain v3). Overrides budget_shape in --reward-weights")
     ap.add_argument("--carry-start", type=float, default=0.7,
                      help="net env: chance an episode starts where the previous one ended "
                           "(else anywhere on the floor)")
@@ -266,6 +288,12 @@ def main():
     if args.env == "net":
         if args.reward == "budget":
             args.laps, args.net_terminate = 0, True      # endless passes; the net always ends it
+            rw = dict(args.reward_weights or {})
+            if args.budget_shape is not None:
+                rw["budget_shape"] = args.budget_shape
+            elif "budget_shape" not in rw:
+                rw["budget_shape"] = 2.0
+            args.reward_weights = rw
         if args.episode_sec is None:
             args.episode_sec = 120.0 if args.reward == "budget" else 20.0
     budget = UNTIL_STOPPED_BUDGET if args.until_stopped else args.timesteps
@@ -311,6 +339,9 @@ def main():
         "reward_mode": args.reward if args.env == "net" else None,
         "budget": args.budget if args.env == "net" and args.reward == "budget" else None,
         "reward_weights": merge_reward_weights(args.reward_weights) if args.env == "net" else None,
+        "wash_deg": args.wash_deg if args.env == "net" else None,
+        "start_z": (args.start_z if args.start_z > 0 else None) if args.env == "net" else None,
+        "armed_obs": bool(args.armed_obs) if args.env == "net" else None,
         "obs_dim": None,
         "hyperparams": None,
         "n_envs": args.n_envs,
@@ -356,7 +387,9 @@ def main():
     torch.set_num_threads(1)
     if init_path is not None:
         try:
-            model, _ = load_for_resume(algo_cls, init_path, train_env)
+            # an older parent without the "armed" flag is widened (zero weights for the new input)
+            widen = ARMED_INDEX + 1 if args.env == "net" and args.armed_obs else None
+            model, _ = load_for_resume(algo_cls, init_path, train_env, widen_at=widen)
         except ValueError as e:
             train_env.close()
             eval_env.close()

@@ -9,6 +9,8 @@ HoopNetAviary (scripts/hoop_net_env.py) inserts the ring's unit normal (3), velo
 opening radius (1) before the final relative vector -> shape (1, 82); pass `hoop_normal` and
 `hoop_radius` to ObsBuilder to get that layout (velocity is 0: the measured ring is held still).
 Older net-env policies used (1, 78): normal only; pass `hoop_normal` without `hoop_radius`.
+Net-env policies trained with armed_obs (2026-10-11 night on) read (1, 83): the lap "armed" flag
+sits before the relative vector; pass `armed=True` (or a bool per build via `self.armed`).
 No normalisation (the sim training used none). sim_check/obs_parity.py checks this
 against the real environment.
 """
@@ -21,11 +23,12 @@ from .smoothing import wrap_pi
 
 
 class ObsBuilder:
-    def __init__(self, hoop_xyz, lpf_alpha=0.35, hoop_normal=None, hoop_radius=None):
+    def __init__(self, hoop_xyz, lpf_alpha=0.35, hoop_normal=None, hoop_radius=None, armed=None):
         """hoop_normal: None -> legacy 75-D layout; a 3-vector -> net-env layout, 82-D with
         hoop_radius (the ring's inner radius, m) or the older 78-D without it.
         On hardware the ring is fixed, so this is the measured facing of the real ring."""
         self.radius = None if hoop_radius is None else float(hoop_radius)
+        self.armed = armed           # None: no flag (82-D); True/False: the 83-D layout
         self.hoop = np.asarray(hoop_xyz, dtype=float).reshape(3)
         self.normal = None
         if hoop_normal is not None:
@@ -69,5 +72,6 @@ class ObsBuilder:
             return np.hstack([kin, buf, rel]).astype(np.float32).reshape(1, OBS_DIM)
         if self.radius is None:
             return np.hstack([kin, buf, self.normal, rel]).astype(np.float32).reshape(1, LEGACY_NET_OBS_DIM)
-        return np.hstack([kin, buf, self.normal, np.zeros(3), [self.radius], rel]
-                         ).astype(np.float32).reshape(1, NET_OBS_DIM)
+        flag = [] if self.armed is None else [[float(bool(self.armed))]]
+        return np.hstack([kin, buf, self.normal, np.zeros(3), [self.radius], *flag, rel]
+                         ).astype(np.float32).reshape(1, NET_OBS_DIM + len(flag))

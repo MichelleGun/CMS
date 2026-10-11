@@ -334,14 +334,22 @@ default (`dr=0` reproduces the old behaviour exactly, so older tests and demos a
 The dashboard's Training panel (Environment "Onboard camera") exposes it and turns it on.
 
 ```bash
-python hardware/onboard/train_onboard.py --until-stopped --n-envs 8 --init <run or clone> \
-    --dr 1 --sway-deg 15 --hard-start-p 0.5 --dr-steps 500000 --demos ... --run-id robust --out ...
+python hardware/onboard/make_demos.py --episodes 300 --dr 1 --sway-deg 5 --wash-deg 15 \
+    --hard-start-p 0.3 --laps 0 --seed 1000 --out hardware/flights/demos/onboard_sim_laps.npz
+python hardware/onboard/train_onboard.py --until-stopped --n-envs 8 \
+    --init results/hoop/runs/onboard_laps/best_model.zip \
+    --demos hardware/flights/demos/onboard_sim_laps.npz hardware/flights/demos/teacher_*.npz \
+            hardware/flights/tello_*/demo.npz \
+    --source-weight human=10 --critic-warmup-steps 30000 \
+    --dr 1 --sway-deg 5 --wash-deg 15 --hard-start-p 0.5 --laps 0 --run-id onboard_v4 --out ...
 ```
 
 | Flag | What it does |
 |---|---|
 | `--dr` (0..1) | domain randomisation strength (below) |
-| `--sway-deg` | largest swing of the ring on its rope at full wind (default 15°) |
+| `--sway-deg` | largest residual swing of the ring on its rope (default 5°, was 25°) |
+| `--wash-deg` | largest tilt of the ring when the drone's prop wash pushes it away (default 15°, 0 = off) |
+| `--laps` | 0 = endless back-and-forth (through, clear the ring, turn round, find it, again); 1 = one pass per episode |
 | `--hard-start-p` | share of episodes starting away from the front runway |
 | `--dr-steps` | `dr` and the hard starts ramp from 0 to full over this many steps, counted from the run's own start (0 = full at once); evaluation is always at full strength |
 | `--[no-]bc-augment` | mirror half of each demo batch left/right and add small observation noise (default on) |
@@ -350,9 +358,10 @@ python hardware/onboard/train_onboard.py --until-stopped --n-envs 8 --init <run 
 - The drone: every `Profile` number is drawn between "ideal" and "harsh", `dr` of the way out from
   "typical"; speed scale ±25% and yaw-rate scale ±20% (the rc→speed calibration is unverified, which is
   probably the biggest sim-to-real gap).
-- The ring's placement (height, sideways, yaw) widens, and it swings: a pendulum about the knot at
-  its top along a random horizontal direction, gust 0–1, 1.5–3 s period, with a small twist. The
-  camera, the pass/strike scoring and the dashboard all use its live pose.
+- The ring's placement (height, sideways, yaw) widens. A small residual swing (a pendulum about
+  the knot at its top, 1.5–3 s period, with a small twist) stays. The main movement is now the
+  prop-wash push (see below). The camera, the pass/strike scoring and the dashboard all use the
+  ring's live pose.
 - The detector: noise on cx, cy, size and axis ratio (range follows the size, as in reality), and a
   one-tick camera lag in 15% of episodes.
 
@@ -377,12 +386,86 @@ runway, 24% from "anywhere", 21% beside, 33% behind and 0% below, which is what 
 `make_demos.py --dr 1 --hard-start-p 0.5` keeps only the passed episodes (228 of 400 in the first batch).
 
 **Not done for real flights.** `fly_hoop.py`'s forward-travel budget and "record at the first
-lock" assume a front start. Before flying the real Tello from behind or beside the ring, those
-limits need relaxing.
+lock" assume a front start and a single pass. Before flying the real Tello from behind or beside
+the ring, or for laps, those limits need relaxing. A lap flight covers ~1 m forward per pass, and
+`--max-travel` would stop it after the first. A net-contact land trigger is also still to do.
 
 **Live view.** Onboard runs now write the same files as PyBullet runs (`telemetry.jsonl`,
 `camera_latest.jpg`, the real-time flag), so the dashboard shows the drone and ring, the drone's
 camera and the Reward card while they train.
+
+### Why the policy lined up but didn't go through
+
+Watching the onboard policy, it could line itself up with the ring but then would not commit to
+entering it. From hard starts it often flew into the net. I measured the best lap-mode policy
+(`onboard_laps/best_model.zip`) on 30 front starts and 30 hard starts (full randomisation, 25°
+swing). Four things were wrong, two in the reward, one in the simulator and one in the
+observation:
+
+| Measured | Cause |
+|---|---|
+| Front starts: 23 of 30 ended in a strike, 7 out of the cage | 10 of 12 traced strikes came **right after a pass**: the drone stopped 4–10 cm past the plane, blind with the ring behind it, and the swinging ring hit it |
+| Hard starts: 18 of 30 ended **in the net** | Out-of-cage cost −10. Searching to the time limit without a pass cost −12 to −18 in time penalty, so the net was the cheaper way out |
+| It lines up and hovers instead of entering | A strike (−20) cost exactly what a pass earned (+20), so an attempt only paid if the policy was more than 50% sure. Below that, hovering in front was the best it could do |
+| Passes were mostly luck under the swing | The ring swung up to 25° (45° in `onboard_20261011-212643`): its centre moved ±9–15 cm, against **8 cm** of clearance and about 1 s of blind flight at the end |
+
+**The fixes** (`gym_env.py`, `sim.py`, `obs.py`, `expert.py`; tests in
+`tests/test_v4_onboard.py`):
+
+1. **A crash is never cheaper than carrying on.** Every failure (strike, out of the cage, miss)
+   now also costs the time penalty of every tick left in the episode (`drain`, the same idea as
+   the PyBullet budget mode's "the net drains the budget"), on top of a fixed penalty: strike
+   −8 (was −20), out of cage −10, miss −5. Ending an episode early can no longer beat flying
+   on. Compared with hovering, an attempt now pays off at about 29% confidence (8 / (20 + 8))
+   instead of 50%.
+2. **A "find it" term in the shaping.** The potential gains `W_FACE × cos(angle from the camera
+   to the point 0.3 m behind the ring along the pass direction)`. It pays for turning towards a
+   ring that is out of view. After a pass the pass direction flips, so the same term pays for
+   **turning back round** to find it again. Being potential-based, it can't be farmed: a full
+   spin on the spot or hovering earns nothing (a test checks this). This gives the order you
+   asked for, as one smooth signal: find (facing), align (the axis pull), go through (the
+   approach-then-exit path and the +20).
+3. **Passes count only camera-first.** A pass in the right direction counts only if the camera
+   faces the way the drone is going (`forward · pass direction ≥ 0.5`). Reversing or sliding
+   sideways blind through the opening scores nothing (phase `blind_pass`). Backing straight back
+   through the wrong way still costs `R_WRONG_WAY`.
+4. **A new observation number, `pushed` (33 → 34).** It is the forward distance flown since the
+   ring was last seen fresh, integrated from the Tello's own forward speed `vgx`.
+   - **Why:** with the ring out of view, "just before the plane, keep pushing" and "just through
+     it, clear the ring and turn round" looked identical. `found`, `age` and `last_range` are the
+     same in both. Now `pushed < last_range` means the ring is still ahead, and
+     `pushed > last_range` means the drone is through.
+   - **On the real drone:** the same `ObsBuilder` computes it from the same telemetry, so it
+     flies as is. It inherits the existing unverified `vgx` unit (cm/s assumed, like the `vel`
+     field), so apply `calibrate_speed.py`'s result to both together.
+   - **Old data still works:** 33-wide demos are upgraded on load by replaying the odometer from
+     their stored `vel`/`age` columns (`obs.upgrade_obs`). 33-input policies are widened when
+     continued (zero weights on the new input, so they start out flying exactly as before), and
+     `policy.py` still flies an old one by dropping the column.
+5. **The ring moves like the real one.** The real noodle doesn't swing back and forth by
+   itself. The drone's prop wash pushes it away as the drone comes close: it tilts up about the
+   rope at its top, the bottom moving away from the drone, and settles back once the drone has
+   gone.
+   - **Model (`--wash-deg`, 15° default):** the push fades over about 0.45 m from the ring
+     centre, each episode draws 50–150% of it, it follows through a damped spring, and its
+     direction fades smoothly through the ring's plane (no snap-back into a drone that is
+     halfway through). The ring's face can now tilt (`Ring.tilt_deg`), so the camera's ellipse,
+     the pass/strike test and contact all see the tilt.
+   - **Residual swing:** 5° (`--sway-deg`, was 25°).
+   - **15° is an estimate:** film an approach and measure the real tilt.
+6. **The scripted expert flies laps** (`ExpertConfig.laps`, `make_demos.py --laps 0`). After its
+   blind push it carries on 0.15 m to clear the ring, then turns one way at constant height
+   until the ring is back in view, and goes again. The demos used to stop at the first pass, so
+   a clone had never seen what to do after one. With full randomisation, the prop wash and 30%
+   hard starts it averages 1.6 passes per episode (up to 5). Failed tails (a strike after the
+   last pass) are cut from the demos.
+
+**Start from hover, not the floor.** The real Tello cannot be flown off the floor with stick
+commands: its motors only start with the firmware `takeoff` command, which climbs to about
+0.8 m by itself, and `fly_hoop.py` hands control to the policy only after that (takeoff → about
+2 s settle → policy). So the simulator starts there too, at 0.8 ± 0.1 m (`TAKEOFF_Z`). Learning a
+takeoff would train something the real drone never does. Robustness comes from varying where
+control is handed over: height, position, facing and the hard starts.
 
 ## If something goes wrong
 
