@@ -130,6 +130,25 @@ What the Simulator tab gives you while a run trains:
 - A locked Training panel (a run is loading, or no cores are free) is greyed out and says why.
 - Onboard-camera runs have no PyBullet replay, so Watch and Best are disabled for them with a note.
 
+**Continuing a stopped or crashed run.** In the Training panel choose the run under *Start from*,
+use the same settings (its reward is pre-filled), and start. The policy continues from the run's
+latest save and its step count carries on. Things to know:
+- **Training runs belong to the dashboard server.** Stopping or restarting `uvicorn` ends them, and
+  they then show as "crashed". The models saved at their last evaluation are kept.
+- **Memory.** On a 16 GB PC, two until-stopped runs side by side (6 + 8 parallel envs) ran out of
+  memory overnight. Train one big run at a time, or lower *Parallel envs*.
+
+**If the dashboard looks broken** (no runs, tabs do nothing, empty 3D view):
+- **Hard-refresh first** with Ctrl+F5.
+- **Read the red banner.** It appears under the header and names any part that failed to start.
+  The rest of the page keeps working.
+- **"WebGL unavailable"** means the browser has 3D graphics turned off. Turn on Settings → System →
+  *Use graphics acceleration when available* (edge://settings/system or
+  chrome://settings/system), restart the browser, and check that edge://gpu (or chrome://gpu) shows
+  WebGL as hardware accelerated.
+- **Use a real browser.** Open the page in Edge or Chrome directly, not in VS Code's preview.
+- **No internet is needed.** three.js and Chart.js are bundled in `webapp/frontend/vendor/`.
+
 Full feature list and notes: [webapp/README.md](webapp/README.md).
 
 ### From the command line
@@ -405,8 +424,15 @@ A scripted expert passes through on the test seeds (`scripts/tests/test_hoop_net
 - **`ppo_20261011-221214`** (v4, continued from `-212417`, 38.0M → 39.1M steps): eval success up to
   70%, best mean 0.7 passes per episode, still **never a second pass** in an evaluation. Mostly
   successful from one corner.
-- **`ppo_20261011-225450`** (v5, continued from `-221214`): started 2026-10-11 22:54.
-  _TODO: fill in passes per episode and per zone._
+- **`ppo_20261011-225450`** (v5, continued from `-221214`, 39.1M → 58.2M steps): eval success up
+  to 56%, best mean 1.06 passes per episode. It ended overnight with an out-of-memory error while a
+  second run (onboard v5, 8 envs) trained alongside it, so its status reads "crashed". Its saved
+  models are fine.
+- **`ppo_20261012-133417`** (v5, continued from `-225450` with the ring swing raised to 45°,
+  58.2M → 59.8M steps): eval success up to **100%** (94% at its last evaluation), best mean 1.06
+  passes per episode, at least 0.5 passes from every one of the 9 start zones. It stopped when the
+  dashboard server was restarted (2026-10-12 14:58). It is continued as **`ppo_20261012-162450`**
+  with the same settings.
 
 #### Onboard-camera task: robust training
 

@@ -971,8 +971,56 @@
 
   // ------------------------------------------------------------------ boot
 
+  // One failing part (a library that did not load, a server hiccup) must not stop the
+  // rest: run each part on its own, and say on screen which one failed.
+  const bootFailures = [];
+
+  function safe(name, fn) {
+    try { fn(); return true; } catch (e) {
+      console.error(`[boot] ${name} failed:`, e);
+      bootFailures.push({ name, message: (e && e.message) || String(e) });
+      showBootError();
+      return false;
+    }
+  }
+
+  function showBootError() {
+    const el = document.getElementById("boot-error");
+    if (!el) return;
+    const libs = (typeof THREE === "undefined" ? ["three.js"] : [])
+      .concat(typeof Chart === "undefined" ? ["Chart.js"] : []);
+    const webgl = bootFailures.some((f) => /webgl/i.test(f.message));
+    el.textContent = "Part of the dashboard did not start: " +
+      bootFailures.map((f) => `${f.name} (${f.message})`).join("; ") + "." +
+      (libs.length ? ` ${libs.join(" and ")} did not load.` : "") +
+      (webgl
+        ? " This browser has WebGL (3D graphics) turned off. Turn on Settings > System > " +
+          "\"Use graphics acceleration when available\" (edge://settings/system or chrome://settings/system), " +
+          "restart the browser, and check edge://gpu (or chrome://gpu) shows WebGL as hardware accelerated. " +
+          "Open the page in Edge or Chrome directly, not in VS Code's preview."
+        : " Hard-refresh with Ctrl+F5; the browser console (F12) has the details.");
+    el.hidden = false;
+  }
+
+  // Replace an object's methods with no-ops, so later calls from the run view don't throw.
+  function stubOut(obj) {
+    if (!obj) return;
+    Object.keys(obj).forEach((k) => { if (typeof obj[k] === "function") obj[k] = () => {}; });
+  }
+
+  async function loadConfig() {
+    for (;;) {
+      try { return await Api.getConfig(); } catch (e) {
+        console.warn("[boot] waiting for the server:", e.message);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+  }
+
   async function boot() {
-    config = await Api.getConfig();
+    // Tabs first: navigation must work whatever else fails.
+    safe("tabs", () => Tabs.init());
+    config = await loadConfig();
 
     algoSelect.innerHTML = "";
     config.algorithms.forEach((a) => {
@@ -987,22 +1035,29 @@
     });
     document.getElementById("teacher-btn").addEventListener("click", makeTeacherDemos);
 
-    Scene3D.init(document.getElementById("scene-canvas"), config.room);
-    Controls.init(config);
-    Controls.onChange(() => {
+    if (!safe("3D view", () => Scene3D.init(document.getElementById("scene-canvas"), config.room))) {
+      stubOut(Scene3D);
+      document.getElementById("viewport-hint").textContent =
+        "3D view unavailable (see the message at the top).";
+    }
+    safe("position controls", () => {
+      Controls.init(config);
+      Controls.onChange(() => {
+        updateReadout();
+        if (!isViewedRunTraining) showDraftPreview();
+      });
       updateReadout();
-      if (!isViewedRunTraining) showDraftPreview();
+      showDraftPreview();
     });
-    updateReadout();
-    showDraftPreview();
 
-    RewardChart.init(document.getElementById("reward-chart"));
+    if (!safe("reward chart", () => RewardChart.init(document.getElementById("reward-chart")))) {
+      stubOut(RewardChart);
+    }
     // The other tabs own their own polling and sockets, so they only need starting.
-    Tabs.init();
-    Drone.init();
-    EnvView.init();
-    Imitation.init();
-    History.init();
+    safe("Drone tab", () => Drone.init());
+    safe("Environment tab", () => EnvView.init());
+    safe("Imitation tab", () => Imitation.init());
+    safe("History tab", () => History.init());
     // A live flight is visible from every tab, so it is never out of sight.
     const livePill = document.getElementById("live-flight-pill");
     livePill.addEventListener("click", () => Tabs.show("drone"));
@@ -1057,7 +1112,7 @@
     document.getElementById("replay-current-btn").addEventListener("click", () => requestReplay("current"));
     document.getElementById("replay-best-btn").addEventListener("click", () => requestReplay("best"));
 
-    Reward.init(config.reward);
+    safe("reward editor", () => Reward.init(config.reward));
     initSelect.addEventListener("change", onInitChoice);
     document.getElementById("rename-btn").addEventListener("click", startRename);
     const onboardSway = document.getElementById("onboard-sway");

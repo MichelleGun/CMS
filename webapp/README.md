@@ -27,8 +27,8 @@ Then, from the `CMS` folder with `drones` activated:
 python -m uvicorn main:app --app-dir webapp/backend --port 8000
 ```
 
-Then open `http://localhost:8000` (it needs an internet connection: the 3D view loads three.js from
-a CDN). Stop it with Ctrl+C. **Do not add `--host 0.0.0.0`**: the dashboard can take off a real
+Then open `http://localhost:8000` (three.js and Chart.js are bundled in
+`frontend/vendor/`, so no internet connection is needed). Stop it with Ctrl+C. **Do not add `--host 0.0.0.0`**: the dashboard can take off a real
 drone, and it should only be reachable from this computer.
 
 If `python` is not the `drones` one (conda not activated), call that environment's interpreter
@@ -56,6 +56,20 @@ While a run is live, the main view is a **far view** of training env 0. It shows
 **Environment tab.** The *Environment* button in the header shows the training cage on its own. That covers the net, the ring with an arrow for the pass direction, and the drone on the floor. It has buttons to preview the ring's per-episode variation and play an example take-off-and-fly-through. It can also overlay the phone scan of the real cage, with scale and yaw sliders. Geometry comes from `/api/config` → `hoop`, which is the same `HoopSpec` the env uses.
 
 **Scan viewer.** `http://localhost:8000/scan.html` shows the phone scan in `assets/` in 3D, with a 0.30 m reference ring, to check its scale and that the hoop is open.
+
+**Continuing a run.** *Start from* → pick the run and keep its settings: the policy continues from
+its latest save and the step count carries on.
+- **The server owns the runs.** Training runs are child processes of this server, so restarting it
+  ends them (they then show as "crashed").
+- **Memory.** On 16 GB of RAM, two until-stopped runs at once (6 + 8 envs) ran out of memory.
+
+**Troubleshooting.**
+- **Startup is per part.** Each part of the page starts on its own. If one fails, a red banner under
+  the header names it and the reason, and the tabs and run list still work.
+- **WebGL unavailable.** The banner means the browser's graphics acceleration is off: turn it on at
+  edge://settings/system (or chrome://settings/system), restart, and check edge://gpu.
+- **Use a real browser.** Use Edge or Chrome directly, not VS Code's preview, and hard-refresh with
+  Ctrl+F5 after updates.
 
 ## Flying from the Drone tab
 

@@ -409,6 +409,8 @@ h2 {
 .tab-btn:hover { color: var(--text); }
 .tab-btn.active { color: var(--text); border-color: var(--accent-orange); background: var(--bg-panel-raised); }
 #live-flight-pill { cursor: pointer; margin-left: auto; }
+#boot-error { background: var(--accent-pink); color: #fff; padding: 6px 16px; font-size: 13px; }
+#boot-error[hidden] { display: none; }
 
 .tab-page.three-col, .tab-page.two-col {
   display: grid;

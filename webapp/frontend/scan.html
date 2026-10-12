@@ -23,9 +23,9 @@
     <label><input type="checkbox" id="flat" checked> flat lighting (true texture colours)</label>
     <div class="k">Blue ring = the real 0.30 m opening, 1 m grid, axes: red x, green y (up), blue z. Drag to orbit, scroll to zoom.</div>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="vendor/three.min.js"></script>
+  <script src="vendor/OrbitControls.js"></script>
+  <script src="vendor/GLTFLoader.js"></script>
   <script>
     const canvas = document.getElementById("view");
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });

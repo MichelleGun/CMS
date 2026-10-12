@@ -132,7 +132,16 @@ function createScene3D() {
 
   function init(canvas, initialRoom) {
     if (initialRoom) room = initialRoom;
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // Some GPUs refuse only the antialias attribute, so try once without it.
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    } catch (e) {
+      try {
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "default" });
+      } catch (e2) {
+        throw new Error("WebGL unavailable: " + e2.message);
+      }
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 
     scene = new THREE.Scene();
@@ -331,4 +340,9 @@ function createScene3D() {
   };
 }
 
-const Scene3D = createScene3D();
+// If three.js failed to load, every method is a no-op and init says why, so the rest of
+// the dashboard (tabs, run list) still works.
+const Scene3D = typeof THREE !== "undefined" ? createScene3D() : new Proxy({ droneColors: {} }, {
+  get: (t, k) => (k in t ? t[k]
+    : k === "init" ? () => { throw new Error("three.js did not load"); } : () => {}),
+});
