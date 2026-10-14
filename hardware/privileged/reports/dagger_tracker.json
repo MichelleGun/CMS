@@ -1,0 +1,144 @@
+{
+  "teacher": {
+    "laps": 4.777777777777778,
+    "clean": 1.0,
+    "best": 6,
+    "outcomes": {
+      "timeout": 18
+    }
+  },
+  "rounds": [
+    {
+      "round": 0,
+      "ticks": 35529,
+      "teacher_share": 1.0,
+      "rim_m": 0.06,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_r0",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "outcomes": {
+        "out_of_cage": 11,
+        "struck": 5,
+        "timeout": 2
+      }
+    },
+    {
+      "round": 1,
+      "ticks": 19237,
+      "teacher_share": 0.11379113167333783,
+      "rim_m": 0.048,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_r1",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "outcomes": {
+        "out_of_cage": 15,
+        "struck": 3
+      }
+    },
+    {
+      "round": 2,
+      "ticks": 12958,
+      "teacher_share": 0.12046612131501774,
+      "rim_m": 0.036,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_r2",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "outcomes": {
+        "out_of_cage": 8,
+        "struck": 7,
+        "timeout": 3
+      }
+    },
+    {
+      "round": 3,
+      "ticks": 16176,
+      "teacher_share": 0.059718100890207716,
+      "rim_m": 0.023999999999999994,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_r3",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "outcomes": {
+        "out_of_cage": 8,
+        "struck": 2,
+        "timeout": 8
+      }
+    },
+    {
+      "round": 4,
+      "ticks": 23309,
+      "teacher_share": 0.022051568063838,
+      "rim_m": 0.011999999999999997,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_r4",
+      "laps": 0.1111111111111111,
+      "clean": 0.0,
+      "best": 1,
+      "outcomes": {
+        "out_of_cage": 8,
+        "struck": 6,
+        "timeout": 4
+      }
+    },
+    {
+      "round": 5,
+      "ticks": 12583,
+      "teacher_share": 0.018517046809186997,
+      "rim_m": 0.0,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_r5",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "outcomes": {
+        "out_of_cage": 7,
+        "struck": 2,
+        "timeout": 9
+      }
+    },
+    {
+      "round": 6,
+      "ticks": 21152,
+      "teacher_share": 0.012906580937972768,
+      "rim_m": 0.0,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_r6",
+      "laps": 0.05555555555555555,
+      "clean": 0.0,
+      "best": 1,
+      "outcomes": {
+        "out_of_cage": 14,
+        "struck": 4
+      }
+    },
+    {
+      "round": 7,
+      "ticks": 8753,
+      "teacher_share": 0.008568490803153205,
+      "rim_m": 0.0,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_r7",
+      "laps": 0.05555555555555555,
+      "clean": 0.0,
+      "best": 1,
+      "outcomes": {
+        "out_of_cage": 13,
+        "struck": 5
+      }
+    },
+    {
+      "round": 8,
+      "ticks": 6704,
+      "teacher_share": 0.014319809069212411,
+      "rim_m": 0.0,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_r8",
+      "laps": 0.5,
+      "clean": 0.05555555555555555,
+      "best": 3,
+      "outcomes": {
+        "out_of_cage": 7,
+        "struck": 6,
+        "timeout": 5
+      }
+    }
+  ]
+}

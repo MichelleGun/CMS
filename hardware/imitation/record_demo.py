@@ -78,6 +78,9 @@ class DemoRecorder:
         DEMO_DIR.mkdir(parents=True, exist_ok=True)
         path = Path(path) if path else DEMO_DIR / f"demo_{time.strftime('%Y%m%d-%H%M%S')}.npz"
         meta = dict(self.meta, n_samples=len(self._obs), saved=time.strftime("%Y-%m-%d %H:%M:%S"))
+        if meta.get("task") == "onboard_hoop":
+            from onboard import spec as _spec
+            meta.setdefault("yaw_convention", _spec.YAW_CONVENTION)
         np.savez_compressed(path, obs=np.stack(self._obs), intent=np.stack(self._intent),
                             executed=np.stack(self._exec), t=np.array(self._t, dtype=np.float64),
                             episode=np.array(self._ep, dtype=np.int64), meta=json.dumps(meta))
@@ -92,10 +95,35 @@ def load_demo(path) -> dict:
         # onboard demos recorded before the observation gained `pushed` (33 -> 34 wide)
         from onboard import spec as _spec
         width = out["obs"].shape[1]
-        if width != _spec.OBS_DIM and width in _spec.LAYOUT_FIELDS:
+        if (out["meta"].get("obs_live") and width == _spec.TRACKER_OBS_DIM
+                and not _spec.old_yaw_convention(out["meta"])):
+            # recorded straight from today's env with the tracker running (loop_labels.py): the
+            # tracker columns hold its real memory from the whole episode, which a replay from
+            # the recorded ticks alone could not rebuild. Used exactly as recorded.
+            return out
+        if width == _spec.TRACKER_OBS_DIM:
+            # recorded with the ring tracker: keep the 37 base fields; a trainer that wants the
+            # tracker replays it from them (onboard.obs.add_tracker), so every demo matches
+            out["obs"] = out["obs"][:, :_spec.OBS_DIM]
+            out["meta"]["tracker_stripped_on_load"] = True
+        elif width != _spec.OBS_DIM and width in _spec.LAYOUT_FIELDS:
             from onboard.obs import upgrade_obs
             out["obs"] = upgrade_obs(out["obs"], out["episode"], out["t"])
             out["meta"]["upgraded_from_obs_dim"] = width
+        # Recorded in the simulator before the clockwise yaw convention (onboard/spec.py): the
+        # yaw-rate and heading-sine columns were mirrored. Real flights (dry_run False) already
+        # read the Tello's own clockwise yaw, so they are left as they are.
+        from onboard import spec as _spec
+        if (_spec.old_yaw_convention(out["meta"]) and out["meta"].get("dry_run") is not False
+                and out["obs"].shape[1] in _spec.LAYOUT_FIELDS):
+            out["obs"] = _spec.flip_yaw_obs(out["obs"])
+            out["meta"]["yaw_flipped_on_load"] = True
+        # today's observation: speed blanked, `pushed` and the heading memory from the command
+        # odometer (onboard/obs.py BLANK_VELOCITY), so cloning sees what the policy will fly on
+        if out["obs"].shape[1] == _spec.OBS_DIM:
+            from onboard.obs import refresh_obs
+            out["obs"] = refresh_obs(out["obs"], out["episode"], out["t"])
+            out["meta"]["obs_refreshed"] = True
     return out
 
 

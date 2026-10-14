@@ -1,0 +1,130 @@
+{
+  "privileged teacher | as is": {
+    "front_pass": 0.9861111111111112,
+    "front_outcomes": {
+      "passed": 71,
+      "timeout": 1
+    },
+    "laps_good": 1.0,
+    "laps_mean_passes": 4.777777777777778,
+    "laps_best_streak": 7,
+    "laps_median_streak": 5.0,
+    "laps_outcomes": {
+      "timeout": 36
+    },
+    "stress": {
+      "forward/side x0.6": 1.0,
+      "forward/side x1.5": 0.9861111111111112,
+      "lag x2": 0.9861111111111112,
+      "delay +0.1 s": 1.0,
+      "yaw gain x0.7": 0.9861111111111112
+    },
+    "commands": {
+      "in_range": true,
+      "max_step": 0.2500000298023224,
+      "yaw_in_dead": 0.0,
+      "other_in_dead": 0.0
+    },
+    "G1": true,
+    "G2": true,
+    "G3": true
+  },
+  "privileged teacher | fixed crossing": {
+    "front_pass": 0.9861111111111112,
+    "front_outcomes": {
+      "passed": 71,
+      "timeout": 1
+    },
+    "laps_good": 1.0,
+    "laps_mean_passes": 4.777777777777778,
+    "laps_best_streak": 7,
+    "laps_median_streak": 5.0,
+    "laps_outcomes": {
+      "timeout": 36
+    },
+    "stress": {
+      "forward/side x0.6": 1.0,
+      "forward/side x1.5": 0.9861111111111112,
+      "lag x2": 0.9861111111111112,
+      "delay +0.1 s": 1.0,
+      "yaw gain x0.7": 0.9861111111111112
+    },
+    "commands": {
+      "in_range": true,
+      "max_step": 0.2500000298023224,
+      "yaw_in_dead": 0.0,
+      "other_in_dead": 0.0
+    },
+    "G1": true,
+    "G2": true,
+    "G3": true
+  },
+  "scripted expert | as is": {
+    "front_pass": 0.4583333333333333,
+    "front_outcomes": {
+      "out_of_cage": 2,
+      "passed": 33,
+      "struck": 9,
+      "timeout": 28
+    },
+    "laps_good": 0.0,
+    "laps_mean_passes": 0.3333333333333333,
+    "laps_best_streak": 1,
+    "laps_median_streak": 0.0,
+    "laps_outcomes": {
+      "out_of_cage": 15,
+      "struck": 12,
+      "timeout": 9
+    },
+    "stress": {
+      "forward/side x0.6": 0.2916666666666667,
+      "forward/side x1.5": 0.3472222222222222,
+      "lag x2": 0.4722222222222222,
+      "delay +0.1 s": 0.4166666666666667,
+      "yaw gain x0.7": 0.375
+    },
+    "commands": {
+      "in_range": true,
+      "max_step": 1.1336451888084411,
+      "yaw_in_dead": 0.3984823031917975,
+      "other_in_dead": 0.10246062548675072
+    },
+    "G1": false,
+    "G2": false,
+    "G3": false
+  },
+  "scripted expert | fixed crossing": {
+    "front_pass": 0.4583333333333333,
+    "front_outcomes": {
+      "out_of_cage": 2,
+      "passed": 33,
+      "struck": 9,
+      "timeout": 28
+    },
+    "laps_good": 0.0,
+    "laps_mean_passes": 0.3333333333333333,
+    "laps_best_streak": 1,
+    "laps_median_streak": 0.0,
+    "laps_outcomes": {
+      "out_of_cage": 15,
+      "struck": 12,
+      "timeout": 9
+    },
+    "stress": {
+      "forward/side x0.6": 0.2916666666666667,
+      "forward/side x1.5": 0.3472222222222222,
+      "lag x2": 0.4722222222222222,
+      "delay +0.1 s": 0.4166666666666667,
+      "yaw gain x0.7": 0.375
+    },
+    "commands": {
+      "in_range": true,
+      "max_step": 1.1336451888084411,
+      "yaw_in_dead": 0.3984823031917975,
+      "other_in_dead": 0.10246062548675072
+    },
+    "G1": false,
+    "G2": false,
+    "G3": false
+  }
+}

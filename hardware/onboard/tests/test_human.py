@@ -70,6 +70,24 @@ def test_a_nonsense_gain_is_refused(gain):
         HumanController(ScriptedKeys(), gain=gain)
 
 
+def test_the_rotate_keys_can_run_faster_than_the_others():
+    c = HumanController(ScriptedKeys({"yaw+", "fb+"}), gain=0.6, yaw_gain=1.0)
+    a, _ = c(NO_RING)
+    assert a[spec.ACT_YAW] == pytest.approx(1.0) and a[spec.ACT_FB] == pytest.approx(0.6)
+    assert spec.action_to_rc(a)[3] == spec.RC_MAX, "full yaw is the clamp, not beyond it"
+
+
+def test_yaw_follows_the_main_gain_unless_told_otherwise():
+    a, _ = HumanController(ScriptedKeys({"yaw-"}), gain=0.5)(NO_RING)
+    assert a[spec.ACT_YAW] == pytest.approx(-0.5)
+
+
+@pytest.mark.parametrize("g", [0.0, -1.0, 1.5])
+def test_a_nonsense_yaw_gain_is_refused(g):
+    with pytest.raises(ValueError):
+        HumanController(ScriptedKeys(), yaw_gain=g)
+
+
 def test_land_key_finishes_and_zeroes_the_action():
     c = HumanController(ScriptedKeys({"fb+"}, n=0, then="land"), gain=1.0)
     a, info = c(NO_RING)
@@ -117,6 +135,35 @@ def fly_forward(tmp_path, answers):
     return f, drone, d, asked, f.run(drone)
 
 
+@pytest.mark.parametrize("argv, expected", [
+    (["--mode", "human"], True),                            # the case that was silently skipped
+    (["--mode", "human", "--record"], True),
+    (["--mode", "human", "--no-record"], False),            # a practice flight
+    (["--mode", "human", "--record", "--no-record"], False),
+    (["--mode", "expert"], False),
+    (["--mode", "expert", "--record"], True),
+])
+def test_a_human_flight_is_recorded_unless_opted_out(argv, expected):
+    from onboard.fly_hoop import wants_recording
+    assert wants_recording(parse(["--dry-run", *argv])) is expected
+
+
+def test_the_dashboard_chooses_recording_explicitly(tmp_path):
+    """The dashboard's checkbox must still decide: human flights now record by default."""
+    from drone_manager import DroneManager
+    dm = DroneManager(tmp_path)
+    assert "--no-record" in dm.build_argv(mode="human", record=False, dry_run=True)
+    assert "--record" in dm.build_argv(mode="human", record=True, dry_run=True)
+
+
+def test_a_flight_that_never_saw_the_ring_says_so(tmp_path, capsys):
+    keys = ScriptedKeys(n=5, then="land")
+    f, drone, d, asked = flight(tmp_path, keys)
+    f._save_demo({"outcome": "human_landed"}, aborted=False)      # nothing recorded
+    assert asked == []
+    assert "ring was never detected" in capsys.readouterr().out
+
+
 def test_a_human_flight_sends_the_keys_as_rc_and_lands(tmp_path):
     f, drone, d, asked, res = fly_forward(tmp_path, ["n"])
     assert "land" in drone.calls and res["outcome"] == "human_landed"
@@ -133,6 +180,21 @@ def test_a_passed_run_is_saved_as_demo_npz_with_the_blind_ticks(tmp_path):
     found = demo["obs"][:, spec.OBS_SLICES["found"]].ravel()
     assert found[0] == 1.0, "recording should start at the first lock"
     assert (found == 0.0).any(), "the blind push after the ring leaves view was dropped"
+
+
+def test_the_pass_count_is_asked_for_and_recorded(tmp_path):
+    from imitation.record_demo import load_demo
+    f, drone, d, asked, res = fly_forward(tmp_path, ["y", "3"])
+    assert "How many times" in asked[1]
+    assert res["passes"] == 3
+    assert (d / "demo.npz").is_file()
+    assert load_demo(d / "demo.npz")["meta"]["passes"] == 3
+
+
+def test_zero_passes_is_a_miss_and_nonsense_is_asked_again(tmp_path):
+    f, drone, d, asked, res = fly_forward(tmp_path, ["y", "lots", "-2", "0"])
+    assert len(asked) == 4, "should have re-asked after each unusable answer"
+    assert res["passes"] == 0 and (d / "demo_failed.npz").is_file()
 
 
 def test_a_missed_run_is_kept_apart_from_the_training_glob(tmp_path):
@@ -249,6 +311,22 @@ def test_udp_keys_hover_when_the_dashboard_goes_quiet():
         assert _drain(k) == {"fb+"}
         now[0] += 0.5
         assert k.poll()[0] == set(), "a stale key must not stay held"
+    finally:
+        k.close()
+
+
+def test_a_udp_tap_between_two_polls_still_counts_for_one_tick():
+    """The dashboard sends a datagram on key down and another on key up. A tap shorter
+    than a tick puts both between two polls; keeping only the last datagram lost it."""
+    import time
+    from onboard.human import UdpKeys
+    k = UdpKeys(0)
+    try:
+        _send(k.port, ["fb+"])
+        _send(k.port, [])
+        time.sleep(0.05)                       # both datagrams land before the poll
+        assert k.poll()[0] == {"fb+"}, "a quick tap was dropped"
+        assert k.poll()[0] == set(), "the release must apply on the next tick"
     finally:
         k.close()
 

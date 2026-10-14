@@ -1,29 +1,29 @@
 {
   "hsv_lo": [
-    90,
-    9,
+    55,
+    51,
     0
   ],
   "hsv_hi": [
-    135,
+    109,
     255,
     255
   ],
   "min_area_px": 400.0,
   "min_side_px": 20,
   "opening_ratio": [
-    0.15,
+    0.8,
     0.97
   ],
   "fill_ratio": [
-    0.55,
-    1.05
+    2.0,
+    2.0
   ],
-  "residual_max": 0.3,
+  "residual_max": 1.0,
   "min_axis_ratio": 0.15,
   "allow_edge": true,
   "close_kernel": 5,
   "border_tol": 2,
-  "min_arc_deg": 110,
-  "min_major_px": 64
+  "min_arc_deg": 216,
+  "min_major_px": 200
 }

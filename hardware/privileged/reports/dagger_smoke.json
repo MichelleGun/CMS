@@ -1,0 +1,109 @@
+{
+  "teacher": {
+    "laps": 4.888888888888889,
+    "clean": 1.0,
+    "best": 6,
+    "min_zone": 4.0,
+    "zones": {
+      "zone_1": 5.0,
+      "zone_2": 4.0,
+      "zone_3": 5.0,
+      "zone_4": 4.0,
+      "zone_5": 5.0,
+      "zone_6": 5.0,
+      "zone_7": 6.0,
+      "zone_8": 5.0,
+      "zone_9": 5.0
+    },
+    "outcomes": {
+      "timeout": 9
+    }
+  },
+  "rounds": [
+    {
+      "round": 0,
+      "ticks": 2700,
+      "samples": 2700,
+      "teacher_share": 1.0,
+      "rim_m": 0.06,
+      "mse": 0.05438731272463445,
+      "clone": "hardware\\flights\\bc\\dagger_smoke_r0",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 0.0,
+        "zone_2": 0.0,
+        "zone_3": 0.0,
+        "zone_4": 0.0,
+        "zone_5": 0.0,
+        "zone_6": 0.0,
+        "zone_7": 0.0,
+        "zone_8": 0.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 8,
+        "timeout": 1
+      }
+    },
+    {
+      "round": 1,
+      "ticks": 2132,
+      "samples": 4832,
+      "teacher_share": 0.32879924953095685,
+      "rim_m": 0.048,
+      "mse": 0.030039177418051177,
+      "clone": "hardware\\flights\\bc\\dagger_smoke_r1",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 0.0,
+        "zone_2": 0.0,
+        "zone_3": 0.0,
+        "zone_4": 0.0,
+        "zone_5": 0.0,
+        "zone_6": 0.0,
+        "zone_7": 0.0,
+        "zone_8": 0.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 6,
+        "struck": 1,
+        "timeout": 2
+      }
+    }
+  ],
+  "best": {
+    "round": 0,
+    "ticks": 2700,
+    "samples": 2700,
+    "teacher_share": 1.0,
+    "rim_m": 0.06,
+    "mse": 0.05438731272463445,
+    "clone": "hardware\\flights\\bc\\dagger_smoke_r0",
+    "laps": 0.0,
+    "clean": 0.0,
+    "best": 0,
+    "min_zone": 0.0,
+    "zones": {
+      "zone_1": 0.0,
+      "zone_2": 0.0,
+      "zone_3": 0.0,
+      "zone_4": 0.0,
+      "zone_5": 0.0,
+      "zone_6": 0.0,
+      "zone_7": 0.0,
+      "zone_8": 0.0,
+      "zone_9": 0.0
+    },
+    "outcomes": {
+      "out_of_cage": 8,
+      "timeout": 1
+    }
+  }
+}

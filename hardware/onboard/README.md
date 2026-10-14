@@ -204,8 +204,14 @@ spinning first:
 
 ```powershell
 & $PY -m pip install pygame
-& $PY hardware/onboard/fly_hoop.py --dry-run --mode human --record --countdown 0
+& $PY hardware/onboard/fly_hoop.py --dry-run --mode human --countdown 0
 ```
+
+A human flight is recorded by default (`--record` is implied; add `--no-record` for a practice
+flight). After landing it asks **Save this run?** and then **How many times did it go through the
+ring?** (`0` means it missed and the run is kept as `demo_failed.npz`; any other number is a pass,
+and the count is stored with the demo). If the ring was never detected there is nothing to keep,
+and it says so.
 
 A small window opens: **click it so it has focus.** Keys:
 
@@ -276,9 +282,9 @@ truncates the push, and it does so *quietly*: the clamp fires near the end, the 
 anyway, and the log looks clean right up until a slower speed calibration leaves it stopped in the
 ring plane.
 
-Useful flags: `--min-height` / `--max-height` (default 25–160 cm; the ceiling must clear your ring's
-centre height with room for overshoot — at a 120 cm centre the ring's top is 141 cm and the expert
-peaks at 120–129 cm), `--max-airborne` (default 40 s), `--ring-opening`, `--ring-noodle`,
+Useful flags: `--min-height` / `--max-height` (default 10–190 cm since 2026-10-14; the ceiling must
+clear your ring's centre height with room for overshoot, and the hoop hangs high), `--start-height`
+(default 80 cm), `--max-airborne` (default 150 s, room for many laps; was 40), `--ring-opening`, `--ring-noodle`,
 `--drone-width` (default 14 cm, no prop guards; use 0.18 with them, which cuts the clearance from
 8 cm to 6 cm), `--hfov`, `--commit-range`.
 
@@ -542,17 +548,140 @@ of passes. The cap keeps any one episode's reward from exploding.
 broken by reward). The dashboard's BEST tag goes to the onboard run with the most passes per
 episode, chosen separately from the PyBullet runs.
 
+## The simulator, measured (2026-10-13)
+
+`hardware/privileged/sim_fidelity.py` fits the simulator's stick-to-motion model to the **real**
+flight logs (dry runs excluded: they fly the simulator) and writes
+`hardware/privileged/reports/sim_fidelity.md`. From the 28 real flights:
+
+| Finding | Change |
+|---|---|
+| The Tello reports yaw **clockwise-positive**; the sim reported it counter-clockwise, so the yaw-rate input and the heading-memory sine were mirrored in flight | `sim.py` reports clockwise (`spec.YAW_CONVENTION = "cw"`). Older models are converted on load by negating those two input weights (`policy.convert_old_yaw`; exact, see `tests/test_yaw_convention.py`); older sim-recorded demos are flipped in `record_demo.load_demo`. New files carry `"yaw_convention": "cw"`. |
+| The Tello's `vgx`/`vgy` are ±1 jitter with no direction in the cage, but policies leaned on the sim's clean speeds (v4: 93 % → 5 % passes with them blanked) | `obs.BLANK_VELOCITY`: the `vel` field is always 0, sim and real; `pushed` is dead-reckoned from the executed forward command (`obs.push_step_cmd`). Demos are refreshed to match on load (`obs.refresh_obs`). |
+| Turning 0.40× the sim, nothing under ~6 rc of yaw stick; climbing 0.52× | `--profile measured` (`sim.PROFILES["measured"]`). Forward/sideways speed could not be measured from the logs, so they stay nominal; `calibration/calibrate_speed.py` would settle them. |
+| With `--dr > 0` the sim ignored `--profile` and sampled around "typical" | `sample_profile` now centres on the chosen profile ("typical" behaves exactly as before). |
+| A centred pass went **unrecorded** when the prop-washed ring swung back at that moment (the crossing check measured both ends of the step against the moved ring): about half of all passes in lap mode | `sim._check_crossing` measures the crossing relative to the ring (before vs the ring before the step, after vs the ring now) and counts it only if the drone moved that way (`tests/test_crossing.py`). Everything trained before 2026-10-13 05:00 learned with those passes missing. |
+
+Consequences worth knowing: the scripted expert passes 97 % on "typical" but 3 % on "measured"
+(its small yaw corrections fall in the real dead zone), and of the older runs only
+`onboard_20261011-032612` still flies well in the corrected sim (60 % on measured).
+
+## Week 10 experiments (PPO settings)
+
+`train_onboard.py` takes the PPO settings explicitly now (left out = the SB3 default, or the
+parent's value when continuing, i.e. exactly what every earlier run used):
+
+| Flag | What it changes |
+|---|---|
+| `--gamma`, `--gae-lambda` | discount / advantage smoothing (0.99 at 15 Hz looks ~6.7 s ahead; a lap is 10–15 s) |
+| `--target-kl` | stops an update early once the policy moved this far (trust-region brake) |
+| `--batch-size`, `--n-epochs` | how the rollout is chewed |
+| `--ent-coef`, `--log-std-reset` | exploration bonus; undo a collapsed noise level |
+| `--sde`, `--sde-sample-freq` | smooth, state-dependent exploration (parent layers are copied in) |
+| `--profile measured` | dynamics fitted to the real logs |
+| `--log-interval` | how often train/* is written to stdout, `progress.csv` and ClearML |
+
+Every run writes `progress.csv` and records `meta.json → "ppo"`.
+
+**Overnight comparison** (one setting changed per run, same parent, demos, seed and budget):
+
+```bash
+python hardware/onboard/week10_experiments.py --stage front
+```
+
+Runs A baseline, B gamma, C kl, D entropy, E sde, F lambda1 (Monte Carlo advantages, so a wrong
+critic only adds noise), two at a time, into `results/hoop/runs/w10_front_*`. Plug the laptop
+in: the launcher keeps the PC awake, moves any crashed run to `results/hoop/runs_archive/` and
+reruns it, and writes `results/hoop/runs/w10_front_summary.txt` at the end. `--seed 1` makes a
+second seed (`_s1` folders); `--dry-run` prints the commands; `--then-laps` continues with
+same-side laps from the best run.
+
+**Comparing**: open `tutorial/week10_compare.ipynb` (reads the run folders directly: passes
+curves, std / approx_kl / clip_fraction / explained_variance, summary table, the
+deterministic-vs-noisy aliasing test, and "how wrong is the critic"). The same charts in ClearML:
+Tello/onboard-rl → tick the `w10_*` runs → Compare → Scalars; Hyperparameters → `ppo`.
+
+## The privileged teacher + DAgger (hardware/privileged/)
+
+Following Loquercio et al., *Learning High-Speed Flight in the Wild* (Science Robotics 2021,
+[arXiv:2110.05113](https://arxiv.org/abs/2110.05113)): an expert that reads the simulator's
+true state labels the right action on the states the camera-only student actually visits
+(DAgger, with a handover distance that grows each round), instead of fixed demos. It lives in
+`hardware/privileged/` and only reads this folder.
+
+- `teacher.py`: the teacher. `gates.py` scores it (report `reports/teacher_gates.md`): 4.8 laps per
+  90 s, 36/36 clean lap episodes, 99 % front-runway passes, 99 % with the dynamics deliberately
+  wrong. The scripted expert manages 0.3 laps per 90 s on the same test.
+- `dagger.py`: the DAgger loop (student = the usual 37-input clone in `flights/bc/dagger_rN/`).
+- `autopilot.py`: after the A–F batch, runs the laps stage of the winner and DAgger, and writes
+  `reports/morning.md`. Gates before it is trusted, and the full
+mapping of the paper, are in the Onboard Hoop Policy Anatomy page, sections 13–14.
+- `dagger.py --ring-tracker --search-first`: the student also gets the ring tracker, and until
+  it has seen the ring the teacher's label is a search it can reproduce (turn clockwise, climb to
+  1.2 m) instead of the teacher's privileged "turn towards where I know the ring is". Without that
+  the clone averaged left and right turns at the blind start and flew into the net. Students still
+  stay near 0 laps: imitation is not precise enough for the 30 cm hole (anatomy §16).
+- `gates.py` stress profiles name what must survive domain randomisation (`sim.Profile.keep`):
+  before 2026-10-13 the "lag x2" and "delay +0.1 s" rows silently tested ordinary random lag.
+
+## Round 2: the race (w10_race.py)
+
+`python hardware/onboard/w10_race.py` trains setting combinations against C's curve and stops a
+run once it is clearly behind (last-10-evaluation mean more than 0.10 below C at a 400k-step
+checkpoint, or 0.05 below twice in a row) by writing `stop.flag` in its folder (train_onboard ends
+cleanly). Queue: G (C + gamma 0.995), H (C + lambda 1), C seed 1 (noise check, never stopped); the
+best run then gets 3M more steps and the laps stage. Results: H stopped at 400k, G at 800k.
+Log `results/hoop/w10_race.log`, table `results/hoop/runs/w10_race_summary.md`.
+
+## Reward weights per run (--reward-weights)
+
+The 17 reward values (`gym_env.REWARD_WEIGHTS`: `r_passed`, `w_rim`, `w_shape`, ...) are defaults;
+`OnboardHoopEnv(reward_weights={...})` or `train_onboard.py --reward-weights '{"r_passed": 25}'`
+overrides any of them for one run (a typo is refused). The run's `meta.json` records the effective
+values as `reward` and what changed as `reward_overrides`; the same `meta.json` now also lists the
+demo files it used as `bc.demo_paths`, so the dashboard's Config card can pre-tick them for the next
+run (webapp README). `streak` / `streak_cap` keep their own flags. Checked step by step against the
+old environment: identical rewards, observations and terminations (random actions and the teacher).
+
+## The ring tracker (--ring-tracker, 41 inputs)
+
+On the way round the outside the ring is out of view and the 37 inputs say nothing about where it
+is. `obs.RingTracker` keeps a dead-reckoned estimate of the ring centre in the drone's frame: set
+from the camera at each fresh detection, then moved by the drone's turning (telemetry yaw),
+climbing (height) and executed forward/sideways commands (x `NOMINAL_FWD_MPS`, like `pushed`).
+
+| Field | Width | Meaning |
+|---|---|---|
+| `ring_est` | 3 | ring centre forward / right / up (m) / RANGE_NORM, clipped to +-1.5 |
+| `est_valid` | 1 | 1 once the ring has been seen this flight |
+
+Opt-in and appended after the 37 fields: `OnboardHoopEnv(ring_tracker=True)`, `train_onboard.py
+--ring-tracker` (a 37-input parent is widened with zero weights), `bc_train.py --ring-tracker`
+(replayed for stored demos by `obs.add_tracker`). `policy.load_policy` reports `obs_width` and
+`fly_hoop.py` builds 41 inputs for a tracker policy; a 37-input policy ignores the extra columns.
+Accuracy (`hardware/privileged/tracker_accuracy.py`): median 8 cm after 2-3 s blind, 19 cm after
+more than 3 s; 18 cm at 2-3 s with the real forward speed 1.5x the assumed one. Before flying a
+tracker policy, measure the real forward speed once (tape measure) and set `NOMINAL_FWD_MPS`.
+Laps stage with it: `week10_experiments.py --stage laps --only T --parent
+results/hoop/runs/w10_front_C_kl/best_model.zip`.
+
 ## If something goes wrong
 
 | What you see | What it means |
 |---|---|
 | `No camera frame within 6 s` | It refuses to take off blind. Check the Wi-Fi and that nothing else holds the video stream |
-| `Airborne height N cm is outside ...` | Raise `--max-height`, or the drone is drifting vertically |
+| `Airborne height N cm is outside ...` | Since 2026-10-14 only after the hover and the climb to `--start-height` (a low takeoff no longer aborts). Above: raise `--max-height` (default 190). Below `--min-height` (10) once flying: it really touched the floor |
 | `requires at least N%` | Battery below the threshold for that phase |
 | `Mainboard reports N C` | Let it cool. The Tello runs hot on the ground with the stream on |
 | `commit push clamped ... It will stop short` | `--commit-speed` is too low for `--commit-range`; measure it at step 3 |
 | It searches and never finds the ring | Redo stage B in the lighting you are actually flying in |
 | It stalls about half a metre out | The commit gate is not being met. The log's `axis_ratio` and `range_m` say which condition failed |
+| `takeoff ... Latest response: 'error'` | The drone **refused** takeoff on the ground: a reply, not a timeout, and not a camera or code fault. Usually a battery sagging after several attempts in a row; also IMU calibration, a glossy or featureless floor, or props. The `takeoff_failed` event logs `bat` and `temph` at that moment, next to the `takeoff_start` values |
+| `land_refused_on_ground` straight after | Expected after a refused takeoff: the drone never left the ground, so it refuses `land` too. Not a landing problem. A real `land_failed` still prints `LANDING NOT CONFIRMED` |
+| `video_bitrate_failed` / `unknown command: setbitrate` | Normal on a Tello EDU. `setbitrate` is an SDK 3.0 (RoboMaster TT) command. Harmless; the flight continues. `--probe-sdk` asks the drone its SDK version first and skips the request (`video_bitrate_unsupported`), but it is off by default: it adds a command before takeoff, and takeoff was refused more often with it |
+| Dashboard camera says *waiting for the first camera frame* | No frame written yet. Frames start once the drone is airborne; add `--preview-before-takeoff` to get them during the countdown too (off by default, it adds work before takeoff) |
+| Dashboard camera frozen on one frame | The frame file stopped being replaced. A `camera_write_failing` event and `camera_write_failures` in `summary.json` give the error. A leftover `camera_latest.jpg.tmp` newer than the `.jpg` is the old symptom of the dashboard holding the file open |
+| Keys ignored on the dashboard | The browser tab needs focus, and a text field must not have it (click the camera view). Checkboxes no longer swallow flight keys |
 
 ---
 
@@ -568,7 +697,14 @@ Tello front camera (RGB) ──> ring_detect ──> obs ──> controller ─�
                                   │
             every tick: safety (battery, temperature, height, travel, time, flags) ──> land
             every tick: ticks.jsonl + status.json, read by the dashboard
+            2.5 Hz from the countdown on, while camera_enabled.flag exists:
+                        camera_latest.jpg, served by the dashboard read into memory
 ```
+
+The dashboard starts every flight with `--camera`, which creates `camera_enabled.flag`; its
+camera toggle adds or removes the flag mid-flight. The backend must read `camera_latest.jpg`
+into memory rather than stream it: on Windows an open handle stops `fly_hoop` replacing the
+file, and the picture freezes.
 
 | File | What it is |
 |---|---|
@@ -615,9 +751,9 @@ Every layer reuses the Tello-Friend-Kit primitives that have actually flown this
 
 | When | Check |
 |---|---|
-| before takeoff | cage height; battery ≥ `minimum_battery_percent`; mainboard under 80 °C; on the ground; **a camera frame received** |
+| before takeoff | cage height; battery ≥ `minimum_battery_percent`; mainboard under 80 °C; on the ground; **a camera frame received**. The ground state is logged in `takeoff_start` |
 | every tick | battery against the lower in-air threshold; under 85 °C; height inside `--min-height`/`--max-height`; a 3 s frame watchdog; the airborne budget; the **forward-travel budget** |
-| any time | `land.flag` or `kill.flag` appearing in the flight directory |
+| any time | `land.flag` or `kill.flag` appearing in the flight directory; a land or motor-cut key, which is read even on ticks without a video frame and acted on in the tick it is read |
 | always | the `finally` block zeroes the rc and lands; `takeoff_attempted` is set **before** `drone.takeoff()`, so a lost acknowledgement still lands |
 
 Two of these are worth explaining.
@@ -674,3 +810,68 @@ Two findings from making cloning work are worth keeping in mind if you change th
   drone. It proves the software logic; it says nothing about your aircraft.
 * A ring hung near the **centre** of a 2 m cage leaves roughly 1 m of approach. Moving it toward one wall
   buys runway and makes step 4 considerably easier.
+
+## 2026-10-14: ground start, smoother hardware runs, lap policies with memory
+
+**Takeoff sequence (every mode but hover).** connect → camera on and a first frame → takeoff →
+**hover** (rc 0, `--settle` s) → **climb to `--start-height`** (80 cm) → *handover*: the observation
+builder, ring tracker and the controller's memory are reset → the controller (policy, keys or expert)
+takes the sticks. During the hover and the climb only the ceiling is enforced, so the
+`Airborne height 15 cm is outside this flight's 25-160 cm range` crash (a Tello whose own takeoff stopped
+low) cannot happen; the drone climbs out of it instead. Events: `settled`, `start_height`, `control_handover`.
+
+**Defaults:** `--max-height 190`, `--min-height 10`, `--max-airborne 150`, `--max-travel` unset (no cap).
+The dashboard passes the height window, the start height and `--preview-before-takeoff` (camera from the
+countdown on), all editable in the Drone tab's options.
+
+**Fly it yourself from the dashboard** opens the same pygame pop-up as a terminal flight (`--keys pygame`),
+raised to the front: click it and fly. The old browser → websocket → UDP path is still there ("Keys from:
+this browser tab"). In the flight loop, a human's keys are now read and sent **every 15 Hz tick**, not only
+on ticks with a new camera frame (the jittery 10-30 Hz video was a large part of the lag); the camera JPEG
+for the dashboard is encoded and written by a background thread instead of inside the loop.
+
+**Camera robustness:** djitellopy's decoder thread dies silently on most H.264 errors. If no frame has
+arrived for 1 s and that thread is dead, the drone hovers and the reader is reopened once
+(`video_reader_restarted`); the 3 s watchdog still lands a flight whose video does not come back.
+
+**Faster "Start" after a run:** the ClearML upload used to run inside the flight process (~35 s), which
+held UDP port 8889 and kept the dashboard's Start greyed out. It is now a detached
+`scripts/clearml_sync.py record flights <dir>` process (log: `<flight>/clearml_upload.log`, uploads
+every 3rd tick's scalars); the flight process exits as soon as the drone has landed and the save question
+is answered. Untick "Upload to ClearML" to skip it.
+
+**Policies with memory and an asymmetric critic** (`history.py`, `aac_policy.py`, `train_onboard.py
+--history-lags 0,1,2,4,8,16 --asym-critic`): `policy.load_policy` stacks the same history on the drone
+and zero-pads the critic-only inputs, so `fly_hoop.py --mode policy --model <run>/best_model.zip` flies
+them as is. See `hardware/privileged/reports/overnight_2026-10-14.md`.
+
+## Loop training: race, curriculum, teacher labels, export (2026-10-13/14)
+
+The goal is repeated laps (enter, round the outside, re-enter). Full story with numbers: the
+anatomy page `docs/Onboard Hoop Policy Anatomy.html`, sections 18-21.
+
+| Tool | What it does |
+|---|---|
+| `loop_night.py` | Races `EXPERIMENTS` keys on the laps stage against the existing `w10_laps_T_kl_tracker` curve (stop rule as in `w10_race.py`, judged from 800k steps), extends the best (`--ext-top`, `--ext-steps`), optionally relabels the winner's loop leg first (`--relabel`), then exports. Flags: `--keys`, `--parent`, `--tag` (run folders `w10_<tag>_<key>_<name>`), `--vec dummy\|subproc`, `--n-envs`. A run starts only with 2 GB free commit and a crashed run is retried. Log `results/hoop/loop_night.log`, report `results/hoop/overnight_loop_report[_<tag>].md`. |
+| `export_policy.py` | Scores every `best`/`final` model of the given runs with the flight loader (`policy.load_policy`) on the laps task in the sim, copies each to `hardware/policies/LOOP_<date>_<run>_<best\|final>_<laps>lpe.zip` + `.meta.json`, re-loads the copy and checks it gives the same actions, ranks them in `hardware/policies/README.md` and names the top one in `FLY_THIS_FIRST.txt`. |
+| `launch_detached.py <prefix> -- <script> ...` | Starts a long job (e.g. `loop_night.py`) in its own hidden console and process group, output to `<prefix>.stdout/.stderr.txt`. All of round 5 once stopped on a Ctrl+C that reached the console the runs shared; `w10_race.start` now starts every run the same way. |
+| `train_onboard.py --near-pass-p P` | Training only: a share P of episodes starts lined up 0.40-0.55 m in front of the ring (`sim.place_near_pass`), so most of the episode is loop practice. Evaluation keeps the normal starts. |
+| `../privileged/loop_labels.py <model.zip>` | The model flies (near-pass starts); every tick after its first pass the privileged teacher's action is recorded as the label (the teacher takes over near the noodle or net). Writes `hardware/flights/demos/teacher_loop_*.npz` with `obs_live` (41 inputs, live tracker memory; loaded as recorded). Used as a small decaying BC term: `--demos "hardware/flights/demos/teacher_loop_*.npz" --bc-coef 0.2 --bc-coef-min 0.02 --bc-decay-steps 2000000`. |
+
+Results so far (laps per 90 s episode, sim, measured profile):
+
+| Round | Best run | Last-10 laps/ep | Note |
+|---|---|---|---|
+| 3 (overnight) | W: C + tracker, no imitation term | 0.45 | removing the BC term was the lever |
+| 4 | P: W trained on | 0.67 | first 2-pass episodes; near-pass starts (N, M) did not beat it |
+| 5 | K / R (see `results/hoop/overnight_loop_report_laps5.md`) | ~0.55 | teacher loop labels on a memoryless policy (L, Q) **collapsed** to 0.02-0.04: aliasing, stopped by hand |
+| memory | `n8_dapg_nodrain` (history 0,1,2,4,8,16 + asymmetric critic, from the memory DAgger clone, BC 0.3 kept on) | **1.28** export, 44 % of episodes 2+ passes | first policy that loops; continued as `n8_dapg_nodrain_cont` |
+
+Diagnosis behind round 5: after its first pass the policy sees the ring on only 0-3 % of ticks. It
+never turns back to look for it, so it times out, leaves the cage or bumps the ring. Teacher labels
+cannot fix that for a policy that only sees the current frame. "Just passed, ring behind me" and
+"blind before a pass" look the same to it, so the labels average out. With memory (n8) they work.
+
+`fly_hoop.py` height rules (2026-10-13): policy mode climbs to `--start-height` 80 cm before the
+policy takes over; below `--floor-height` 40 cm the controller may not descend (forced climb +0.4
+below 30 cm); the hard abort is `--min-height` 10 cm (was 25).

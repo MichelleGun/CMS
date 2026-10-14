@@ -108,6 +108,59 @@ for _name, _w in OBS_FIELDS:
     _off += _w
 del _off, _name, _w
 
+# --- ring tracker (opt-in observation extension, 2026-10-13) ----------------------
+# A belief state for the loop. Once the ring leaves the frame, nothing above says where it is,
+# so on the way round the outside every position looks the same to the policy (a POMDP). The
+# tracker keeps a dead-reckoned estimate: set from the camera at each fresh detection, then moved
+# by the drone's own turning (telemetry yaw), climbing (downward range / height) and the
+# forward/sideways commands it executed (obs.RingTracker). Appended AFTER the 37 fields, so a
+# 37-input policy reads the first OBS_DIM columns unchanged and an older model is widened by
+# appending zero-weight inputs. Opt-in (OnboardHoopEnv(ring_tracker=True), train_onboard
+# --ring-tracker) so runs that do not ask for it are exactly as before.
+TRACKER_FIELDS = (
+    ("ring_est", 3),     # ring centre in the body frame: forward, right, up (m) / RANGE_NORM
+    ("est_valid", 1),    # 1.0 once the ring has been seen this flight, else 0.0
+)
+TRACKER_OBS_DIM = OBS_DIM + sum(w for _, w in TRACKER_FIELDS)     # 41
+TRACKER_SLICES = dict(OBS_SLICES)
+_off = OBS_DIM
+for _name, _w in TRACKER_FIELDS:
+    TRACKER_SLICES[_name] = slice(_off, _off + _w)
+    _off += _w
+del _off, _name, _w
+TRACKER_CLIP = 1.5       # x RANGE_NORM = 3 m: the far side of the cage from a corner
+
+# --- yaw convention -----------------------------------------------------------
+# The real Tello reports yaw CLOCKWISE-positive (measured 2026-10-13 from 79 flights,
+# hardware/privileged/reports/sim_fidelity.md). Until then the simulator reported it
+# counter-clockwise, so two observation columns were mirrored between training and flight:
+# the yaw rate and the sine of the heading since the last pass. Both now follow the drone.
+# Anything made before carries no "yaw_convention" in its meta and is converted on load:
+# sim-recorded demos get those columns negated, older models get the matching input weights
+# negated (onboard/policy.py), which makes them act exactly as they did when trained.
+YAW_CONVENTION = "cw"
+
+
+def yaw_columns(width: int) -> list:
+    """Observation columns whose sign depends on the yaw convention, for a layout this wide."""
+    sl = layout_slices(width)
+    cols = [sl["att"].start + 2]                       # yaw rate
+    if "pass_heading" in sl:
+        cols.append(sl["pass_heading"].start + 1)      # sin of the heading since the last pass
+    return cols
+
+
+def flip_yaw_obs(obs):
+    """A copy of obs (one row or many) with the yaw-convention columns negated."""
+    o = np.array(obs, dtype=np.float32, copy=True)
+    o[..., yaw_columns(o.shape[-1])] *= -1
+    return o
+
+
+def old_yaw_convention(meta) -> bool:
+    """True for a model or demo file made before the clockwise convention."""
+    return (meta or {}).get("yaw_convention") != YAW_CONVENTION
+
 # --- normalisation ----------------------------------------------------------
 # Chosen so a typical flight keeps every field inside about [-1, 1]. They are not
 # clamps (except where noted); a policy can still see an out-of-range value.

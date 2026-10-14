@@ -241,12 +241,20 @@ def main(argv=None):
                          "onboard_scripted_expert, onboard_expert, ...")
     ap.add_argument("--as-run", action="store_true",
                     help="also save as results/hoop/runs/bc_<ts>/ so replay_hoop.py / the dashboard can load it")
+    ap.add_argument("--ring-tracker", action="store_true",
+                    help="onboard demos: add the 4 ring-tracker inputs (replayed from each demo's own "
+                         "columns, onboard.obs.add_tracker), for a 41-input clone")
+    ap.add_argument("--no-clearml", action="store_true",
+                    help="don't upload this clone to ClearML (also: CLEARML_OFF=1)")
     a = ap.parse_args(argv)
 
     files = sorted({f for pat in a.demos for f in glob.glob(pat)})
     if not files:
         sys.exit(f"no demo files match {a.demos}")
     d = load_demos(files)
+    if a.ring_tracker:
+        from onboard.obs import add_tracker
+        d["obs"] = add_tracker(d["obs"], d["episode"], d["t"])
 
     # Which task do these demos describe? Older simulator demos have no meta["task"], so
     # the observation width decides, and the explicit meta wins when present.
@@ -259,6 +267,8 @@ def main(argv=None):
         sys.exit("[bc] demo files are from different tasks; train them separately")
     shape = next((m.get("obs_shape") for m in metas
                   if isinstance(m, dict) and m.get("obs_shape")), None)
+    if a.ring_tracker:
+        shape = [obs_width]
     obs_shape = tuple(shape) if shape else (
         SIM_OBS_SHAPE if task == SIM_TASK else (obs_width,))
     act_shape = SIM_ACT_SHAPE if task == SIM_TASK else (4,)
@@ -300,7 +310,9 @@ def main(argv=None):
     meta = dict(algo=a.algo, env_variant="continuous_vel", source="bc", demos=[Path(f).name for f in files],
                 task=task, obs_shape=list(obs_shape), sources=counts,
                 source_weights={k: v for k, v in sw.items() if k in counts},
-                n_samples=int(len(obs)), final_status="bc", saved=time.strftime("%Y-%m-%d %H:%M:%S"), **{
+                n_samples=int(len(obs)), final_status="bc", saved=time.strftime("%Y-%m-%d %H:%M:%S"),
+                # demos are converted to the current yaw convention on load (record_demo.load_demo)
+                **({"yaw_convention": "cw"} if task == "onboard_hoop" else {}), **{
                     k: v for k, v in stats.items() if k != "history"})
     if a.eval_episodes:
         if task == SIM_TASK:
@@ -315,6 +327,10 @@ def main(argv=None):
                   f"missed {res['missed']}, mean reward {res['mean_reward']:.1f}")
     (a.out / "meta.json").write_text(json.dumps(meta, indent=2))
     print(f"[bc] saved {zip_path}")
+    if not a.no_clearml:
+        import clearml_sync
+        clearml_sync.record("clones", a.out, dict(meta, run_id=a.out.name), status="completed",
+                            skip_existing=False)
 
     if a.as_run and task != SIM_TASK:
         print("[bc] --as-run skipped: the dashboard's replay tools only load simulator-task models")

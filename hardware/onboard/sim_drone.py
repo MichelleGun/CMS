@@ -54,7 +54,8 @@ class SimDrone:
                  ring_opening_m: Optional[float] = None,
                  ring_noodle_m: Optional[float] = None,
                  drone_width_m: Optional[float] = None,
-                 fail_at: Optional[str] = None):
+                 fail_at: Optional[str] = None,
+                 sdk: str = "20"):
         kw = {}
         if ring_opening_m is not None:
             kw["ring_opening_m"] = ring_opening_m
@@ -65,7 +66,12 @@ class SimDrone:
         self.sim = OnboardSim(ring=ring, profile=profile, seed=seed, render=True,
                               detector=detector, **kw)
         self.calls = []
-        self.fail_at = fail_at            # inject a failure: 'takeoff', 'land', 'rc'
+        # Inject a failure: 'takeoff', 'land', 'rc', or 'takeoff_refused' -- the drone
+        # answering takeoff with 'error' on the ground, as a real one does.
+        self.fail_at = fail_at
+        # What `sdk?` answers. 20 is the Tello EDU this flies; it was "30", a RoboMaster
+        # TT, which hid that setbitrate (SDK 3.0 only) is refused on the real drone.
+        self.sdk = sdk
         self._streaming = False
         self._airborne = False
         self._ground_pos = None
@@ -75,6 +81,11 @@ class SimDrone:
     def _maybe_fail(self, what):
         if self.fail_at == what:
             raise RuntimeError(f"simulated {what} failure")
+        if (self.fail_at == "takeoff_refused" and what in ("takeoff", "land")
+                and not self._airborne):
+            # djitellopy's wording; a grounded Tello refuses land as well as takeoff.
+            raise RuntimeError(f"Command '{what}' was unsuccessful for 2 tries. "
+                               "Latest response: 'error'")
 
     def connect(self, wait_for_state: bool = True):
         self.calls.append("connect")
@@ -90,6 +101,9 @@ class SimDrone:
 
     def set_video_bitrate(self, mbps):
         self.calls.append(("bitrate", int(mbps)))
+        if not self.sdk.startswith("3"):
+            raise RuntimeError("Command 'setbitrate 1' was unsuccessful for 2 tries. "
+                               "Latest response: 'unknown command: setbitrate'")
 
     def streamon(self):
         self.calls.append("streamon")
@@ -149,7 +163,8 @@ class SimDrone:
         return s                        # a NEW dict each time, as djitellopy does
 
     def query_sdk_version(self):
-        return "30 (simulated)"
+        self.calls.append("sdk?")
+        return self.sdk
 
     def get_battery(self):
         return int(self.sim.battery)

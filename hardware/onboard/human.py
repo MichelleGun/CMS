@@ -15,6 +15,7 @@ Keys (the small window must have focus; Ctrl+C in the terminal still lands):
 
 The pilot watches the drone, not the screen, so the window only carries a status readout.
 """
+import os
 from dataclasses import dataclass
 from typing import List, Optional, Set, Tuple
 
@@ -50,13 +51,35 @@ class PygameKeys:
                 "--mode human needs pygame. Install it once with:\n"
                 "    & $PY -m pip install pygame") from e
         self.pg = pygame
+        os.environ.setdefault("SDL_VIDEO_CENTERED", "1")
         pygame.init()
         self.screen = pygame.display.set_mode(size)
         pygame.display.set_caption(title)
+        self._bring_to_front()
         self.font = pygame.font.SysFont("consolas", 16)
         self.big = pygame.font.SysFont("consolas", 22, bold=True)
         self._held = {getattr(pygame, k): v for k, v in self.HELD.items()}
         self._once = {getattr(pygame, k): v for k, v in self.ONCE.items()}
+
+    def _bring_to_front(self):
+        """Started by the dashboard, this window opens behind the browser, and keys typed into
+        the browser never reach it. Raise it (topmost for a moment, then normal) so a click is
+        all it takes. Best effort: Windows may still only flash it in the taskbar."""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            hwnd = self.pg.display.get_wm_info().get("window")
+            if not hwnd:
+                return
+            u = ctypes.windll.user32
+            HWND_TOPMOST, HWND_NOTOPMOST, flags = -1, -2, 0x0001 | 0x0002 | 0x0040   # NOSIZE|NOMOVE|SHOW
+            u.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+            u.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+            u.ShowWindow(hwnd, 5)                     # SW_SHOW
+            u.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
 
     def poll(self) -> Tuple[Set[str], List[str]]:
         pg = self.pg
@@ -116,6 +139,8 @@ class UdpKeys:
 
     def poll(self) -> Tuple[Set[str], List[str]]:
         import json
+        valid = set(PygameKeys.HELD.values())
+        pressed_since: Set[str] = set()
         while True:
             try:
                 data = self.sock.recv(4096)
@@ -128,12 +153,16 @@ class UdpKeys:
                 names = msg.get("held", [])
             except (ValueError, AttributeError, UnicodeDecodeError):
                 continue
-            valid = set(PygameKeys.HELD.values())
             self._held = {n for n in names if n in valid}
+            pressed_since |= self._held
             self._last = self._clock()
         if self._last is None or self._clock() - self._last > self.stale_s:
             return set(), []
-        return set(self._held), []
+        # The browser sends a datagram on every key down and up. A tap shorter than one
+        # 15 Hz tick puts both between two polls, and keeping only the last one dropped
+        # the tap entirely -- so anything held in any datagram since the last poll counts
+        # for this tick, as PygameKeys does with KEYDOWN.
+        return self._held | pressed_since, []
 
     def close(self):
         try:
@@ -145,11 +174,16 @@ class UdpKeys:
 class HumanController:
     """Maps held keys to the 4-channel action. `keys.poll()` -> (held, pressed)."""
 
-    def __init__(self, keys, gain: float = 0.6):
+    def __init__(self, keys, gain: float = 0.6, yaw_gain: Optional[float] = None):
         if not 0.0 < gain <= 1.0:
             raise ValueError("gain must be in (0, 1]")
+        if yaw_gain is not None and not 0.0 < yaw_gain <= 1.0:
+            raise ValueError("yaw_gain must be in (0, 1]")
         self.keys = keys
         self.gain = float(gain)
+        # Rotating in place moves the drone nowhere, so it can run faster than the
+        # translation keys. None means the same gain as everything else.
+        self.yaw_gain = self.gain if yaw_gain is None else float(yaw_gain)
         self.phase = HUMAN
         self.reason = ""
         self.kill_requested = False
@@ -182,12 +216,18 @@ class HumanController:
         self._read()
         self._show(None, np.zeros(spec.ACT_DIM), waiting=True)
 
+    def latch(self):
+        """Latch land/kill without drawing or commanding: for the flight loop's ticks that
+        have no video frame, when the controller itself is not called."""
+        self._read()
+
     def __call__(self, ring, state: Optional[dict] = None):
         held = self._read()
         a = np.zeros(spec.ACT_DIM)
         if not (self._land or self.kill_requested):
             for name, idx in CHANNELS:
-                a[idx] = self.gain * ((f"{name}+" in held) - (f"{name}-" in held))
+                g = self.yaw_gain if idx == spec.ACT_YAW else self.gain
+                a[idx] = g * ((f"{name}+" in held) - (f"{name}-" in held))
         self._show(ring, a, waiting=False)
         return a, HumanInfo(phase=self.phase, reason=self.reason)
 

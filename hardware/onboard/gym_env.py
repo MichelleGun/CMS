@@ -40,6 +40,15 @@ v5 (2026-10-11, later that night):
     round the facing term looks at the ring's centre (circle it while watching it).
   * A streak bonus: pass k of an episode pays R_PASSED x min(1 + streak x (k - 1), streak_cap).
   * start_mode="zones": starts cycle through 9 zones of the cage (sim.py).
+
+v6 (2026-10-14 overnight, hardware/onboard/history.py):
+  * history_lags: the actor sees the current observation plus older ones (memory for the way round
+    the outside, where the ring is out of view and the velocity input is blank).
+  * privileged: PRIV_DIM true-state numbers appended for the CRITIC only (asymmetric actor-critic,
+    Pinto et al. 2018); aac_policy masks them out of the actor, so the real drone pads them with zeros.
+  * w_dwell: a per-tick cost for loitering in the opening (within DWELL_BAND_M of the ring's plane,
+    inside the rim) while not pushing forward. The real noodle hardly swings when the drone goes
+    straight through, but it does when the drone hovers in it. 0 = off (the default before v6).
 """
 from typing import Optional
 
@@ -100,6 +109,9 @@ STREAK_GAIN = 0.5                  # pass k pays R_PASSED x min(1 + this x (k - 
 STREAK_CAP = 3.0
 RETURN_SIDE_M = 0.55               # same-side laps: the way round passes this far beside the ring
 LAP_DIRS = ("alternate", "same")
+W_DWELL = 0.0                      # v6: per tick loitering in the opening (train_onboard sets 0.05)
+DWELL_BAND_M = 0.15
+DWELL_FB_MIN = 0.5                 # forward stick below this counts as loitering
 
 # the weights above, by name (saved in a run's meta.json so the dashboard can show the MDP)
 REWARD_WEIGHTS = {"w_shape": W_SHAPE, "axis_pull": AXIS_PULL, "w_time": W_TIME,
@@ -109,7 +121,8 @@ REWARD_WEIGHTS = {"w_shape": W_SHAPE, "axis_pull": AXIS_PULL, "w_time": W_TIME,
                   "r_wrong_way": R_WRONG_WAY, "arm_dist_m": ARM_DIST_M,
                   "drain": DRAIN, "w_face": W_FACE, "face_ahead_m": FACE_AHEAD_M,
                   "pass_facing_min": PASS_FACING_MIN, "streak": STREAK_GAIN,
-                  "streak_cap": STREAK_CAP, "return_side_m": RETURN_SIDE_M}
+                  "streak_cap": STREAK_CAP, "return_side_m": RETURN_SIDE_M,
+                  "w_dwell": W_DWELL}
 
 
 def rim_penalty(rim_distance_m: float) -> float:
@@ -133,18 +146,40 @@ class OnboardHoopEnv(gym.Env):
                  dr: float = 0.0, sway_deg: float = DEFAULT_SWAY_DEG, hard_start_p: float = 0.0,
                  ramp: float = 1.0, open_plane: Optional[bool] = None, laps: int = 1,
                  wash_deg: float = 0.0, lap_dir: str = "alternate", start_mode: str = "ring",
-                 streak: float = STREAK_GAIN, streak_cap: float = STREAK_CAP):
+                 streak: float = STREAK_GAIN, streak_cap: float = STREAK_CAP,
+                 ring_tracker: bool = False, reward_weights: Optional[dict] = None,
+                 history_lags=None, privileged: bool = False, near_pass_p: float = 0.0):
         """dr / sway_deg / hard_start_p / ramp / open_plane / wash_deg: see sim.py. open_plane
         defaults to on whenever starts can be away from the front runway. laps: passes per
         episode (1: the episode ends at the first crossing; 0: endless). lap_dir: "alternate"
         (back-and-forth) or "same" (round the outside, same side every time). start_mode: "ring"
-        (front runway / hard starts) or "zones" (sim.py). streak / streak_cap: the streak bonus."""
+        (front runway / hard starts) or "zones" (sim.py). streak / streak_cap: the streak bonus.
+        ring_tracker: append obs.RingTracker's 4 fields (spec.TRACKER_OBS_DIM inputs).
+        reward_weights: overrides of REWARD_WEIGHTS by name (a typo raises). The module constants
+        are the defaults, so None behaves exactly as before; streak / streak_cap given here win
+        over the streak / streak_cap arguments.
+        history_lags / privileged: hardware/onboard/history.py (None / False = the plain observation)."""
         super().__init__()
         if lap_dir not in LAP_DIRS:
             raise ValueError(f"lap_dir must be one of {LAP_DIRS}")
         self.lap_dir = lap_dir
-        self.streak, self.streak_cap = float(streak), float(streak_cap)
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(spec.OBS_DIM,),
+        self.rw = dict(REWARD_WEIGHTS)
+        for k, v in (reward_weights or {}).items():
+            if k not in self.rw:
+                raise ValueError(f"unknown reward weight '{k}'; expected one of {sorted(self.rw)}")
+            self.rw[k] = bool(v) if k == "drain" else float(v)
+        self.streak = self.rw["streak"] if "streak" in (reward_weights or {}) else float(streak)
+        self.streak_cap = (self.rw["streak_cap"] if "streak_cap" in (reward_weights or {})
+                           else float(streak_cap))
+        self.rw["streak"], self.rw["streak_cap"] = self.streak, self.streak_cap
+        from .history import HistoryStack, parse_lags, stacked_width
+        self.obs_dim = spec.TRACKER_OBS_DIM if ring_tracker else spec.OBS_DIM   # one frame
+        self.history_lags = parse_lags(history_lags)
+        self.history = HistoryStack(self.obs_dim, self.history_lags) if self.history_lags else None
+        self.privileged = bool(privileged)
+        self.actor_dim = stacked_width(self.obs_dim, self.history_lags)
+        self.full_dim = stacked_width(self.obs_dim, self.history_lags, self.privileged)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(self.full_dim,),
                                             dtype=np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, shape=(spec.ACT_DIM,), dtype=np.float32)
         self.laps = int(laps)
@@ -155,13 +190,18 @@ class OnboardHoopEnv(gym.Env):
                             sway_deg=sway_deg, hard_start_p=hard_start_p, ramp=ramp,
                             open_plane=open_plane, wash_deg=wash_deg, start_mode=start_mode)
         self._seed = int(seed)
+        # curriculum (training only): this share of episodes starts lined up just in front of
+        # the ring (sim.place_near_pass), so most of the episode is the loop after the pass.
+        # Its own random stream, so near_pass_p = 0 leaves every other draw unchanged.
+        self.near_pass_p = float(near_pass_p)
+        self._np_rng = np.random.default_rng(self._seed + 7_777)
         if self.laps != 1:
             max_episode_sec = max(max_episode_sec, LAP_EPISODE_SEC)
         self.base_ticks = self.max_ticks = int(max_episode_sec * spec.CTRL_HZ)
         self.hard_ticks = int(max(max_episode_sec, HARD_START_EPISODE_SEC) * spec.CTRL_HZ)
         self._found_once = True
         self.sim: Optional[OnboardSim] = None
-        self.builder = ObsBuilder()
+        self.builder = ObsBuilder(width=self.obs_dim)
         self._ticks = 0
         self.passes = 0
         self._dir = 0            # required crossing direction along the ring normal; 0 = either
@@ -195,7 +235,7 @@ class OnboardHoopEnv(gym.Env):
             side = self._return_wp()
             phi = -(float(np.linalg.norm(self.sim.pos - side))
                     + float(np.linalg.norm(side - (c - n * d * APPROACH_M))) + 2 * APPROACH_M)
-            return phi + W_FACE * self._facing(c)
+            return phi + self.rw["w_face"] * self._facing(c)
         s_eff = axial * d
         lined_up = (self._armed and -0.45 < s_eff < 0.05
                     and radial < 1.2 * self.sim.ring.radius)
@@ -203,8 +243,8 @@ class OnboardHoopEnv(gym.Env):
             phi = -float(np.linalg.norm(self.sim.pos - (c + n * d * APPROACH_M)))
         else:
             phi = -(float(np.linalg.norm(self.sim.pos - (c - n * d * APPROACH_M))) + 2 * APPROACH_M)
-        return (phi - AXIS_PULL * radial * float(np.exp(-(axial / AXIS_PULL_LEN_M) ** 2))
-                + W_FACE * self._facing(c + n * d * FACE_AHEAD_M))
+        return (phi - self.rw["axis_pull"] * radial * float(np.exp(-(axial / AXIS_PULL_LEN_M) ** 2))
+                + self.rw["w_face"] * self._facing(c + n * d * self.rw["face_ahead_m"]))
 
     def _side_axis(self) -> np.ndarray:
         n = self.sim.ring.normal
@@ -213,7 +253,7 @@ class OnboardHoopEnv(gym.Env):
 
     def _return_wp(self) -> np.ndarray:
         c = self.sim.ring.centre
-        wp = c + self._ret_side * RETURN_SIDE_M * self._side_axis()
+        wp = c + self._ret_side * self.rw["return_side_m"] * self._side_axis()
         wp[2] = c[2]
         return wp
 
@@ -224,7 +264,7 @@ class OnboardHoopEnv(gym.Env):
         side = 1.0 if float(np.dot(self.sim.pos - c, u)) >= 0 else -1.0
         lim = CAGE_XY - 0.17
         for s in (side, -side):
-            wp = c + s * RETURN_SIDE_M * u
+            wp = c + s * self.rw["return_side_m"] * u
             if abs(wp[0]) <= lim and abs(wp[1]) <= lim:
                 return s
         return side
@@ -239,7 +279,7 @@ class OnboardHoopEnv(gym.Env):
 
     def _drain(self) -> float:
         """The time penalty of every tick left in this episode (0 with DRAIN off)."""
-        return W_TIME * max(0, self.max_ticks - self._ticks) if DRAIN else 0.0
+        return self.rw["w_time"] * max(0, self.max_ticks - self._ticks) if self.rw["drain"] else 0.0
 
     def _reset_shaping(self):
         """Restart the potential from where the drone is now (a new episode or a new leg), so a
@@ -254,6 +294,8 @@ class OnboardHoopEnv(gym.Env):
         if self.sim is None:
             self.sim = OnboardSim(seed=s, **self._kwargs)
         ring_obs = self.sim.reset(seed=s)
+        if self.near_pass_p > 0 and self._np_rng.random() < self.near_pass_p:
+            ring_obs = self.sim.place_near_pass(self._np_rng)
         self.builder.reset()
         self._ticks = 0
         self.max_ticks = self.base_ticks if self.sim.start_type == "front" else self.hard_ticks
@@ -265,10 +307,21 @@ class OnboardHoopEnv(gym.Env):
         axial, _ = self._axial_radial()
         # through the ring from the side it starts on; starting in (or near) the ring's plane,
         # beside or below it, either direction counts for the first pass
-        self._dir = 0 if abs(axial) < ARM_DIST_M else (-1 if axial > 0 else 1)
+        self._dir = 0 if abs(axial) < self.rw["arm_dist_m"] else (-1 if axial > 0 else 1)
         self._reset_shaping()
         obs = self.builder.build(ring_obs, self.sim.state(), self.sim.t)
-        return obs, {}
+        if self.history is not None:
+            self.history.reset()
+        return self._wrap_obs(obs), {}
+
+    def _wrap_obs(self, obs):
+        """One frame -> what the policy sees (history stack, then the critic's privileged inputs)."""
+        if self.history is not None:
+            obs = self.history.push(obs)
+        if self.privileged:
+            from .history import privileged_features
+            obs = np.concatenate([obs, privileged_features(self)]).astype(np.float32)
+        return obs
 
     def step(self, action):
         a = np.asarray(action, dtype=float).reshape(-1)[:spec.ACT_DIM]
@@ -284,18 +337,24 @@ class OnboardHoopEnv(gym.Env):
             self._returned = returned_now = True
         if not self._armed and self._returned:
             axial, _ = self._axial_radial()
-            if axial * self._dir < -ARM_DIST_M:          # flown clear: the next pass counts
+            if axial * self._dir < -self.rw["arm_dist_m"]:   # flown clear: the next pass counts
                 self._armed = True
         phi = self._potential()
         if returned_now:
             self._phi = phi                              # a new stage of the lap: no jump paid
-        reward = (W_SHAPE * (phi - self._phi)
-                  - W_TIME
-                  - rim_penalty(self.sim.rim_distance()))
+        reward = (self.rw["w_shape"] * (phi - self._phi)
+                  - self.rw["w_time"]
+                  - self.rw["w_rim"] * float(np.clip(
+                      1.0 - self.sim.rim_distance() / self.rw["rim_margin_m"], 0.0, 1.0)))
         self._phi = phi
+        if self.rw["w_dwell"] > 0:
+            axial, radial = self._axial_radial()
+            if (abs(axial) < DWELL_BAND_M and radial < self.sim.ring.radius
+                    and float(a[spec.ACT_FB]) < DWELL_FB_MIN):
+                reward -= self.rw["w_dwell"]
         if ring_obs.found and not self._found_once:
             self._found_once = True
-            reward += R_FOUND
+            reward += self.rw["r_found"]
 
         terminated = False
         info = {"phase": "flying", "start_type": self.sim.start_type, "wrong_way": False}
@@ -305,14 +364,14 @@ class OnboardHoopEnv(gym.Env):
             info["radial_m"] = o.radial_m
             facing = float(np.dot(self.sim.forward, self.sim.ring.normal * o.direction))
             right_way = self.laps == 1 or (self._armed and self._dir in (0, o.direction))
-            if o.passed and right_way and facing < PASS_FACING_MIN:
+            if o.passed and right_way and facing < self.rw["pass_facing_min"]:
                 info["phase"] = "blind_pass"             # backwards / sideways: counts for nothing
                 self.sim.clear_outcome()
                 self._reset_shaping()
             elif o.passed:
                 if right_way:
                     self.streak_mult = min(1.0 + self.streak * self.passes, max(1.0, self.streak_cap))
-                    reward += R_PASSED * self.streak_mult
+                    reward += self.rw["r_passed"] * self.streak_mult
                     self.passes += 1
                     info["phase"] = "passed"
                     terminated = self.laps > 0 and self.passes >= self.laps
@@ -326,7 +385,7 @@ class OnboardHoopEnv(gym.Env):
                         self._armed = False
                         self._found_once = False         # finding it again is paid again
                 else:
-                    reward += R_WRONG_WAY
+                    reward += self.rw["r_wrong_way"]
                     info["phase"] = "wrong_way"
                     info["wrong_way"] = True
                 if not terminated:
@@ -334,15 +393,15 @@ class OnboardHoopEnv(gym.Env):
                     self._reset_shaping()
             elif o.struck:
                 terminated = True
-                reward += R_STRUCK - self._drain()
+                reward += self.rw["r_struck"] - self._drain()
                 info["phase"] = "struck"
             else:
                 terminated = True
-                reward += R_MISSED - self._drain()
+                reward += self.rw["r_missed"] - self._drain()
                 info["phase"] = "missed"
         if not terminated and self.sim.out_of_cage():
             terminated = True
-            reward += R_OUT_OF_CAGE - self._drain()
+            reward += self.rw["r_out_of_cage"] - self._drain()
             info["phase"] = "out_of_cage"
 
         truncated = (not terminated) and self._ticks >= self.max_ticks
@@ -357,7 +416,7 @@ class OnboardHoopEnv(gym.Env):
         info["returned"] = bool(self._returned)
         info["streak_mult"] = float(self.streak_mult)
         info["range_m"] = float(ring_obs.range_m)
-        return obs, float(reward), terminated, truncated, info
+        return self._wrap_obs(obs), float(reward), terminated, truncated, info
 
     # -- dashboard (callable through VecEnv.env_method, so they work in subprocess envs) -----
     def telemetry(self) -> dict:

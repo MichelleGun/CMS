@@ -1,0 +1,339 @@
+[
+  {
+    "path": "results\\hoop\\runs\\n7_dapg_from_dagger",
+    "model": "results\\hoop\\runs\\n7_dapg_from_dagger\\best_model.zip",
+    "lap_dir": "same",
+    "history": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "asym": true,
+    "laps": {
+      "laps": 0.7037037037037037,
+      "clean": 0.0,
+      "best": 1,
+      "episodes": 27,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 0.67,
+        "zone_2": 0.67,
+        "zone_3": 0.67,
+        "zone_4": 1.0,
+        "zone_5": 0.67,
+        "zone_6": 0.67,
+        "zone_7": 1.0,
+        "zone_8": 1.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 11,
+        "struck": 12,
+        "timeout": 4
+      }
+    },
+    "front_pass": 0.2222222222222222,
+    "harsh_laps": 0.6666666666666666
+  },
+  {
+    "path": "results\\hoop\\runs\\n6_same_from_W",
+    "model": "results\\hoop\\runs\\n6_same_from_W\\best_model.zip",
+    "lap_dir": "same",
+    "history": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "asym": true,
+    "laps": {
+      "laps": 0.5925925925925926,
+      "clean": 0.037037037037037035,
+      "best": 2,
+      "episodes": 27,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 1.0,
+        "zone_2": 0.0,
+        "zone_3": 1.0,
+        "zone_4": 1.0,
+        "zone_5": 0.67,
+        "zone_6": 0.0,
+        "zone_7": 0.67,
+        "zone_8": 1.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 5,
+        "struck": 11,
+        "timeout": 11
+      }
+    },
+    "front_pass": 0.8333333333333334,
+    "harsh_laps": 0.6666666666666666
+  },
+  {
+    "path": "results\\hoop\\runs\\n5_same_from_frontC",
+    "model": "results\\hoop\\runs\\n5_same_from_frontC\\best_model.zip",
+    "lap_dir": "same",
+    "history": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "asym": true,
+    "laps": {
+      "laps": 0.48148148148148145,
+      "clean": 0.0,
+      "best": 1,
+      "episodes": 27,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 0.33,
+        "zone_2": 0.33,
+        "zone_3": 1.0,
+        "zone_4": 0.67,
+        "zone_5": 0.33,
+        "zone_6": 0.33,
+        "zone_7": 0.67,
+        "zone_8": 0.67,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 9,
+        "struck": 10,
+        "timeout": 8
+      }
+    },
+    "front_pass": 0.7222222222222222,
+    "harsh_laps": 0.6666666666666666
+  },
+  {
+    "path": "hardware\\flights\\bc\\dagger_n1_r6",
+    "model": "hardware\\flights\\bc\\dagger_n1_r6\\bc_model.zip",
+    "lap_dir": "same",
+    "history": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "asym": true,
+    "laps": {
+      "laps": 0.9629629629629629,
+      "clean": 0.037037037037037035,
+      "best": 3,
+      "episodes": 27,
+      "min_zone": 0.3333333333333333,
+      "zones": {
+        "zone_1": 1.33,
+        "zone_2": 1.0,
+        "zone_3": 1.0,
+        "zone_4": 0.67,
+        "zone_5": 0.33,
+        "zone_6": 1.67,
+        "zone_7": 1.0,
+        "zone_8": 1.33,
+        "zone_9": 0.33
+      },
+      "outcomes": {
+        "out_of_cage": 6,
+        "struck": 17,
+        "timeout": 4
+      }
+    },
+    "front_pass": 0.8333333333333334,
+    "harsh_laps": 0.6666666666666666
+  },
+  {
+    "path": "hardware\\flights\\bc\\dagger_n1_r7",
+    "model": "hardware\\flights\\bc\\dagger_n1_r7\\bc_model.zip",
+    "lap_dir": "same",
+    "history": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "asym": true,
+    "laps": {
+      "laps": 1.0,
+      "clean": 0.0,
+      "best": 2,
+      "episodes": 27,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 0.67,
+        "zone_2": 1.33,
+        "zone_3": 1.0,
+        "zone_4": 1.0,
+        "zone_5": 1.33,
+        "zone_6": 1.33,
+        "zone_7": 1.33,
+        "zone_8": 1.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 6,
+        "struck": 19,
+        "timeout": 2
+      }
+    },
+    "front_pass": 0.8333333333333334,
+    "harsh_laps": 0.6666666666666666
+  },
+  {
+    "path": "hardware\\flights\\bc\\dagger_n1_r10",
+    "model": "hardware\\flights\\bc\\dagger_n1_r10\\bc_model.zip",
+    "lap_dir": "same",
+    "history": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "asym": true,
+    "laps": {
+      "laps": 1.037037037037037,
+      "clean": 0.14814814814814814,
+      "best": 2,
+      "episodes": 27,
+      "min_zone": 0.3333333333333333,
+      "zones": {
+        "zone_1": 1.67,
+        "zone_2": 1.33,
+        "zone_3": 1.0,
+        "zone_4": 0.67,
+        "zone_5": 1.33,
+        "zone_6": 1.0,
+        "zone_7": 1.0,
+        "zone_8": 1.0,
+        "zone_9": 0.33
+      },
+      "outcomes": {
+        "out_of_cage": 6,
+        "struck": 13,
+        "timeout": 8
+      }
+    },
+    "front_pass": 0.8888888888888888,
+    "harsh_laps": 0.7777777777777778
+  },
+  {
+    "path": "hardware\\flights\\bc\\dagger_n4alt_r0",
+    "model": "hardware\\flights\\bc\\dagger_n4alt_r0\\bc_model.zip",
+    "lap_dir": "alternate",
+    "history": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "asym": true,
+    "laps": {
+      "laps": 1.3703703703703705,
+      "clean": 0.3333333333333333,
+      "best": 4,
+      "episodes": 27,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 1.67,
+        "zone_2": 1.33,
+        "zone_3": 1.33,
+        "zone_4": 2.33,
+        "zone_5": 1.0,
+        "zone_6": 2.67,
+        "zone_7": 1.0,
+        "zone_8": 1.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 8,
+        "struck": 9,
+        "timeout": 10
+      }
+    },
+    "front_pass": 0.7777777777777778,
+    "harsh_laps": 0.7777777777777778
+  },
+  {
+    "path": "results\\hoop\\runs\\w10_laps3_W_trk_pure",
+    "model": "results\\hoop\\runs\\w10_laps3_W_trk_pure\\best_model.zip",
+    "lap_dir": "same",
+    "history": null,
+    "asym": false,
+    "laps": {
+      "laps": 0.6296296296296297,
+      "clean": 0.0,
+      "best": 1,
+      "episodes": 27,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 1.0,
+        "zone_2": 0.33,
+        "zone_3": 0.67,
+        "zone_4": 0.67,
+        "zone_5": 0.67,
+        "zone_6": 0.67,
+        "zone_7": 0.67,
+        "zone_8": 1.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 8,
+        "struck": 17,
+        "timeout": 2
+      }
+    },
+    "front_pass": 0.7777777777777778,
+    "harsh_laps": 0.6666666666666666
+  },
+  {
+    "path": "results\\hoop\\runs\\w10_front_C_kl",
+    "model": "results\\hoop\\runs\\w10_front_C_kl\\best_model.zip",
+    "lap_dir": "same",
+    "history": null,
+    "asym": false,
+    "laps": {
+      "laps": 0.4444444444444444,
+      "clean": 0.0,
+      "best": 1,
+      "episodes": 27,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 0.67,
+        "zone_2": 0.33,
+        "zone_3": 0.33,
+        "zone_4": 0.33,
+        "zone_5": 0.0,
+        "zone_6": 0.33,
+        "zone_7": 1.0,
+        "zone_8": 1.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 15,
+        "struck": 5,
+        "timeout": 7
+      }
+    },
+    "front_pass": 0.7777777777777778,
+    "harsh_laps": 0.5555555555555556
+  }
+]

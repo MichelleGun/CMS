@@ -1,0 +1,140 @@
+{
+  "teacher": {
+    "laps": 4.222222222222222,
+    "clean": 1.0,
+    "best": 5,
+    "min_zone": 3.5,
+    "zones": {
+      "zone_1": 4.5,
+      "zone_2": 4.5,
+      "zone_3": 4.5,
+      "zone_4": 4.0,
+      "zone_5": 4.5,
+      "zone_6": 3.5,
+      "zone_7": 4.5,
+      "zone_8": 4.5,
+      "zone_9": 3.5
+    },
+    "outcomes": {
+      "timeout": 18
+    }
+  },
+  "rounds": [
+    {
+      "round": 0,
+      "ticks": 46748,
+      "samples": 46748,
+      "teacher_share": 1.0,
+      "rim_m": 0.06,
+      "mse": 0.0011183606295525575,
+      "clone": "hardware\\flights\\bc\\dagger_n4alt_r0",
+      "laps": 1.2777777777777777,
+      "clean": 0.2777777777777778,
+      "best": 3,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 1.5,
+        "zone_2": 2.0,
+        "zone_3": 0.5,
+        "zone_4": 1.5,
+        "zone_5": 1.5,
+        "zone_6": 3.0,
+        "zone_7": 1.0,
+        "zone_8": 0.5,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 5,
+        "struck": 7,
+        "timeout": 6
+      }
+    },
+    {
+      "round": 1,
+      "ticks": 40033,
+      "samples": 86781,
+      "teacher_share": 0.07696150675692554,
+      "rim_m": 0.048,
+      "mse": 0.005337985815492092,
+      "clone": "hardware\\flights\\bc\\dagger_n4alt_r1",
+      "laps": 0.05555555555555555,
+      "clean": 0.0,
+      "best": 1,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 0.0,
+        "zone_2": 0.0,
+        "zone_3": 0.0,
+        "zone_4": 0.0,
+        "zone_5": 0.0,
+        "zone_6": 0.5,
+        "zone_7": 0.0,
+        "zone_8": 0.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 8,
+        "struck": 9,
+        "timeout": 1
+      }
+    },
+    {
+      "round": 2,
+      "ticks": 28852,
+      "samples": 115633,
+      "teacher_share": 0.07708304450298073,
+      "rim_m": 0.036,
+      "mse": 0.004336011113690711,
+      "clone": "hardware\\flights\\bc\\dagger_n4alt_r2",
+      "laps": 0.1111111111111111,
+      "clean": 0.0,
+      "best": 1,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 0.0,
+        "zone_2": 0.0,
+        "zone_3": 0.5,
+        "zone_4": 0.0,
+        "zone_5": 0.0,
+        "zone_6": 0.0,
+        "zone_7": 0.5,
+        "zone_8": 0.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 5,
+        "struck": 9,
+        "timeout": 4
+      }
+    }
+  ],
+  "best": {
+    "round": 0,
+    "ticks": 46748,
+    "samples": 46748,
+    "teacher_share": 1.0,
+    "rim_m": 0.06,
+    "mse": 0.0011183606295525575,
+    "clone": "hardware\\flights\\bc\\dagger_n4alt_r0",
+    "laps": 1.2777777777777777,
+    "clean": 0.2777777777777778,
+    "best": 3,
+    "min_zone": 0.0,
+    "zones": {
+      "zone_1": 1.5,
+      "zone_2": 2.0,
+      "zone_3": 0.5,
+      "zone_4": 1.5,
+      "zone_5": 1.5,
+      "zone_6": 3.0,
+      "zone_7": 1.0,
+      "zone_8": 0.5,
+      "zone_9": 0.0
+    },
+    "outcomes": {
+      "out_of_cage": 5,
+      "struck": 7,
+      "timeout": 6
+    }
+  }
+}

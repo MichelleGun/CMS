@@ -22,15 +22,28 @@ from .ring_detect import RingObs
 MIN_DT = 0.02           # s; below this, reuse the previous yaw rate instead of dividing
 MAX_YAW_RATE = 360.0    # deg/s, clamp
 MAX_PUSH_DT = 0.5       # s; a telemetry gap longer than this is not integrated as distance
-VGX_TO_MPS = 0.01       # Tello vgx -> m/s. UNVERIFIED unit: the sim reports cm/s, the same
-                        # assumption the `vel` field's VEL_NORM makes (config.yaml has dm/s);
-                        # calibrate_speed.py's result must be applied to both together.
+VGX_TO_MPS = 0.01       # Tello vgx -> m/s (kept for upgrade_obs on very old demos only)
+# Since 2026-10-13 the policy gets NO speed from telemetry, in the sim or on the drone: the real
+# Tello's vgx/vgy/vgz in the cage are +-1 jitter with no direction (28 real flights,
+# hardware/privileged/reports/sim_fidelity.md), while the sim reported clean speeds, and the
+# policies leaned on them (v4: 93 % passes in sim, 5 % with them blanked). So the `vel` field is
+# always 0, and the forward odometer `pushed` is dead-reckoned from the forward command actually
+# executed, at the nominal full-stick speed. Both are computed the same way in both worlds.
+BLANK_VELOCITY = True
+NOMINAL_FWD_MPS = spec.RC_MAX / 125.0      # sim.RC_PER_MPS; the real figure is not measured yet
 
 
 def push_step(pushed_m: float, vgx: float, dt: float) -> float:
-    """One step of the forward odometer: forward speed x dt, never below zero (backing up
-    takes distance off, but the drone cannot be "behind" where it last saw the ring)."""
+    """One step of the forward odometer from a vgx reading (cm/s). Only upgrade_obs uses it, for
+    demos recorded before the command odometer."""
     return max(0.0, pushed_m + float(vgx) * VGX_TO_MPS * dt)
+
+
+def push_step_cmd(pushed_m: float, fb_action: float, dt: float) -> float:
+    """One step of the forward odometer from the executed forward command (-1..1): command x
+    nominal speed x dt, never below zero (backing up takes distance off, but the drone cannot be
+    "behind" where it last saw the ring)."""
+    return max(0.0, pushed_m + float(fb_action) * NOMINAL_FWD_MPS * dt)
 
 
 PASS_DETECT_MAX_RANGE_M = 0.8   # a pass is only declared after a close sighting ...
@@ -122,6 +135,88 @@ def upgrade_obs(obs, episode=None, t=None) -> np.ndarray:
     return out
 
 
+def refresh_obs(obs, episode=None, t=None) -> np.ndarray:
+    """Recorded observations (any width, any date) -> exactly what today's ObsBuilder would have
+    built: today's layout (upgrade_obs), the `vel` field blanked, and `pushed`, the pass heading
+    and the streak replayed from the command odometer (the newest executed forward command is in
+    the action history of the same row). Idempotent."""
+    obs = upgrade_obs(np.asarray(obs, dtype=np.float32), episode, t)
+    if obs.ndim != 2:
+        return obs
+    out = obs.copy()
+    s = spec.OBS_SLICES
+    if BLANK_VELOCITY:
+        out[:, s["vel"]] = 0.0
+    i_age, i_last, i_rate = s["age"].start, s["last_range"].start, s["att"].start + 2
+    i_fb = s["actions"].stop - spec.ACT_DIM + spec.ACT_FB
+    ep = np.zeros(len(obs), np.int64) if episode is None else np.asarray(episode)
+    tt = np.arange(len(obs)) * spec.CTRL_DT if t is None else np.asarray(t, dtype=float)
+    det = PassDetector()
+    run = yaw = 0.0
+    last_range = None
+    for i in range(len(obs)):
+        new_ep = i == 0 or ep[i] != ep[i - 1]
+        dt_raw = 0.0 if new_ep else float(tt[i] - tt[i - 1])
+        dt = float(np.clip(dt_raw, 0.0, MAX_PUSH_DT))
+        fresh = obs[i, i_age] <= 1e-6
+        if new_ep:
+            det.reset()
+            run = yaw = 0.0
+            last_range = None
+        else:
+            yaw += float(obs[i, i_rate]) * spec.YAWRATE_NORM * dt_raw
+        if new_ep or fresh:
+            run = 0.0
+        else:
+            run = push_step_cmd(run, obs[i, i_fb], dt)
+        if fresh:
+            last_range = float(obs[i, i_last]) * spec.RANGE_NORM
+        det.step(bool(fresh), last_range, run, yaw)
+        (hc, hs), streak = det.fields(yaw)
+        out[i, s["pushed"]] = min(run / spec.RANGE_NORM, 1.0)
+        out[i, s["pass_heading"]] = (hc, hs)
+        out[i, s["streak"]] = streak
+    return out
+
+
+def add_tracker(obs, episode=None, t=None) -> np.ndarray:
+    """37-wide observations (as refresh_obs returns them) -> 41 wide, the RingTracker fields
+    replayed from columns the observation already has: a fresh detection is age == 0 with the
+    centre and range of that row, the heading is the integrated yaw rate, the height is the
+    `height` field, and the executed command is the newest one in the action history. A 41-wide
+    input gets its tracker columns recomputed the same way."""
+    obs = np.asarray(obs, dtype=np.float32)
+    base = obs[:, :spec.OBS_DIM]
+    s = spec.OBS_SLICES
+    ep = np.zeros(len(obs), np.int64) if episode is None else np.asarray(episode)
+    tt = np.arange(len(obs)) * spec.CTRL_DT if t is None else np.asarray(t, dtype=float)
+    a0 = s["actions"].stop - spec.ACT_DIM
+    tr = RingTracker()
+    out = np.zeros((len(obs), spec.TRACKER_OBS_DIM - spec.OBS_DIM), np.float32)
+    yaw = 0.0
+    for i in range(len(obs)):
+        new_ep = i == 0 or ep[i] != ep[i - 1]
+        dt_raw = 0.0 if new_ep else float(tt[i] - tt[i - 1])
+        if new_ep:
+            tr.reset()
+            yaw = 0.0
+        else:
+            yaw += float(base[i, s["att"].start + 2]) * spec.YAWRATE_NORM * dt_raw
+        fresh = base[i, s["age"].start] <= 1e-6
+        # the range column is clipped at RANGE_NORM; the apparent size is not, and the detector's
+        # range is exactly ring diameter / (2 tan(HFOV/2) x major/width)
+        scale = float(base[i, s["scale"].start]) / spec.SCALE_NORM
+        rng = (spec.RING_DIAMETER_M / (2.0 * RingTracker.HALF_TAN * scale) if scale > 1e-6
+               else float("inf"))
+        cx, cy = (float(v) for v in base[i, s["centre"]])
+        tr.step(bool(fresh), cx, cy, rng, yaw,
+                float(base[i, s["height"].start]) * spec.HEIGHT_NORM / 100.0,
+                float(base[i, a0 + spec.ACT_FB]), float(base[i, a0 + spec.ACT_LR]),
+                float(np.clip(dt_raw, 0.0, MAX_PUSH_DT)))
+        out[i] = tr.fields()
+    return np.concatenate([base, out], axis=1)
+
+
 def _num(state: dict, key: str, default: float = 0.0) -> float:
     """Tello state values, defensively. A regular Tello leaves EDU-only keys absent, and
     djitellopy can hand back a str for a malformed packet."""
@@ -140,8 +235,64 @@ def wrap_deg(d: float) -> float:
     return (d + 180.0) % 360.0 - 180.0
 
 
+class RingTracker:
+    """Where the ring is when the camera cannot see it: a dead-reckoned belief state.
+
+    Position of the ring centre in the drone's body frame, metres: (forward, right, up).
+    * Fresh detection: measured. The detector's range is the forward depth (pinhole: the major
+      axis shrinks with depth), and cx, cy are offsets in half-frame-WIDTHS on both axes, so
+      right = cx * tan(HFOV/2) * range and up = -cy * tan(HFOV/2) * range (image y points down).
+    * Otherwise, each tick: the drone's turn rotates the ring the other way round it (telemetry
+      yaw, clockwise-positive), and the drone's own motion is subtracted: forward and sideways
+      from the executed command x the nominal full-stick speed (the same odometer as `pushed`),
+      vertical from the change in height.
+    It drifts while blind (the speed figure is nominal, the drone lags its commands); the `age`
+    field tells the policy how long it has been blind, and each fresh sighting resets it.
+    """
+
+    HALF_TAN = float(np.tan(np.radians(spec.CAMERA_HFOV_DEG) / 2.0))
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.p = np.zeros(3)
+        self.valid = False
+        self._yaw = None
+        self._h = None
+
+    def step(self, fresh: bool, cx: float, cy: float, range_m: float, yaw_deg: float,
+             height_m: float, fb: float, lr: float, dt: float):
+        if self.valid and not fresh:
+            if self._yaw is not None:
+                d = np.radians(wrap_deg(yaw_deg - self._yaw))
+                c, s_ = np.cos(d), np.sin(d)
+                f, r = self.p[0], self.p[1]
+                self.p[0], self.p[1] = f * c + r * s_, r * c - f * s_
+            self.p[0] -= float(fb) * NOMINAL_FWD_MPS * dt
+            self.p[1] -= float(lr) * NOMINAL_FWD_MPS * dt
+            if self._h is not None:
+                self.p[2] -= height_m - self._h
+        if fresh and np.isfinite(range_m) and range_m > 0:
+            self.p = np.array([range_m, cx * self.HALF_TAN * range_m, -cy * self.HALF_TAN * range_m])
+            self.valid = True
+        self._yaw, self._h = yaw_deg, height_m
+
+    def fields(self) -> np.ndarray:
+        """The spec.TRACKER_FIELDS values: ring_est (3) then est_valid (1)."""
+        if not self.valid:
+            return np.zeros(4, np.float32)
+        est = np.clip(self.p / spec.RANGE_NORM, -spec.TRACKER_CLIP, spec.TRACKER_CLIP)
+        return np.append(est, 1.0).astype(np.float32)
+
+
 class ObsBuilder:
-    def __init__(self, act_buffer: int = spec.ACT_BUFFER):
+    def __init__(self, act_buffer: int = spec.ACT_BUFFER, width: int = spec.OBS_DIM):
+        """width: spec.OBS_DIM (37, the default) or spec.TRACKER_OBS_DIM (41: + RingTracker)."""
+        if width not in (spec.OBS_DIM, spec.TRACKER_OBS_DIM):
+            raise ValueError(f"ObsBuilder width must be {spec.OBS_DIM} or {spec.TRACKER_OBS_DIM}")
+        self.width = int(width)
+        self.tracker = RingTracker()
         self.act_buffer = int(act_buffer)
         self._acts = deque(maxlen=self.act_buffer)
         self._prev_yaw: Optional[float] = None
@@ -169,6 +320,8 @@ class ObsBuilder:
         self._pushed_m = 0.0               # forward distance since the last fresh detection
         self._prev_build_t = None
         self.passes = PassDetector()       # heading memory for same-side laps
+        if hasattr(self, "tracker"):
+            self.tracker.reset()
 
     def push_action(self, action):
         """Record what was actually executed (post-clamp), oldest-first in the buffer."""
@@ -205,7 +358,8 @@ class ObsBuilder:
             self._pushed_m = 0.0
         else:
             self._ticks_since_seen = min(self._ticks_since_seen + 1, spec.AGE_NORM)
-            self._pushed_m = push_step(self._pushed_m, _num(state, "vgx"), dt)
+            # the newest action in the buffer is the one executed over the interval just ended
+            self._pushed_m = push_step_cmd(self._pushed_m, float(self._acts[-1][spec.ACT_FB]), dt)
 
         o[s["found"]] = 1.0 if ring.found else 0.0
         o[s["centre"]] = (ring.cx, ring.cy)
@@ -225,14 +379,20 @@ class ObsBuilder:
         o[s["pass_heading"]], o[s["streak"]] = self.passes.fields(yaw)
 
         o[s["height"]] = _num(state, "h") / spec.HEIGHT_NORM
-        o[s["vel"]] = (_num(state, "vgx") / spec.VEL_NORM,
-                       _num(state, "vgy") / spec.VEL_NORM,
-                       _num(state, "vgz") / spec.VEL_NORM)
+        if not BLANK_VELOCITY:
+            o[s["vel"]] = (_num(state, "vgx") / spec.VEL_NORM,
+                           _num(state, "vgy") / spec.VEL_NORM,
+                           _num(state, "vgz") / spec.VEL_NORM)
         o[s["att"]] = (_num(state, "pitch") / spec.ATT_NORM,
                        _num(state, "roll") / spec.ATT_NORM,
                        self.yaw_rate(state, t) / spec.YAWRATE_NORM)
 
         o[s["actions"]] = np.concatenate(list(self._acts))
+        last = self._acts[-1]
+        self.tracker.step(bool(ring.fresh), ring.cx, ring.cy, ring.range_m, yaw,
+                          _num(state, "h") / 100.0, last[spec.ACT_FB], last[spec.ACT_LR], dt)
+        if self.width == spec.TRACKER_OBS_DIM:
+            o = np.concatenate([o, self.tracker.fields()])
         return np.nan_to_num(o, nan=0.0, posinf=0.0, neginf=0.0)
 
 

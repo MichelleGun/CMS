@@ -110,26 +110,55 @@ class Profile:
     height_quant_cm: float = 1.0
     drop_frame_p: float = 0.02
     detect_miss_p: float = 0.05    # a frame where the detector would fail anyway
+    # Per-channel multipliers on the stick -> motion gain, and a separate yaw dead zone (None =
+    # the shared `deadband`). 1.0 / None everywhere reproduces every profile from before
+    # 2026-10-13; "measured" sets them from the real flight logs.
+    gain_fb: float = 1.0
+    gain_lr: float = 1.0
+    gain_ud: float = 1.0
+    gain_yaw: float = 1.0
+    yaw_deadband: Optional[float] = None
+    # Extra fields domain randomisation must leave as they are for THIS profile (on top of
+    # KEEP_FIELDS). Used by stress tests: at dr 1 every other field is re-drawn between "ideal"
+    # and "harsh", so a "lag x2" profile would otherwise silently test ordinary lag.
+    keep: tuple = ()
+
+
+# Fields domain randomisation never moves: they come from the chosen profile as they are.
+KEEP_FIELDS = ("gain_fb", "gain_lr", "gain_ud", "gain_yaw", "yaw_deadband")
 
 
 PROFILES = {
     "ideal": Profile("ideal", 0.15, 0.20, 0.03, 0.02, 0.0, 0.0, 0.004, 1.0, 0.0, 0.0),
     "typical": Profile("typical"),
     "harsh": Profile("harsh", 0.55, 0.85, 0.18, 0.14, 0.035, 3.5, 0.045, 2.0, 0.08, 0.15),
+    # Fitted to the 28 REAL Tello flights (dry runs excluded; hardware/privileged/reports/
+    # sim_fidelity.md, 2026-10-13), relative to the nominal RC_PER_MPS / YAW_DPS_PER_RC:
+    # climb 0.415 vs 0.80 cm/s per rc (from height), yaw 0.40 vs 1.0 deg/s per rc with nothing
+    # below ~6 rc of yaw stick. Forward and sideways could NOT be measured: the real Tello's
+    # vgx/vgy are +-1 jitter with no direction in this cage, so those stay nominal. Lags and delay
+    # stay "typical": the logged telemetry lags the drone itself, so fitted lags mix the two.
+    "measured": Profile("measured", gain_fb=1.0, gain_lr=1.0, gain_ud=0.52, gain_yaw=0.40,
+                        yaw_deadband=0.20),
 }
 
 
-def sample_profile(rng, dr: float) -> Profile:
-    """A drone somewhere between "ideal" and "harsh", `dr` of the way out from "typical"."""
-    typ, lo_p, hi_p = PROFILES["typical"], PROFILES["ideal"], PROFILES["harsh"]
+def sample_profile(rng, dr: float, base: Optional[Profile] = None) -> Profile:
+    """A drone somewhere between "ideal" and "harsh", `dr` of the way out from `base`
+    ("typical" by default). The KEEP_FIELDS come from `base` unchanged."""
+    typ, lo_p, hi_p = base or PROFILES["typical"], PROFILES["ideal"], PROFILES["harsh"]
     vals = {}
+    keep = set(KEEP_FIELDS) | set(getattr(typ, "keep", ()))
     for f in fields(Profile):
-        if f.name == "name":
+        if f.name in ("name", "keep"):
+            continue
+        if f.name in keep:
+            vals[f.name] = getattr(typ, f.name)
             continue
         lo, hi = sorted((getattr(lo_p, f.name), getattr(hi_p, f.name)))
         t = getattr(typ, f.name)
         vals[f.name] = t + dr * (float(rng.uniform(lo, hi)) - t)
-    return Profile(name="randomised", **vals)
+    return Profile(name="randomised", keep=tuple(getattr(typ, "keep", ())), **vals)
 
 
 @dataclass
@@ -253,7 +282,7 @@ class OnboardSim:
                 gust=float(self.rng.uniform(SWING_GUST_MIN, 1)),
                 w=2 * np.pi / float(self.rng.uniform(*SWING_PERIOD_S)),
                 ph=float(self.rng.uniform(0, 2 * np.pi)), ph2=float(self.rng.uniform(0, 2 * np.pi)))
-            self.profile = sample_profile(self.rng, dr)
+            self.profile = sample_profile(self.rng, dr, self.base_profile)
             self.speed_scale = 1.0 + float(self.rng.uniform(-1, 1)) * SPEED_SCALE_DR * dr
             self.yaw_scale = 1.0 + float(self.rng.uniform(-1, 1)) * YAW_SCALE_DR * dr
             self._latency = bool(self.rng.random() < LATENCY_P * dr)
@@ -381,6 +410,33 @@ class OnboardSim:
         return np.array([float(np.clip(p[0], -lim, lim)), float(np.clip(p[1], -lim, lim)),
                          float(np.clip(z, 0.30, CAGE_Z[1] - 0.10))])
 
+    def place_near_pass(self, rng=None) -> "RingObs":
+        """Move the drone (after reset) to 0.40-0.55 m in front of the ring, on its axis and
+        facing through it, on whichever side has more room. A policy that can pass goes
+        through within about a second, its ring tracker having seen the ring on the way in,
+        so the rest of the episode is practice at the loop that follows (curriculum for the
+        laps task: the way round is otherwise reached about once per episode)."""
+        rng = self.rng if rng is None else rng
+        c = self.ring.centre
+        n = self.ring.normal.copy()
+        n[2] = 0.0
+        n /= np.linalg.norm(n) + 1e-12
+        lim = CAGE_XY - WALL_MARGIN
+        d = max((1.0, -1.0), key=lambda s: lim - float(np.max(np.abs((c - n * s * 0.5)[:2]))))
+        u = np.array([-n[1], n[0], 0.0])
+        p = c - n * d * float(rng.uniform(0.40, 0.55)) + u * float(rng.uniform(-0.04, 0.04))
+        p[2] = c[2] + float(rng.uniform(-0.04, 0.04))
+        p[:2] = np.clip(p[:2], -lim, lim)
+        self.pos = p
+        self.yaw_deg = math.degrees(math.atan2(n[1] * d, n[0] * d)) + float(rng.uniform(-8, 8))
+        self.vel = np.zeros(3)
+        self._prev_pose = (self.pos.copy(), self.yaw_deg)
+        self._prev_side = self._plane_side()
+        self.start_type = "near_pass"
+        if self._tracker is not None:
+            self._tracker.reset()
+        return self.observe()
+
     def _sample_yaw(self) -> float:
         d = self.ring.centre - self.pos
         w = 180.0 if self.start_type != "front" else 25.0 + 10.0 * self.dr_eff
@@ -389,6 +445,7 @@ class OnboardSim:
     def _update_ring(self):
         """The ring swinging on its rope (dr > 0): a pendulum about the knot at its top, along
         this episode's wind direction, plus a little twist."""
+        self._ring_before = self.ring          # the crossing check needs the pose before this step
         sw, wa = self._swing, self._wash
         if (sw is None and wa is None) or self._fixed_ring is not None:
             return
@@ -462,11 +519,22 @@ class OnboardSim:
     def _check_crossing(self, prev_pos):
         """Did this step cross the ring's plane, and if so where relative to the opening.
 
-        Both ends are measured against the ring's CURRENT pose: otherwise a swinging ring sweeping
-        its plane past a still drone reads as a pass (a ring swinging into the drone is a contact)."""
+        The start of the step is measured against the ring as it was BEFORE the step, the end
+        against the ring as it is now (the drone's crossing relative to the ring), and it only
+        counts if the drone itself moved that way, so a ring sweeping past a still or retreating
+        drone is not a pass (a ring swinging into the drone is a contact).
+
+        Until 2026-10-13 both ends were measured against the ring's CURRENT pose. At the moment
+        of a real pass the prop wash eases and the ring swings back towards the drone by a few
+        mm per tick, so the start landed on the same side as the end and a clean, centred pass
+        went unrecorded: about half of all passes in lap mode (hardware/privileged/reports/
+        teacher_gates.md). Every run trained before that date learned with those passes missing."""
         side = self._plane_side()
-        self._prev_side = float(np.dot(prev_pos - self.ring.centre, self.ring.normal))
-        if self.outcome.done or side == 0.0 or np.sign(side) == np.sign(self._prev_side):
+        before = getattr(self, "_ring_before", None) or self.ring
+        self._prev_side = float(np.dot(prev_pos - before.centre, before.normal))
+        moved = float(np.dot(self.pos - prev_pos, self.ring.normal))
+        if (self.outcome.done or side == 0.0 or np.sign(side) == np.sign(self._prev_side)
+                or np.sign(moved) != np.sign(side)):
             self._prev_side = side
             return
         # Linear interpolation to the crossing point.
@@ -506,6 +574,8 @@ class OnboardSim:
         p = self.profile
         a = np.clip(np.nan_to_num(np.asarray(action, dtype=float).reshape(-1)[:4]), -1, 1)
         a = np.where(np.abs(a) < p.deadband, 0.0, a)
+        if p.yaw_deadband is not None and abs(a[spec.ACT_YAW]) < p.yaw_deadband:
+            a[spec.ACT_YAW] = 0.0
 
         self._pending.append((self.t + p.delay_s, a.copy()))
         while self._pending and self._pending[0][0] <= self.t:
@@ -513,9 +583,9 @@ class OnboardSim:
         cmd = self._applied
 
         vmax = MAX_SPEED * self.speed_scale
-        want = (cmd[spec.ACT_FB] * vmax * self.forward
-                + cmd[spec.ACT_LR] * vmax * self.right
-                + np.array([0.0, 0.0, cmd[spec.ACT_UD] * vmax]))
+        want = (cmd[spec.ACT_FB] * vmax * p.gain_fb * self.forward
+                + cmd[spec.ACT_LR] * vmax * p.gain_lr * self.right
+                + np.array([0.0, 0.0, cmd[spec.ACT_UD] * vmax * p.gain_ud]))
         # Braking is slower than accelerating, which is the single biggest reason a real
         # Tello overshoots a visual target.
         speeding = np.linalg.norm(want) >= np.linalg.norm(self.vel)
@@ -529,7 +599,7 @@ class OnboardSim:
         prev_pos = self.pos.copy()
         self._prev_pose = (prev_pos, self.yaw_deg)
         self.pos = self.pos + (self.vel + self._drift) * spec.CTRL_DT
-        self.yaw_deg += (-cmd[spec.ACT_YAW] * MAX_YAW_DPS * self.yaw_scale
+        self.yaw_deg += (-cmd[spec.ACT_YAW] * MAX_YAW_DPS * self.yaw_scale * p.gain_yaw
                          + self.rng.normal(0, p.yaw_drift_dps)) * spec.CTRL_DT
         self.yaw_deg = (self.yaw_deg + 180.0) % 360.0 - 180.0
         self.pos[2] = max(self.pos[2], 0.0)
@@ -569,7 +639,10 @@ class OnboardSim:
             "vgz": int(round(v[2] * 100.0)),
             "pitch": int(round(-self._applied[spec.ACT_FB] * 8.0)),
             "roll": int(round(self._applied[spec.ACT_LR] * 8.0)),
-            "yaw": int(round(self.yaw_deg)),
+            # Reported CLOCKWISE-positive, like the real Tello (measured from 79 flights,
+            # hardware/privileged/reports/sim_fidelity.md). yaw_deg itself stays the cage
+            # frame's counter-clockwise heading; only what the drone reports is mirrored.
+            "yaw": int(round(-self.yaw_deg)),
             "bat": int(self.battery),
             "temph": 62,
             "templ": 58,

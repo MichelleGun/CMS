@@ -1,0 +1,70 @@
+[
+  {
+    "path": "C:\\Users\\miche\\AppData\\Local\\Temp\\claude\\c--Users-miche-OneDrive-Documents-Michelle-UTS-SPR-26-RL-ASS3-CMS\\eb0b2e9e-9376-411f-8308-9693271e1876\\scratchpad\\smoke2",
+    "model": "C:\\Users\\miche\\AppData\\Local\\Temp\\claude\\c--Users-miche-OneDrive-Documents-Michelle-UTS-SPR-26-RL-ASS3-CMS\\eb0b2e9e-9376-411f-8308-9693271e1876\\scratchpad\\smoke2\\best_model.zip",
+    "lap_dir": "same",
+    "history": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "asym": true,
+    "laps": {
+      "laps": 0.7777777777777778,
+      "clean": 0.0,
+      "best": 1,
+      "episodes": 9,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 1.0,
+        "zone_2": 0.0,
+        "zone_3": 1.0,
+        "zone_4": 1.0,
+        "zone_5": 1.0,
+        "zone_6": 1.0,
+        "zone_7": 1.0,
+        "zone_8": 1.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 3,
+        "struck": 3,
+        "timeout": 3
+      }
+    },
+    "front_pass": 0.75
+  },
+  {
+    "path": "results\\hoop\\runs\\w10_laps3_W_trk_pure_ext",
+    "model": "results\\hoop\\runs\\w10_laps3_W_trk_pure_ext\\best_model.zip",
+    "lap_dir": "same",
+    "history": null,
+    "asym": false,
+    "laps": {
+      "laps": 0.6666666666666666,
+      "clean": 0.0,
+      "best": 1,
+      "episodes": 9,
+      "min_zone": 0.0,
+      "zones": {
+        "zone_1": 0.0,
+        "zone_2": 0.0,
+        "zone_3": 1.0,
+        "zone_4": 1.0,
+        "zone_5": 1.0,
+        "zone_6": 1.0,
+        "zone_7": 1.0,
+        "zone_8": 1.0,
+        "zone_9": 0.0
+      },
+      "outcomes": {
+        "out_of_cage": 2,
+        "struck": 7
+      }
+    },
+    "front_pass": 1.0
+  }
+]

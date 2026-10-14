@@ -1,0 +1,142 @@
+{
+  "teacher": {
+    "laps": 4.777777777777778,
+    "clean": 1.0,
+    "best": 6,
+    "outcomes": {
+      "timeout": 18
+    }
+  },
+  "rounds": [
+    {
+      "round": 0,
+      "ticks": 32520,
+      "teacher_share": 1.0,
+      "rim_m": 0.06,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_climb_r0",
+      "laps": 0.05555555555555555,
+      "clean": 0.0,
+      "best": 1,
+      "outcomes": {
+        "out_of_cage": 13,
+        "struck": 5
+      }
+    },
+    {
+      "round": 1,
+      "ticks": 23976,
+      "teacher_share": 0.16875208541875208,
+      "rim_m": 0.048,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_climb_r1",
+      "laps": 0.05555555555555555,
+      "clean": 0.0,
+      "best": 1,
+      "outcomes": {
+        "out_of_cage": 9,
+        "struck": 9
+      }
+    },
+    {
+      "round": 2,
+      "ticks": 16389,
+      "teacher_share": 0.13557874183903837,
+      "rim_m": 0.036,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_climb_r2",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "outcomes": {
+        "out_of_cage": 13,
+        "struck": 5
+      }
+    },
+    {
+      "round": 3,
+      "ticks": 17702,
+      "teacher_share": 0.0717997966331488,
+      "rim_m": 0.023999999999999994,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_climb_r3",
+      "laps": 0.1111111111111111,
+      "clean": 0.0,
+      "best": 1,
+      "outcomes": {
+        "out_of_cage": 3,
+        "struck": 9,
+        "timeout": 6
+      }
+    },
+    {
+      "round": 4,
+      "ticks": 18150,
+      "teacher_share": 0.02881542699724518,
+      "rim_m": 0.011999999999999997,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_climb_r4",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "outcomes": {
+        "out_of_cage": 2,
+        "struck": 6,
+        "timeout": 10
+      }
+    },
+    {
+      "round": 5,
+      "ticks": 22417,
+      "teacher_share": 0.008832582415131374,
+      "rim_m": 0.0,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_climb_r5",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "outcomes": {
+        "struck": 7,
+        "timeout": 11
+      }
+    },
+    {
+      "round": 6,
+      "ticks": 25577,
+      "teacher_share": 0.0059037416428822775,
+      "rim_m": 0.0,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_climb_r6",
+      "laps": 0.1111111111111111,
+      "clean": 0.0,
+      "best": 1,
+      "outcomes": {
+        "struck": 17,
+        "timeout": 1
+      }
+    },
+    {
+      "round": 7,
+      "ticks": 18562,
+      "teacher_share": 0.003178536795603922,
+      "rim_m": 0.0,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_climb_r7",
+      "laps": 0.0,
+      "clean": 0.0,
+      "best": 0,
+      "outcomes": {
+        "out_of_cage": 2,
+        "struck": 6,
+        "timeout": 10
+      }
+    },
+    {
+      "round": 8,
+      "ticks": 23326,
+      "teacher_share": 0.01697676412586813,
+      "rim_m": 0.0,
+      "clone": "hardware\\flights\\bc\\dagger_tracker_climb_r8",
+      "laps": 0.5,
+      "clean": 0.0,
+      "best": 1,
+      "outcomes": {
+        "out_of_cage": 7,
+        "struck": 6,
+        "timeout": 5
+      }
+    }
+  ]
+}

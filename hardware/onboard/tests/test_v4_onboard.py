@@ -6,7 +6,7 @@ import pytest
 
 from onboard import spec
 from onboard.gym_env import (OnboardHoopEnv, R_OUT_OF_CAGE, R_STRUCK, W_TIME)
-from onboard.obs import ObsBuilder, upgrade_obs
+from onboard.obs import ObsBuilder, refresh_obs, upgrade_obs
 from onboard.ring_detect import RingObs
 from onboard.sim import OnboardSim, Ring
 
@@ -91,14 +91,18 @@ def test_pushed_counts_forward_flight_since_the_last_sighting():
                    range_m=0.4, age=0)
     lost = RingObs(found=False, fresh=False, age=spec.LOCK_MAX_AGE, range_m=float("inf"))
     sl = spec.OBS_SLICES["pushed"].start
+    from onboard.obs import NOMINAL_FWD_MPS
     o = b.build(seen, {"vgx": 20}, 0.0)
     assert o[sl] == 0.0
+    # the odometer counts the executed forward command (the Tello's vgx carries no direction in
+    # the cage), at the nominal speed: 1 s blind at 0.2 m/s worth of stick
+    b.push_action([0.0, 0.2 / NOMINAL_FWD_MPS, 0.0, 0.0])
     t = 0.0
-    for _ in range(15):                                    # 1 s at 20 cm/s, blind
+    for _ in range(15):
         t += spec.CTRL_DT
-        o = b.build(lost, {"vgx": 20}, t)
+        o = b.build(lost, {"vgx": 0}, t)
     assert abs(o[sl] * spec.RANGE_NORM - 0.20) < 0.02
-    o = b.build(seen, {"vgx": 20}, t + spec.CTRL_DT)       # seen again: back to zero
+    o = b.build(seen, {"vgx": 0}, t + spec.CTRL_DT)        # seen again: back to zero
     assert o[sl] == 0.0
 
 
@@ -119,7 +123,7 @@ def test_upgraded_demos_match_the_builder():
     for width in (33, 34):                               # before `pushed`, before the heading memory
         legacy = full[:, spec.legacy_columns(width)]
         assert legacy.shape[1] == width
-        up = upgrade_obs(legacy, np.array(eps), np.array(ts))
+        up = refresh_obs(legacy, np.array(eps), np.array(ts))   # what load_demo does
         assert up.shape == full.shape
         assert np.allclose(up, full, atol=2e-3)
     env.close()
@@ -193,6 +197,7 @@ def test_widened_onboard_policy_acts_like_the_old_one(tmp_path):
         new_env = OnboardHoopEnv(seed=0)
         wide, _ = load_for_resume(PPO, tmp_path / f"old{width}.zip", new_env, widen_at=_widen_index)
         legacy_fn = load_policy(tmp_path / f"old{width}.zip", algo="ppo")   # old models still fly
+        assert legacy_fn.yaw_converted          # no meta = trained before the clockwise yaw
         keep = spec.legacy_columns(width)
         rng = np.random.default_rng(1)
         for _ in range(5):
@@ -200,5 +205,7 @@ def test_widened_onboard_policy_acts_like_the_old_one(tmp_path):
             a_wide, _ = wide.predict(o, deterministic=True)
             a_old, _ = old.predict(o[keep], deterministic=True)
             assert np.allclose(a_wide, a_old, atol=1e-6)
-            assert np.allclose(legacy_fn(o), np.clip(a_old, -1, 1), atol=1e-6)
+            # converted to the clockwise yaw convention: acts on o as it did on the mirrored o
+            a_conv, _ = old.predict(spec.flip_yaw_obs(o)[keep], deterministic=True)
+            assert np.allclose(legacy_fn(o), np.clip(a_conv, -1, 1), atol=1e-5)
         new_env.close()

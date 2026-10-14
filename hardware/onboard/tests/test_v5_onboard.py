@@ -106,6 +106,7 @@ def test_heading_memory_flips_over_a_turn_round():
     t = 0.0
     o = b.build(close, {"vgx": 24, "yaw": 10}, t)
     assert np.allclose(o[s["pass_heading"]], 0) and o[s["streak"]] == 0
+    b.push_action([0.0, 1.0, 0.0, 0.0])                    # full forward (the odometer counts commands)
     for _ in range(40):                                    # blind push well past 0.4 + 0.15 m
         t += spec.CTRL_DT
         o = b.build(lost, {"vgx": 24, "yaw": 10}, t)

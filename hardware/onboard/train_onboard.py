@@ -21,6 +21,12 @@ behaviour clone and kept close to the demonstrations while it improves.
         --dr 1 --sway-deg 5 --wash-deg 15 --hard-start-p 0.5 --laps 0 \
         --run-id onboard_v4 --out results/hoop/runs/onboard_v4
 
+v6 (2026-10-14 overnight): --history-lags (the actor sees older observations too), --asym-critic
+(the value network also gets the true state; asymmetric actor-critic, Pinto et al. 2018) and
+--net-arch. See hardware/onboard/history.py and aac_policy.py. --w-dwell (default 0.05) costs
+loitering in the opening; --sway-deg now defaults to 2 (the real noodle barely swings when the
+drone goes straight through).
+
 Why the demo term. PPO started from a clone tends to forget it: the first updates are
 driven by a value function that knows nothing yet, and a few bad updates undo what the clone
 learned. Two things stop that here:
@@ -58,10 +64,12 @@ for p in (HW_ROOT, CMS / "scripts"):
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 
+import clearml_sync
 from imitation.record_demo import load_demos, parse_source_weights, sample_weights
 from onboard import spec
 from onboard.gym_env import REWARD_WEIGHTS, OnboardHoopEnv
-from telemetry_callback import CameraCallback, DashboardEvalCallback, PaceCallback, TelemetryCallback
+from telemetry_callback import (CameraCallback, DashboardEvalCallback, PaceCallback, TelemetryCallback,
+                                replace_retry)
 from vec_util import VEC_CHOICES, load_for_resume, make_train_vec_env, resolve_model_path, resolve_vec
 
 UNTIL_STOPPED_BUDGET = 10 ** 12
@@ -77,7 +85,16 @@ def _request_stop(signum, frame):
 
 
 class StopRequestCallback(BaseCallback):
+    """Stops on SIGTERM/CTRL_BREAK, or when <run_dir>/stop.flag appears (how w10_race.py ends a
+    run that has fallen clearly behind: learn() returns, final_model and meta are still written)."""
+    def __init__(self, run_dir=None, every=1000):
+        super().__init__()
+        self.flag = Path(run_dir) / "stop.flag" if run_dir is not None else None
+        self.every = every
+
     def _on_step(self) -> bool:
+        if self.flag is not None and self.n_calls % self.every == 0 and self.flag.exists():
+            _stop_requested["flag"] = True
         return not _stop_requested["flag"]
 
 
@@ -109,12 +126,15 @@ class RampCallback(BaseCallback):
         return True
 
 
-def mirror_signs():
+def mirror_signs(width: int = spec.OBS_DIM):
     """(obs_sign, act_sign): multiplying by these reflects a sample left <-> right (the ring
     on the other side, the drone strafing and turning the other way). Lateral terms flip:
     the ring's image x (now and last seen), sideways speed vgy, roll, yaw rate, and the LR
-    and YAW actions, both the commanded one and those in the action history."""
-    obs = np.ones(spec.OBS_DIM, np.float32)
+    and YAW actions, both the commanded one and those in the action history; with the ring
+    tracker, also the ring's estimated sideways position."""
+    obs = np.ones(width, np.float32)
+    if width == spec.TRACKER_OBS_DIM:
+        obs[spec.TRACKER_SLICES["ring_est"].start + 1] = -1     # right
     sl = spec.OBS_SLICES
     obs[sl["centre"].start] = -1          # cx
     obs[sl["last_centre"].start] = -1     # last cx
@@ -147,6 +167,8 @@ BC_NOISE_STD = 0.02
 def _widen_index(old_width: int) -> int:
     """Where an older policy's observation gets the newer fields: 33 wide (before `pushed`) at the
     end of `last_centre`; 34 wide (before the heading memory) just after `pushed`."""
+    if old_width == spec.OBS_DIM:              # 37 -> 41: the ring tracker's fields go at the end
+        return spec.OBS_DIM
     return spec.layout_slices(old_width)["last_centre"].stop + (1 if old_width == 34 else 0)
 
 
@@ -167,7 +189,45 @@ class EvalSeedReset(BaseCallback):
 def _atomic_write_json(path: Path, obj: dict):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=2))
-    os.replace(tmp, path)
+    replace_retry(tmp, path)            # OneDrive can hold the file for a moment
+
+
+def _policy_spec(args, actor_dim):
+    """(policy class or name, policy_kwargs) for --asym-critic / --net-arch."""
+    pk = {}
+    if getattr(args, "net_arch", None):
+        pk["net_arch"] = [int(x) for x in args.net_arch.split(",")]
+    if getattr(args, "asym_critic", False):
+        from onboard.aac_policy import MaskedActorCriticPolicy
+        pk["actor_dim"] = int(actor_dim)
+        return MaskedActorCriticPolicy, pk
+    return "MlpPolicy", pk
+
+
+def _new_model(train_env, lr, args, ppo_kw, actor_dim=None) -> "BCRegularizedPPO":
+    """A fresh BCRegularizedPPO with the --gamma ... --sde settings (SB3 defaults otherwise)."""
+    kw = dict(ppo_kw)
+    policy, pk = _policy_spec(args, actor_dim or int(train_env.observation_space.shape[0]))
+    if args.sde:
+        # gSDE's noise is latent features x a learned matrix, so its log_std is not the action std;
+        # -2 gives roughly the gentle noise a clone starts with
+        kw.update(use_sde=True, sde_sample_freq=args.sde_sample_freq)
+        pk["log_std_init"] = -2.0 if args.log_std_reset is None else args.log_std_reset
+    if pk:
+        kw["policy_kwargs"] = pk
+    return BCRegularizedPPO(policy, train_env, learning_rate=lr, seed=args.seed,
+                            device="cpu", verbose=1, **kw)
+
+
+def _transplant(parent, model):
+    """Copy every tensor of `parent`'s policy whose name and shape match into `model`'s (a new
+    policy class or noise model on the same layers). -> (copied, fresh) name lists."""
+    src = parent.policy.state_dict()
+    dst = model.policy.state_dict()
+    copied = {k: v for k, v in src.items() if k in dst and dst[k].shape == v.shape}
+    model.policy.load_state_dict({**dst, **copied})
+    model.num_timesteps, model._n_updates = parent.num_timesteps, parent._n_updates
+    return sorted(copied), sorted(set(dst) - set(copied))
 
 
 def _keep_awake(on: bool):
@@ -200,7 +260,7 @@ class BCRegularizedPPO(PPO):
                   bc_augment=False):
         import torch
         self.bc_augment = bool(bc_augment)
-        obs_sign, act_sign = mirror_signs()
+        obs_sign, act_sign = mirror_signs(int(self.observation_space.shape[0]))
         ring_cols, body_cols = noise_columns()
         self._aug = dict(obs_sign=torch.as_tensor(obs_sign), act_sign=torch.as_tensor(act_sign),
                          ring=torch.as_tensor(ring_cols), body=torch.as_tensor(body_cols),
@@ -289,7 +349,21 @@ class BCRegularizedPPO(PPO):
         self.logger.record("bc/mse", float(np.mean(losses)))
 
 
-def _load_demo_set(patterns, weights_arg):
+def _rel_demo_paths(files):
+    """Demo files relative to hardware/flights (what the dashboard calls a demo id), so a later
+    run can be started with the same demos; a file outside that folder keeps its full path."""
+    root = Path(__file__).resolve().parents[1] / "flights"
+    out = []
+    for f in files:
+        p = Path(f).resolve()
+        try:
+            out.append(p.relative_to(root).as_posix())
+        except ValueError:
+            out.append(str(p))
+    return out
+
+
+def _load_demo_set(patterns, weights_arg, ring_tracker=False, full_width=None):
     files = sorted({f for pat in patterns for f in glob.glob(str(pat))})
     if not files:
         sys.exit(f"[ERROR] no demo files match {patterns}")
@@ -297,8 +371,20 @@ def _load_demo_set(patterns, weights_arg):
     tasks = {m.get("task") for m in d["meta"]}
     if tasks != {spec.TASK_NAME}:
         sys.exit(f"[ERROR] demos must all be '{spec.TASK_NAME}' (onboard camera); got {tasks}")
-    if d["obs"].shape[1] != spec.OBS_DIM:
-        sys.exit(f"[ERROR] demo observations are {d['obs'].shape[1]} wide, expected {spec.OBS_DIM}")
+    if full_width is not None and d["obs"].shape[1] == full_width:
+        pass                                   # recorded from this very env (DAgger with history)
+    elif ring_tracker and full_width is None and d["obs"].shape[1] == spec.TRACKER_OBS_DIM:
+        pass                                   # recorded from the tracker env itself (loop_labels.py):
+        #                                        its tracker columns are live, not replayed
+    elif d["obs"].shape[1] != spec.OBS_DIM:
+        sys.exit(f"[ERROR] demo observations are {d['obs'].shape[1]} wide, expected {spec.OBS_DIM}"
+                 + (f" or {full_width}" if full_width else ""))
+    elif full_width is not None:
+        sys.exit("[ERROR] with --history-lags / --asym-critic the BC demos must be recorded from the "
+                 "same env (hardware/privileged/dagger_hist.py), not plain 37-wide flights")
+    elif ring_tracker:                         # replayed from the demo's own columns (obs.add_tracker)
+        from onboard.obs import add_tracker
+        d["obs"] = add_tracker(d["obs"], d["episode"], d["t"])
     sw = dict(DEFAULT_SOURCE_WEIGHTS, **parse_source_weights(weights_arg))
     w = sample_weights(d["source"], sw)
     counts = {s: int((d["source"] == s).sum()) for s in sorted(set(d["source"].tolist()))}
@@ -322,16 +408,40 @@ def main(argv=None):
                          "(default 20000 from a clone, 0 otherwise)")
     ap.add_argument("--lr", type=float, default=None,
                     help="learning rate (default 1e-4 from a clone or an earlier run, 3e-4 from scratch)")
-    ap.add_argument("--profile", choices=["ideal", "typical", "harsh"], default="typical")
+    ap.add_argument("--reward-weights", default=None, metavar="JSON",
+                    help="override reward values by name, as a JSON object, e.g. "
+                         "'{\"r_passed\": 25, \"w_rim\": 0.5}' (names: onboard/gym_env.REWARD_WEIGHTS); "
+                         "streak / streak_cap have their own flags")
+    ap.add_argument("--ring-tracker", action="store_true",
+                    help="add the 4 ring-tracker inputs (obs.RingTracker: where the ring is while it is "
+                         "out of view); a 37-input parent is widened with zero weights on them")
+    ap.add_argument("--profile", choices=["ideal", "typical", "harsh", "measured"], default="typical",
+                    help="'measured' = gains fitted to the real flight logs (onboard/sim.py)")
     ap.add_argument("--dr", type=float, default=0.0,
                     help="domain randomisation strength 0..1 (drone dynamics and calibration, ring "
                          "placement, a swinging ring, detector noise/latency); see onboard/sim.py")
-    ap.add_argument("--sway-deg", type=float, default=5.0,
+    ap.add_argument("--sway-deg", type=float, default=2.0,
                     help="largest swing of the ring on its rope at full wind (deg), with --dr > 0. "
-                         "The real noodle hardly swings on its own (default 5, was 25)")
+                         "The real noodle hardly swings when the drone goes straight through "
+                         "(default 2; 5 before 2026-10-14, 25 before that)")
+    ap.add_argument("--w-dwell", type=float, default=0.05,
+                    help="cost per tick of loitering in the opening without pushing forward "
+                         "(gym_env W_DWELL; 0 = off, as before 2026-10-14)")
+    ap.add_argument("--history-lags", default=None,
+                    help="actor memory: also feed the observations this many ticks ago, e.g. "
+                         "'0,1,2,4,8,16' (onboard/history.py). Default: none")
+    ap.add_argument("--asym-critic", action="store_true",
+                    help="asymmetric actor-critic: the value network also sees the true state "
+                         "(onboard/aac_policy.py); the real drone pads those inputs with zeros")
+    ap.add_argument("--net-arch", default=None,
+                    help="hidden layers of actor and critic, e.g. '256,256' (default SB3's 64,64)")
     ap.add_argument("--wash-deg", type=float, default=15.0,
                     help="largest tilt of the ring when the drone's prop wash pushes it away (deg, "
                          "0 = off): the real noodle tilts up about its rope as the drone nears")
+    ap.add_argument("--near-pass-p", type=float, default=0.0,
+                    help="training only: share of episodes that start lined up just in front of the "
+                         "ring, so most of the episode is the loop after the pass (curriculum for "
+                         "--laps 0). Evaluation keeps the normal starts")
     ap.add_argument("--hard-start-p", type=float, default=0.0,
                     help="share of episodes starting behind / beside / below the ring or anywhere, "
                          "often facing away (the ring must be searched for)")
@@ -363,7 +473,37 @@ def main(argv=None):
                     help="18 = every start zone twice with --start-mode zones")
     ap.add_argument("--run-id", type=str, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--no-clearml", action="store_true",
+                    help="don't sync this run to ClearML (also: CLEARML_OFF=1)")
+    # PPO settings (Week 10 experiments). Left out = SB3's default from scratch, or the parent's
+    # value when continuing a run, i.e. exactly what every run before these flags used.
+    g = ap.add_argument_group("PPO settings (default: SB3 default / the parent's value)")
+    g.add_argument("--gamma", type=float, default=None,
+                   help="discount; 0.99 = ~6.7 s horizon at 15 Hz, 0.995 = ~13 s (one same-side lap)")
+    g.add_argument("--gae-lambda", type=float, default=None)
+    g.add_argument("--ent-coef", type=float, default=None,
+                   help="entropy bonus that keeps exploration noise from collapsing (0.0 so far)")
+    g.add_argument("--target-kl", type=float, default=None,
+                   help="stop an update's epochs early once the mean KL to the rollout policy passes "
+                        "this (trust-region brake, e.g. 0.02)")
+    g.add_argument("--batch-size", type=int, default=None)
+    g.add_argument("--n-epochs", type=int, default=None)
+    g.add_argument("--sde", action="store_true",
+                   help="gSDE: smooth, state-dependent exploration noise instead of independent noise "
+                        "every tick. With --init the parent's layers are copied in; only the noise "
+                        "parameters start fresh (at --log-std-reset, default -2)")
+    g.add_argument("--sde-sample-freq", type=int, default=4,
+                   help="with --sde: draw a new noise matrix every this many ticks")
+    g.add_argument("--log-interval", type=int, default=10,
+                   help="write the train/* rollout/* table (stdout, progress.csv, ClearML) every N updates")
+    g.add_argument("--log-std-reset", type=float, default=None,
+                   help="set the exploration log_std to this before training (e.g. -1 = std 0.37) "
+                        "to undo a collapsed one")
     args = ap.parse_args(argv)
+    ppo_kw = {k: v for k, v in (("gamma", args.gamma), ("gae_lambda", args.gae_lambda),
+                                ("ent_coef", args.ent_coef), ("target_kl", args.target_kl),
+                                ("batch_size", args.batch_size), ("n_epochs", args.n_epochs))
+              if v is not None}
 
     run_dir = args.out
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -387,9 +527,35 @@ def main(argv=None):
     warmup = args.critic_warmup_steps if args.critic_warmup_steps is not None else (
         20_000 if from_clone else 0)
 
+    reward_over = {}
+    if args.reward_weights:
+        try:
+            reward_over = json.loads(args.reward_weights)
+            assert isinstance(reward_over, dict)
+        except (ValueError, AssertionError):
+            sys.exit("[ERROR] --reward-weights must be a JSON object, e.g. '{\"r_passed\": 25}'")
+        bad = sorted(set(reward_over) - set(REWARD_WEIGHTS))
+        if bad:
+            sys.exit(f"[ERROR] unknown reward weight(s) {bad}; names: {sorted(REWARD_WEIGHTS)}")
+        reward_over = {k: v for k, v in reward_over.items() if k not in ("streak", "streak_cap")}
+
+    from onboard.history import PRIV_DIM, parse_lags, stacked_width
+    lags = parse_lags(args.history_lags)
+    frame_w = spec.TRACKER_OBS_DIM if args.ring_tracker else spec.OBS_DIM
+    actor_dim = stacked_width(frame_w, lags)
+    full_w = stacked_width(frame_w, lags, args.asym_critic)
+    v6 = full_w != frame_w
+    if v6 and args.bc_augment:
+        print("[INFO] --bc-augment is off with history / privileged inputs (its mirror map is per frame)")
+        args.bc_augment = False
+    if args.w_dwell:
+        reward_over = dict(reward_over, w_dwell=args.w_dwell)
+
     demo_files, d_obs, d_act, d_w, counts, sw = ([], None, None, None, {}, {})
     if args.demos:
-        demo_files, d_obs, d_act, d_w, counts, sw = _load_demo_set(args.demos, args.source_weight)
+        demo_files, d_obs, d_act, d_w, counts, sw = _load_demo_set(args.demos, args.source_weight,
+                                                                       args.ring_tracker,
+                                                                       full_w if v6 else None)
         print(f"[INFO] BC demos: {len(d_obs)} samples {counts}, weights {sw}")
 
     meta = {
@@ -405,15 +571,25 @@ def main(argv=None):
         "init_kind": ("clone" if from_clone else "run") if init_path else None,
         "init_timesteps": None,
         "learning_rate": lr, "critic_warmup_steps": warmup,
-        "reward": dict(REWARD_WEIGHTS),        # the onboard MDP, shown on the dashboard
+        "reward": dict(REWARD_WEIGHTS, **reward_over, streak=args.streak, streak_cap=args.streak_cap),
+        "reward_overrides": reward_over,       # what this run changed from the defaults
         "laps": args.laps, "lap_dir": args.lap_dir,
         "streak": args.streak, "streak_cap": args.streak_cap,
         "robust": {"dr": args.dr, "sway_deg": args.sway_deg, "hard_start_p": args.hard_start_p,
                    "wash_deg": args.wash_deg, "start_mode": args.start_mode,
-                   "dr_steps": args.dr_steps, "bc_augment": bool(args.bc_augment)},
-        "obs_dim": spec.OBS_DIM,
+                   "dr_steps": args.dr_steps, "bc_augment": bool(args.bc_augment),
+                   "near_pass_p": args.near_pass_p},
+        "obs_dim": full_w,
+        "frame_dim": frame_w,            # one frame: what ObsBuilder builds on the drone
+        "ring_tracker": bool(args.ring_tracker),
+        "obs_history": list(lags) if lags else None,
+        "asym_critic": bool(args.asym_critic), "actor_dim": actor_dim,
+        "priv_dim": PRIV_DIM if args.asym_critic else 0,
+        "net_arch": args.net_arch,
         "ctrl_hz": spec.CTRL_HZ,
-        "bc": ({"demos": [Path(f).name for f in demo_files], "samples": counts, "source_weights": sw,
+        "yaw_convention": spec.YAW_CONVENTION,
+        "bc": ({"demos": [Path(f).name for f in demo_files], "demo_paths": _rel_demo_paths(demo_files),
+                "samples": counts, "source_weights": sw,
                 "coef": args.bc_coef, "coef_min": args.bc_coef_min,
                 "decay_steps": args.bc_decay_steps} if demo_files else None),
         "pid": os.getpid(), "created_at": datetime.now().isoformat(),
@@ -423,10 +599,11 @@ def main(argv=None):
 
     robust = dict(dr=args.dr, sway_deg=args.sway_deg, hard_start_p=args.hard_start_p, laps=args.laps,
                   wash_deg=args.wash_deg, lap_dir=args.lap_dir, start_mode=args.start_mode,
-                  streak=args.streak, streak_cap=args.streak_cap)
+                  streak=args.streak, streak_cap=args.streak_cap, ring_tracker=args.ring_tracker,
+                  reward_weights=reward_over or None, history_lags=lags, privileged=args.asym_critic)
     ramped = args.dr_steps > 0 and (args.dr > 0 or args.hard_start_p > 0)
     env_kwargs = dict(profile=args.profile, seed=args.seed * 100_000, **robust,
-                      ramp=0.0 if ramped else 1.0)
+                      ramp=0.0 if ramped else 1.0, near_pass_p=args.near_pass_p)
     train_env = make_train_vec_env(OnboardHoopEnv, env_kwargs, args.n_envs, seed=args.seed, vec=vec,
                                    rank_seed_kwarg="seed")
     # Evaluation layouts come from a separate stream that training never draws from;
@@ -442,13 +619,37 @@ def main(argv=None):
         try:
             # a parent from before the newer observation fields (33 / 34 inputs) is widened, with
             # zero weights on the new inputs, so it starts out flying exactly as it did
+            def widen_at(old_w):
+                # a plain one-frame parent: its inputs are the current frame, which comes first
+                return old_w if (v6 and old_w == frame_w) else _widen_index(old_w)
             model, _ = load_for_resume(BCRegularizedPPO, init_path, train_env,
-                                       widen_at=_widen_index,
-                                       learning_rate=lr, lr_schedule=lambda _: lr)
+                                       widen_at=widen_at,
+                                       learning_rate=lr, lr_schedule=lambda _: lr, **ppo_kw)
         except ValueError as e:
             train_env.close()
             eval_env.close()
             sys.exit(f"[ERROR] {e}")
+        if spec.old_yaw_convention(init_meta):
+            # trained before the clockwise yaw convention: convert, so it starts out flying
+            # exactly as it did (onboard/spec.py, YAW_CONVENTION)
+            from onboard.policy import convert_old_yaw
+            if convert_old_yaw(model):
+                print("[INFO] parent converted to the clockwise yaw convention")
+            meta["init_yaw_converted"] = True
+        want_cls = _policy_spec(args, actor_dim)[0]
+        same_cls = ((want_cls == "MlpPolicy" and type(model.policy).__name__ == "ActorCriticPolicy")
+                    or (want_cls != "MlpPolicy" and isinstance(model.policy, want_cls)))
+        if args.sde or not same_cls or args.net_arch:
+            # gSDE has different noise parameters, an asymmetric critic a different policy class, so
+            # the parent cannot be loaded as is: build a fresh model and copy every layer whose
+            # shape matches (all of them for the same --net-arch; none of the noise for gSDE).
+            parent = model
+            model = _new_model(train_env, lr, args, ppo_kw, actor_dim)
+            copied, fresh = _transplant(parent, model)
+            print(f"[INFO] new policy ({type(model.policy).__name__}): copied {len(copied)} tensors "
+                  f"from the parent (fresh: {fresh})")
+            meta["init_transplant"] = {"copied": len(copied), "fresh": fresh}
+            del parent
         model.verbose = 1
         if from_clone:
             model.num_timesteps = 0         # a clone has no RL steps of its own
@@ -459,12 +660,26 @@ def main(argv=None):
         print(f"[INFO] starting from {init_path} ({'clone' if from_clone else 'run'}, "
               f"{model.num_timesteps} steps), lr {lr}")
     else:
-        model = BCRegularizedPPO("MlpPolicy", train_env, learning_rate=lr, seed=args.seed,
-                                 device="cpu", verbose=1)
+        model = _new_model(train_env, lr, args, ppo_kw, actor_dim)
+    if args.log_std_reset is not None and not args.sde:
+        with torch.no_grad():
+            model.policy.log_std.fill_(args.log_std_reset)
+        print(f"[INFO] exploration log_std reset to {args.log_std_reset} (std {np.exp(args.log_std_reset):.2f})")
+    meta["ppo"] = {"gamma": model.gamma, "gae_lambda": model.gae_lambda, "ent_coef": model.ent_coef,
+                   "target_kl": model.target_kl, "batch_size": model.batch_size,
+                   "n_epochs": model.n_epochs, "n_steps": model.n_steps, "use_sde": bool(model.use_sde),
+                   "sde_sample_freq": model.sde_sample_freq if model.use_sde else None,
+                   "log_std_reset": args.log_std_reset}
+    _atomic_write_json(run_dir / "meta.json", meta)
+    # progress.csv in the run folder: every train/* rollout/* bc/* value SB3 prints, so runs can be
+    # compared offline (tutorial/week10_compare.ipynb) as well as in ClearML
+    from stable_baselines3.common.logger import configure as sb3_configure
+    model.set_logger(sb3_configure(str(run_dir), ["stdout", "csv"]))
     model.configure(d_obs, d_act, d_w, bc_coef=args.bc_coef, bc_coef_min=args.bc_coef_min,
                     bc_decay_steps=args.bc_decay_steps, critic_warmup_steps=warmup, seed=args.seed,
                     bc_augment=args.bc_augment)
     start_steps = int(model.num_timesteps)
+    sync = clearml_sync.start("onboard-rl", run_dir, meta, no_clearml=args.no_clearml)
     print(f"[INFO] envs {args.n_envs} ({vec}); actor frozen for the first {warmup} steps; "
           f"BC coef {args.bc_coef if demo_files else 0} -> {args.bc_coef_min if demo_files else 0}")
 
@@ -483,14 +698,14 @@ def main(argv=None):
     if ramped:
         watch.append(RampCallback(args.dr_steps))
     callback = CallbackList([*watch, EvalSeedReset(eval_env, args.eval_freq, EVAL_SEED_BASE), eval_cb,
-                             StopRequestCallback()])
+                             sync.callback(eval_cb), StopRequestCallback(run_dir)])
 
     budget = UNTIL_STOPPED_BUDGET if args.until_stopped else args.timesteps
     final_status, final_timesteps = "crashed", 0
     if args.until_stopped:
         _keep_awake(True)
     try:
-        model.learn(total_timesteps=budget, callback=callback, log_interval=10,
+        model.learn(total_timesteps=budget, callback=callback, log_interval=args.log_interval,
                     reset_num_timesteps=init_path is None)
         final_timesteps = model.num_timesteps
         final_status = "stopped" if _stop_requested["flag"] else "completed"
@@ -506,6 +721,7 @@ def main(argv=None):
         meta.update(finished_at=datetime.now().isoformat(), final_status=final_status,
                     final_timesteps=final_timesteps)
         _atomic_write_json(run_dir / "meta.json", meta)
+        sync.finish(final_status)
         for e in (train_env, eval_env):
             try:
                 e.close()
