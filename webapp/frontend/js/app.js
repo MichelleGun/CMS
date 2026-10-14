@@ -12,6 +12,7 @@
   let ws = null;
   let isViewedRunTraining = false;
   let cameraPollTimer = null;
+  let cameraRetryDelay = 150;
   let replayPollTimer = null;
   let lastReplayId = null;
 
@@ -83,17 +84,7 @@
   const live = { lastMsgAt: 0, simT: 0, ep: null, epStart: null, episodes: 0, passes: 0, lastT: 0, evalSuccess: null,
                  showcase: false, showcaseTimer: null, showcaseTarget: null };
 
-  // Load a camera frame off-screen and swap it in only when complete; a frame that fails
-  // (mid-write, not there yet) just keeps the previous one on screen.
-  const frameLoading = new WeakMap();
-  function swapFrame(img, url) {
-    if (frameLoading.get(img)) return;            // previous request still in flight
-    const pre = new Image();
-    frameLoading.set(img, true);
-    pre.onload = () => { img.src = pre.src; frameLoading.set(img, false); };
-    pre.onerror = () => { frameLoading.set(img, false); };
-    pre.src = url;
-  }
+  const swapFrame = Frames.swap;
 
   function fmt(n, d = 2) { return (n === null || n === undefined) ? "-" : Number(n).toFixed(d); }
 
@@ -324,10 +315,15 @@
 
   function backToSetup() {
     autoSelectEnabled = false;
+    const previousRunId = viewedRunId;
+    const previousCameraOn = cameraToggle.checked;
     viewedRunId = null;
     closeLiveSocket();
     stopCameraPolling();
     cameraToggle.checked = false;
+    if (previousRunId && previousCameraOn) {
+      Api.setCamera(previousRunId, false).catch((e) => console.warn("could not disable previous run camera", e));
+    }
     endShowcaseView();
     Scene3D.clearTrail();
     renderRunList();
@@ -552,6 +548,13 @@
   function selectRun(runId, retriesLeft = SELECT_RUN_MAX_RETRIES) {
     if (viewedRunId === runId && retriesLeft === SELECT_RUN_MAX_RETRIES) return;
     if (retriesLeft === SELECT_RUN_MAX_RETRIES) {
+      const previousRunId = viewedRunId;
+      const previousCameraOn = cameraToggle.checked;
+      stopCameraPolling();
+      cameraToggle.checked = false;
+      if (previousRunId && previousRunId !== runId && previousCameraOn) {
+        Api.setCamera(previousRunId, false).catch((e) => console.warn("could not disable previous run camera", e));
+      }
       viewedRunId = runId;
       renderRunList();
       closeLiveSocket();
@@ -568,6 +571,7 @@
     }
 
     Api.getRun(runId).then((r) => {
+      if (viewedRunId !== runId) return;
       const status = r.status || (r.meta.final_status) || (r.live_status && r.live_status.status) || "unknown";
       isViewedRunTraining = status === "training";
       setStatusPill(status);
@@ -888,35 +892,81 @@
 
   // --------------------------------------------------------------- camera
 
+  function showCameraMessage(message) {
+    cameraFrame.hidden = true;
+    cameraPlaceholder.hidden = false;
+    cameraPlaceholder.textContent = message;
+    overlayCameraFrame.hidden = true;
+    overlayCameraPlaceholder.hidden = false;
+    overlayCameraPlaceholder.textContent = message;
+  }
+
   function startCameraPolling() {
     stopCameraPolling();
-    cameraFrame.hidden = false;
-    cameraPlaceholder.hidden = true;
-    overlayCameraFrame.hidden = false;
-    overlayCameraPlaceholder.hidden = true;
-    cameraPollTimer = setInterval(() => {
-      if (!viewedRunId) return;
-      const url = Api.cameraLatestUrl(viewedRunId);
-      swapFrame(cameraFrame, url);
-      if (!live.showcase) swapFrame(overlayCameraFrame, url);
-    }, 200);
+    const runId = viewedRunId;
+    if (!runId) return;
+    cameraRetryDelay = 150;
+    let lastCameraTimestamp = null;
+    let lastCameraFrameAt = 0;
+    showCameraMessage("Connecting to the current run camera…");
+    const poll = async () => {
+      if (viewedRunId !== runId || !cameraToggle.checked) return;
+      await swapFrame([cameraFrame, overlayCameraFrame], Api.cameraLatestUrl(runId), (timestamp) => {
+        if (viewedRunId !== runId) return;
+        const now = performance.now();
+        if (timestamp !== lastCameraTimestamp) {
+          lastCameraTimestamp = timestamp;
+          lastCameraFrameAt = now;
+        }
+        const age = (now - lastCameraFrameAt) / 1000;
+        if (age > 2) {
+          showCameraMessage(`Camera frame is ${age.toFixed(1)}s old; reconnecting…`);
+          cameraRetryDelay = Math.min(cameraRetryDelay * 2, 1200);
+          return;
+        }
+        cameraFrame.hidden = false;
+        cameraPlaceholder.hidden = true;
+        overlayCameraFrame.hidden = live.showcase;
+        overlayCameraPlaceholder.hidden = !live.showcase;
+        cameraRetryDelay = 150;
+      }, (error) => {
+        if (viewedRunId !== runId) return;
+        showCameraMessage(`Camera reconnecting (${error.message})…`);
+        cameraRetryDelay = Math.min(cameraRetryDelay * 2, 1200);
+      });
+      if (viewedRunId === runId && cameraToggle.checked) {
+        cameraPollTimer = setTimeout(poll, cameraRetryDelay);
+      }
+    };
+    poll();
   }
 
   function stopCameraPolling() {
-    if (cameraPollTimer) clearInterval(cameraPollTimer);
+    if (cameraPollTimer) clearTimeout(cameraPollTimer);
     cameraPollTimer = null;
+    Frames.reset([cameraFrame, overlayCameraFrame]);
     cameraFrame.hidden = true;
     cameraPlaceholder.hidden = false;
+    cameraPlaceholder.textContent = "camera off";
     overlayCameraFrame.hidden = true;
     overlayCameraPlaceholder.hidden = false;
+    overlayCameraPlaceholder.textContent = "camera off";
   }
 
   async function onCameraToggle() {
     if (!viewedRunId) { cameraToggle.checked = false; return; }
+    const runId = viewedRunId;
+    const enabled = cameraToggle.checked;
+    if (!enabled) stopCameraPolling();
     try {
-      await Api.setCamera(viewedRunId, cameraToggle.checked);
-    } catch (e) { /* best effort */ }
-    if (cameraToggle.checked) startCameraPolling(); else stopCameraPolling();
+      await Api.setCamera(runId, enabled);
+    } catch (e) {
+      if (viewedRunId === runId) showCameraMessage(`Camera toggle failed (${e.message}); try again.`);
+      console.error("camera toggle failed", e);
+      return;
+    }
+    if (viewedRunId !== runId || cameraToggle.checked !== enabled) return;
+    if (enabled) startCameraPolling();
   }
 
   // --------------------------------------------------------------- replay
@@ -1098,6 +1148,9 @@
         hudSource.innerHTML = 'Far view &middot; <span class="hud-train">training env (' +
           (realtimeToggle.checked ? "real time" : "full speed") + ', exploring)</span>';
       }
+    });
+    document.getElementById("config-btn").addEventListener("click", () => {
+      if (viewedRunId) RunConfig.openModal(viewedRunId);
     });
     document.getElementById("overlay-terminal-toggle").addEventListener("click", () => {
       document.getElementById("overlay-terminal-card").classList.toggle("collapsed");

@@ -6,7 +6,7 @@
 // after this page stops sending them. This module asks once before a real takeoff.
 const Drone = (() => {
   const STATUS_POLL_MS = 1000;
-  const CAMERA_POLL_MS = 400;
+  const CAMERA_POLL_MS = 200;
 
   // The README's Stage C steps, in order. Each one only fills the options form.
   const STAGES = [
@@ -18,10 +18,13 @@ const Drone = (() => {
       text: "Short approach, 0.4 m cap, no blind push. Measure how far it really went." },
     { id: "full", title: "4. Full flight", mode: "expert", max_travel: 1.8,
       text: "Align, approach, and the blind push through the ring." },
-    { id: "human", title: "5. Fly it yourself", mode: "human", record: true, max_travel: 1.8, max_airborne: 60,
-      text: "Keyboard flight, recorded as a demonstration. Save it after landing." },
-    { id: "policy", title: "6. Fly a trained policy", mode: "policy", max_travel: 1.8,
-      text: "A clone from the Imitation tab flies the same safety layers." },
+    { id: "human", title: "5. Fly it yourself", mode: "human", record: true,
+      text: "A pop-up window opens on this computer: click it and fly with the keyboard. " +
+            "Takes off, hovers, climbs to the start height, then the keys are yours." },
+    { id: "policy", title: "6. Fly a trained policy", mode: "policy",
+      text: "Pick a policy below (★ = recommended). Takes off, hovers, climbs to the start " +
+            "height, then the policy flies inside the same safety layers. No travel cap: " +
+            "it laps until the airborne limit, the battery, or you press Land." },
   ];
 
   let flightId = null;
@@ -29,6 +32,7 @@ const Drone = (() => {
   let meta = {};
   let ws = null;
   let cameraTimer = null;
+  let cameraRetryDelay = CAMERA_POLL_MS;
   let lastStatus = null;
   let stage = STAGES[0];
   let answeredFor = null;     // the flight whose save question was answered here
@@ -62,7 +66,7 @@ const Drone = (() => {
   function selectStage(id) {
     stage = STAGES.find((s) => s.id === id) || STAGES[0];
     el.maxTravel.value = stage.max_travel === undefined ? "" : stage.max_travel;
-    el.maxAirborne.value = stage.max_airborne || 40;
+    el.maxAirborne.value = stage.max_airborne || 150;
     el.record.checked = !!stage.record;
     renderStages();
     syncForm();
@@ -73,6 +77,8 @@ const Drone = (() => {
     el.realWarning.hidden = !real;
     el.modelRow.hidden = stage.mode !== "policy";
     el.gainRow.hidden = stage.mode !== "human";
+    el.keysRow.hidden = stage.mode !== "human";
+    showModelInfo();
     el.profileRow.hidden = real;
     el.startBtn.textContent = real ? "Take off (real drone)" : "Start dry run";
     el.startBtn.classList.toggle("danger-btn", real);
@@ -80,18 +86,52 @@ const Drone = (() => {
     el.startBtn.disabled = active;
   }
 
+  let models = [];
+
+  // "<title> — <what it does> · <score>", grouped: recommended, RL policies, clones.
+  // (Before: the raw folder name and "(undefined/undefined in sim)" for RL runs.)
+  function modelLabel(m) {
+    const title = m.title || m.name;
+    const star = m.recommended ? "★ " : (m.starred ? "☆ " : "");
+    return `${star}${title} — ${m.task_label || "hoop"} · ${m.score || "not evaluated yet"}`;
+  }
+
+  function showModelInfo() {
+    if (!el.modelInfo) return;
+    const m = models.find((x) => x.model === el.model.value);
+    el.modelInfo.hidden = stage.mode !== "policy" || !m;
+    if (!m) return;
+    const extras = (m.extras && m.extras.length) ? ` with ${m.extras.join(" + ")}` : "";
+    el.modelInfo.textContent =
+      `${m.method || m.kind}${extras}. Trained for: ${m.task_label || "?"}. ` +
+      `Score: ${m.score || "not evaluated yet"}. Run: ${m.run_id || m.name}`;
+  }
+
   async function loadModels(selectPath) {
     try {
-      const { models } = await Api.getModels();
+      const res = await Api.getModels();
+      models = (res.models || []).filter((m) => m.flyable);
       el.model.replaceChildren();
-      models.filter((m) => m.flyable).forEach((m) => {
-        const opt = document.createElement("option");
-        opt.value = m.model;
-        const ev = (m.evals && m.evals[0]) || m.train_eval;
-        opt.textContent = m.name + (ev ? `  (${ev.passed}/${ev.episodes} in sim)` : "");
-        el.model.appendChild(opt);
+      const groups = [
+        ["Recommended", models.filter((m) => m.recommended)],
+        ["RL policies (PPO)", models.filter((m) => !m.recommended && m.kind === "rl")],
+        ["Behaviour clones / DAgger students", models.filter((m) => !m.recommended && m.kind !== "rl")],
+      ];
+      groups.forEach(([name, list]) => {
+        if (!list.length) return;
+        const g = document.createElement("optgroup");
+        g.label = name;
+        list.forEach((m) => {
+          const opt = document.createElement("option");
+          opt.value = m.model;
+          opt.textContent = modelLabel(m);
+          opt.title = m.model;
+          g.appendChild(opt);
+        });
+        el.model.appendChild(g);
       });
       if (selectPath) el.model.value = selectPath;
+      showModelInfo();
     } catch (e) { /* the Imitation tab shows the error */ }
   }
 
@@ -102,7 +142,11 @@ const Drone = (() => {
       no_forward: !!stage.no_forward,
       no_commit: !!stage.no_commit,
       max_travel: el.maxTravel.value === "" ? null : Number(el.maxTravel.value),
-      max_airborne: Number(el.maxAirborne.value) || 40,
+      max_airborne: Number(el.maxAirborne.value) || 150,
+      max_height: Number(el.maxHeight.value) || 190,
+      start_height: el.startHeight.value === "" ? 80 : Number(el.startHeight.value),
+      keys: el.keys.value || "popup",
+      clearml: el.clearml.checked,
       record: el.record.checked,
       model: stage.mode === "policy" ? el.model.value || null : null,
       human_gain: Number(el.gain.value) || 0.6,
@@ -125,7 +169,9 @@ const Drone = (() => {
     try {
       await Api.startFlight(payload);
       el.flyNote.textContent = real ? "taking off in 3 s..." : "dry run starting";
-      if (stage.mode === "human") el.flyNote.textContent += " Keys are live once it is up.";
+      if (stage.mode === "human") el.flyNote.textContent += payload.keys === "browser"
+        ? " Keys are live once it is up."
+        : " A pop-up window opens: CLICK IT, then fly from it (W/S A/D, arrows; L lands, X cuts).";
       setTimeout(() => refresh().catch(() => {}), 700);
     } catch (e) {
       el.flyNote.textContent = "could not start: " + e.message;
@@ -195,6 +241,10 @@ const Drone = (() => {
     el.killBtn.disabled = !flightId || !active;
     el.stopBtn.disabled = !active || !dry;
     el.startBtn.disabled = active;
+    // the upload runs in its own process now, so it never holds the Start button
+    if (!active && payload && payload.clearml_uploading) {
+      el.flyNote.textContent = "uploading the last flight to ClearML in the background; you can start the next one";
+    }
 
     const awaiting = active && phase === "awaiting_save" && payload.save_answered !== true
       && answeredFor !== flightId;
@@ -202,7 +252,9 @@ const Drone = (() => {
     if (awaiting) el.saveSamples.textContent =
       `${lastStatus.samples || "?"} samples recorded. The drone has landed.`;
 
-    const flying = active && meta.mode === "human" && phase !== "awaiting_save";
+    // browser keys only for a flight that listens for them (keys_port); the pop-up window
+    // reads the keyboard itself
+    const flying = active && meta.mode === "human" && phase !== "awaiting_save" && !!meta.keys_port;
     if (flying && flightId) Keys.engage(flightId);
     else if (Keys.engaged) Keys.disengage();
 
@@ -216,17 +268,59 @@ const Drone = (() => {
 
   // ------------------------------------------------------------------ camera
 
+  // The frame stays hidden behind the placeholder until one has actually loaded. Assigning
+  // the URL straight to the visible <img> blanked the pane on every 404 -- and before
+  // takeoff there was never a frame, so a flight that failed to take off showed nothing.
   function syncCamera() {
     const on = el.cameraToggle.checked && !!flightId;
-    el.cameraFrame.hidden = !on;
-    el.cameraPlaceholder.hidden = on;
-    if (cameraTimer) { clearInterval(cameraTimer); cameraTimer = null; }
+    if (cameraTimer) { clearTimeout(cameraTimer); cameraTimer = null; }
+    Frames.reset(el.cameraFrame);
+    el.cameraFrame.hidden = true;
+    el.cameraPlaceholder.hidden = false;
+    el.cameraPlaceholder.textContent = on ? "waiting for the first camera frame" : "camera off";
     if (!on) return;
-    const tick = () => {
-      if (Tabs.current() === "drone") el.cameraFrame.src = Api.droneCameraUrl(flightId);
+    const id = flightId;
+    cameraRetryDelay = CAMERA_POLL_MS;
+    let lastFrameTimestamp = null;
+    let lastFrameAt = 0;
+    const poll = async () => {
+      if (flightId !== id || !el.cameraToggle.checked) return;
+      if (Tabs.current() !== "drone") {
+        cameraTimer = setTimeout(poll, CAMERA_POLL_MS);
+        return;
+      }
+      await Frames.swap(el.cameraFrame, Api.droneCameraUrl(id), (timestamp) => {
+        if (flightId !== id) return;
+        const now = performance.now();
+        if (timestamp !== lastFrameTimestamp) {
+          lastFrameTimestamp = timestamp;
+          lastFrameAt = now;
+        }
+        const age = (now - lastFrameAt) / 1000;
+        if (age > 2) {
+          el.cameraFrame.hidden = true;
+          el.cameraPlaceholder.hidden = false;
+          el.cameraPlaceholder.textContent = active
+            ? `Last camera frame is ${age.toFixed(1)}s old; reconnecting…`
+            : "Flight ended; camera is no longer live.";
+          cameraRetryDelay = Math.min(cameraRetryDelay * 2, 1200);
+          return;
+        }
+        el.cameraFrame.hidden = false;
+        el.cameraPlaceholder.hidden = true;
+        cameraRetryDelay = CAMERA_POLL_MS;
+      }, (error) => {
+        if (flightId !== id) return;
+        el.cameraFrame.hidden = true;
+        el.cameraPlaceholder.hidden = false;
+        el.cameraPlaceholder.textContent = `Camera reconnecting (${error.message})…`;
+        cameraRetryDelay = Math.min(cameraRetryDelay * 2, 1200);
+      });
+      if (flightId === id && el.cameraToggle.checked) {
+        cameraTimer = setTimeout(poll, cameraRetryDelay);
+      }
     };
-    tick();
-    cameraTimer = setInterval(tick, CAMERA_POLL_MS);
+    poll();
   }
 
   async function onCameraToggle() {
@@ -302,6 +396,8 @@ const Drone = (() => {
       modelRow: $("opt-model-row"), model: $("opt-model"), maxTravel: $("opt-max-travel"),
       maxAirborne: $("opt-max-airborne"), gainRow: $("opt-gain-row"), gain: $("opt-gain"),
       profileRow: $("opt-profile-row"), profile: $("opt-profile"), record: $("opt-record"),
+      modelInfo: $("opt-model-info"), keysRow: $("opt-keys-row"), keys: $("opt-keys"),
+      maxHeight: $("opt-max-height"), startHeight: $("opt-start-height"), clearml: $("opt-clearml"),
       startBtn: $("fly-start-btn"), flyNote: $("fly-note"),
       pill: $("drone-pill"), flightIdEl: $("drone-flight-id"), readout: $("drone-readout"),
       cameraToggle: $("drone-camera-toggle"), cameraFrame: $("drone-camera-frame"),
@@ -313,6 +409,7 @@ const Drone = (() => {
     el.readout.style.whiteSpace = "pre";
 
     el.target.addEventListener("change", syncForm);
+    el.model.addEventListener("change", showModelInfo);
     el.startBtn.addEventListener("click", start);
     el.cameraToggle.addEventListener("change", onCameraToggle);
     el.landBtn.addEventListener("click", land);

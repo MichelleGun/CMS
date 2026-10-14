@@ -80,11 +80,27 @@ its latest save and the step count carries on.
 4. **Land now** (or **L** / **Esc**) and **Emergency motor cut** (or **X** / **Backspace**) are
    always on the right. The cut asks for confirmation when clicked, but not from the keyboard.
 
-**Keyboard flight (step 5).** Keep the Drone tab in front and use W/S (forward/back), A/D (strafe),
-Up/Down (height) and Left/Right (rotate). The keys go from the page to the backend over a
-WebSocket, then to the flight over UDP on this computer. The flight hovers if it hears nothing for
-0.4 s, which is what happens when you switch tab or window, close the page or the backend stops.
-No key is ever left stuck down.
+**Every flight starts the same way (since 2026-10-14):** takeoff → hover → climb to the
+**Start height** (80 cm) → only then do the keys / the policy get control. A low takeoff no longer
+aborts the flight. Defaults: **Max height 190 cm**, **Max airborne 150 s**, no travel cap. The camera
+shows from the countdown on.
+
+**Keyboard flight (step 5).** A small **pop-up window** opens on this computer (the same one a
+terminal flight uses). **Click it**, then fly with W/S (forward/back), A/D (strafe), Up/Down (height)
+and Left/Right (rotate); L/Esc lands, X/Backspace cuts the motors. The dashboard keeps showing the
+camera and telemetry next to it. This is much smoother than typing into the browser, whose keys went
+page → WebSocket → backend → UDP. That path is still available under **Keys from: this browser tab**:
+there, the flight hovers if it hears nothing for 0.4 s (switching tab, closing the page). No key is ever
+left stuck down.
+
+**Fly a trained policy (step 6).** The picker groups the policies (**Recommended** first, then RL
+policies, then clones / DAgger students). Each one shows its name, what it was trained for (same-side
+laps, back-and-forth, single pass) and its simulator score from all 9 start zones. The line underneath
+says how it was trained.
+
+**After a run** the next **Start** is available as soon as the drone has landed (and, for a recorded
+keyboard flight, the save question is answered). The ClearML upload now runs in a separate background
+process, so it no longer blocks Start; untick **Upload to ClearML** to skip it.
 
 **Saving a run.** After a recorded keyboard flight lands, the page shows **Went through: save as
 pass**, **Missed: save as miss** and **Discard**. The flight waits up to 10 minutes on the ground
@@ -99,6 +115,39 @@ flight's folder. You can change the label later in the Imitation tab.
 * Land and kill are flag files (`land.flag`, `kill.flag`) that the flight checks every tick. If the
   backend dies, the flight's own safety layer still lands the drone.
 * A stop request for a real flight only ever asks it to land. It never kills the process mid-air.
+
+## The Config card: see a run's settings, edit them for the next run
+
+On the Simulator tab, a run's header has a **Config** button; the History tab shows the same card
+under a training run's chart. It has two sides for every setting of an onboard-camera run:
+
+* **This run** (left, read-only): what the run was started with, from its `meta.json`. Groups:
+  Run (steps, parallel envs, seed, evaluation), Environment (drone profile, randomisation, laps,
+  start zones, streak, ring tracker), PPO (learning rate, gamma, GAE lambda, entropy, target KL,
+  batch size, epochs, critic warm-up, log-std reset, gSDE), Imitation (demo-term strength and
+  decay, human weight) and the 17 **reward weights** (with their defaults). Below them: the
+  network's architecture (layer shapes, activation, log-std values, the PPO numbers saved in the model).
+* **Next run** (right, editable): a copy you change. Changed rows are highlighted, "Reset to this
+  run" undoes it, you pick whether the next run **continues from this run's model**, starts fresh, or
+  uses the same parent, and which demos feed the behaviour-cloning term. The **command line** it
+  becomes is shown live (and can be copied), and **Start next run** launches it.
+
+Nothing on the card changes the run you are looking at. Net / legacy simulator runs show their
+record read-only. A run started from the old Training panel behaves exactly as before.
+
+API behind it: `GET /api/runs/{id}/config` (grouped values, the form description, architecture,
+command), `POST /api/runs/command` (the command line for a set of values, nothing started), and the
+new optional fields of `POST /api/runs` (`gamma`, `gae_lambda`, `ent_coef`, `target_kl`, `batch_size`,
+`n_epochs`, `learning_rate`, `critic_warmup_steps`, `log_std_reset`, `sde`, `ring_tracker`,
+`streak_cap`, `bc_coef_min`, `bc_decay_steps`, `reward_weights`, and profile `measured`). The fields
+are described once in `backend/run_config.py`; the card renders its form from that description, so a
+new setting added there appears in the card without touching the frontend. The architecture is read
+by a short subprocess (`scripts/clearml_sync.model_architecture`), so the dashboard still never
+imports torch; the first open of a run's card takes a few seconds.
+
+Reward weights are per run: `train_onboard.py --reward-weights '{"r_passed": 25}'` (only the values
+that differ from the defaults are sent), recorded in the run's `meta.json` as `reward` (effective
+values) and `reward_overrides`.
 
 ## Jobs
 
@@ -122,11 +171,12 @@ webapp/
   frontend/    plain HTML/CSS/JS, Three.js and Chart.js loaded from a CDN, no build step
 ```
 
-Backend modules: `run_manager.py` (simulator training), `drone_manager.py` (flights),
+Backend modules: `run_manager.py` (simulator training), `run_config.py` (the Config card's field
+description and command builder), `drone_manager.py` (flights),
 `imitation_manager.py` (demos and clones), `jobs.py` (shared subprocess helpers and the job
 registry), `drone_ws.py` / `telemetry_ws.py` (live streams). Frontend: one file per tab
-(`drone.js`, `imitation.js`, `history.js`; the simulator is `app.js`), plus `tabs.js` and
-`keys.js`. The backend reads what the scripts write under `hardware/flights/` and
+(`drone.js`, `imitation.js`, `history.js`; the simulator is `app.js`), plus `tabs.js`,
+`keys.js` and `runconfig.js` (the Config card). The backend reads what the scripts write under `hardware/flights/` and
 `results/hoop/runs/`, and never imports djitellopy, OpenCV, torch or the flight code.
 
 The backend never imports `stable_baselines3`/`pybullet`/`torch` itself. It only starts,

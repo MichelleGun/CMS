@@ -19,6 +19,7 @@ from typing import Optional
 import psutil
 
 import jobs
+import run_config
 from config import (SCRIPTS_DIR, RUNS_DIR, CMS_DIR, ALGORITHM_IDS, START_MARGIN, FLIGHTS_DIR,
                     HARDWARE_DIR, NET_OBS_DIMS, bounds_ok)
 
@@ -150,7 +151,13 @@ class RunManager:
                   reward_weights: Optional[dict] = None, onboard_laps: int = 0,
                   onboard_wash_deg: float = 15.0, wash_deg: float = 15.0,
                   start_z: float = 0.8, same_side: bool = True, start_zones: bool = True,
-                  streak: float = 0.5) -> str:
+                  streak: float = 0.5, learning_rate: Optional[float] = None,
+                  gamma: Optional[float] = None, gae_lambda: Optional[float] = None,
+                  ent_coef: Optional[float] = None, target_kl: Optional[float] = None,
+                  batch_size: Optional[int] = None, n_epochs: Optional[int] = None,
+                  critic_warmup_steps: Optional[int] = None, log_std_reset: Optional[float] = None,
+                  sde: bool = False, ring_tracker: bool = False, streak_cap: Optional[float] = None,
+                  bc_coef_min: Optional[float] = None, bc_decay_steps: Optional[int] = None) -> str:
         if env == "onboard":
             algo = "ppo"                            # the onboard trainer is PPO (+ demo term)
         if algo not in ALGORITHM_IDS:
@@ -169,6 +176,10 @@ class RunManager:
                 raise ValueError(f"run '{init_run}' is a {pm['algo']} run; pick {pm['algo']} "
                                  "to continue it")
         demos = self._demo_paths(demo_ids) if env == "onboard" else []
+        if env == "onboard" and reward_weights:
+            bad = sorted(set(reward_weights) - set(run_config.REWARD_DEFAULTS))
+            if bad:
+                raise ValueError(f"unknown reward weight(s) {bad}; names: {sorted(run_config.REWARD_DEFAULTS)}")
         self._check_capacity(n_envs, vec)
 
         run_id = self._new_run_id("onboard" if env == "onboard" else algo)
@@ -186,18 +197,19 @@ class RunManager:
             common += ["--init", str(init_dir)]
 
         if env == "onboard":
-            argv = [PYTHON_EXE, str(ONBOARD_TRAIN), *common, "--profile", profile,
-                    "--dr", str(onboard_dr), "--sway-deg", str(onboard_sway_deg),
-                    "--wash-deg", str(onboard_wash_deg),
-                    "--lap-dir", "same" if same_side else "alternate",
-                    "--start-mode", "zones" if start_zones else "ring", "--streak", str(streak),
-                    "--hard-start-p", str(hard_start_p), "--dr-steps", str(int(dr_steps)),
-                    "--laps", str(int(onboard_laps)),
-                    "--bc-augment" if bc_augment else "--no-bc-augment"]
-            if demos:
-                argv += ["--demos", *(str(p) for p in demos),
-                         "--source-weight", f"human={human_weight}",
-                         "--bc-coef", str(bc_coef)]
+            argv = run_config.onboard_argv(
+                PYTHON_EXE, run_id, run_dir, demos=demos, init_dir=init_dir, p=dict(
+                    timesteps=timesteps, n_envs=n_envs, vec=vec, eval_freq=eval_freq,
+                    n_eval_episodes=n_eval_episodes, until_stopped=until_stopped, seed=seed,
+                    profile=profile, onboard_dr=onboard_dr, onboard_sway_deg=onboard_sway_deg,
+                    onboard_wash_deg=onboard_wash_deg, same_side=same_side, start_zones=start_zones,
+                    streak=streak, streak_cap=streak_cap, hard_start_p=hard_start_p, dr_steps=dr_steps,
+                    onboard_laps=onboard_laps, bc_augment=bc_augment, ring_tracker=ring_tracker,
+                    human_weight=human_weight, bc_coef=bc_coef, bc_coef_min=bc_coef_min,
+                    bc_decay_steps=bc_decay_steps, learning_rate=learning_rate, gamma=gamma,
+                    gae_lambda=gae_lambda, ent_coef=ent_coef, target_kl=target_kl,
+                    batch_size=batch_size, n_epochs=n_epochs, critic_warmup_steps=critic_warmup_steps,
+                    log_std_reset=log_std_reset, sde=sde, reward_weights=reward_weights))
         else:
             argv = [PYTHON_EXE, str(SCRIPTS_DIR / "train_hoop_multi.py"), "--algo", algo,
                     "--env", env, *common]
@@ -323,6 +335,66 @@ class RunManager:
                 "label": _read_tags(d).get("label"),
                 "starred": bool(_read_tags(d).get("starred")),
                 "status": self._status(run_id, meta, live_status or {})}
+
+    def get_config(self, run_id: str):
+        """Everything the Config card shows for a run (None if there is no such run)."""
+        d = RUNS_DIR / run_id
+        meta = _read_json(d / "meta.json") if d.is_dir() else None
+        if meta is None:
+            return None
+        onboard = meta.get("env") == "onboard"
+        status = self._status(run_id, meta, _read_json(d / "live_status.json") or {})
+        arch = run_config.architecture(d)
+        values = run_config.current_values(meta, arch) if onboard else {}
+        fields = [dict(f, value=values.get(f["key"])) for f in run_config.field_schema()] if onboard else []
+        rw = run_config.current_reward(meta) if onboard else {}
+        reward = [dict(r, value=rw.get(r["key"])) for r in run_config.reward_schema()] if onboard else []
+        bc = meta.get("bc") or {}
+        info = [(k, meta.get(k)) for k in ("run_id", "algo", "env", "task", "env_variant", "obs_dim", "ctrl_hz",
+                                          "yaw_convention", "init_parent", "init_kind", "init_timesteps",
+                                          "created_at", "finished_at", "final_status", "final_timesteps",
+                                          "vec", "pid", "clearml_task_id")]
+        info.append(("status", status))
+        if bc:
+            info.append(("demo samples", ", ".join(f"{k} {v}" for k, v in (bc.get("samples") or {}).items())))
+        layers = {k[len("layers."):]: v for k, v in arch.items() if k.startswith("layers.")}
+        architecture = {"obs_dim": arch.get("obs_dim"), "act_dim": arch.get("act_dim"),
+                        "activation": arch.get("activation"), "policy_kwargs": arch.get("policy_kwargs"),
+                        "layers": layers, "log_std": arch.get("log_std_values"),
+                        "saved": {k[4:]: v for k, v in arch.items() if k.startswith("ppo.")},
+                        "model_file": arch.get("model_file"), "error": arch.get("architecture_error")}
+        out = {"run_id": run_id, "status": status, "env": meta.get("env"), "editable": onboard,
+               "fields": fields, "reward": reward, "info": [{"k": k, "v": v} for k, v in info if v is not None],
+               "architecture": architecture if arch else None,
+               "demo_paths": bc.get("demo_paths"), "demo_names": bc.get("demos"),
+               "reward_overrides": meta.get("reward_overrides") or {}}
+        if onboard:
+            req = dict(values, vec=meta.get("vec") or "auto", reward_weights=rw,
+                       onboard_laps=values.get("onboard_laps") or 0)
+            out["command"] = self._preview(req)["command"]
+        return out
+
+    def _preview(self, req: dict, run_id: str = "<new-run-id>") -> dict:
+        from schemas import StartRunRequest
+        p = StartRunRequest(algo="ppo", env="onboard").model_dump()      # the dashboard's defaults ...
+        p.update({k: v for k, v in req.items() if v is not None or k in run_config.FIELD_BY_KEY})
+        for k, f in run_config.FIELD_BY_KEY.items():     # ... except a value the run never recorded
+            if p.get(k) is None and f.get("null_ok") is not True and f["type"] != "bool":
+                p[k] = StartRunRequest(algo="ppo", env="onboard").model_dump().get(k)
+        demos = self._demo_paths(p.get("demo_ids"))
+        init_dir = self._init_dir(p.get("init_run"), p.get("init_clone"))
+        bad = sorted(set(p.get("reward_weights") or {}) - set(run_config.REWARD_DEFAULTS))
+        if bad:
+            raise ValueError(f"unknown reward weight(s) {bad}; names: {sorted(run_config.REWARD_DEFAULTS)}")
+        argv = run_config.onboard_argv(PYTHON_EXE, run_id, f"results/hoop/runs/{run_id}", p,
+                                       init_dir=init_dir, demos=demos)
+        return {"command": run_config.command_line(argv), "argv": [str(a) for a in argv]}
+
+    def preview_command(self, req: dict) -> dict:
+        """The command line a StartRunRequest would run, without starting anything."""
+        if req.get("env") != "onboard":
+            raise ValueError("the command preview is for onboard-camera runs")
+        return self._preview(req)
 
     def _best_success(self, run_dir: Path):
         """Highest eval success rate the run reached (evaluations.npz 'successes'), or None.

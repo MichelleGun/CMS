@@ -23,6 +23,7 @@ SAFETY DECISIONS BUILT IN HERE, not in the UI, so they cannot be clicked around:
 """
 import json
 import socket
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -37,6 +38,7 @@ KILL_FLAG = "kill.flag"
 CAMERA_FLAG = "camera_enabled.flag"
 SAVE_ANSWER = "save_answer.json"
 HELD_KEYS = {"fb+", "fb-", "lr+", "lr-", "ud+", "ud-", "yaw+", "yaw-"}
+KEYS_META_TTL_S = 1.0     # how stale send_keys' cached keys port may get
 
 MODES = [
     {"id": "expert", "label": "Scripted expert"},
@@ -71,6 +73,7 @@ class DroneManager:
     def __init__(self, flights_dir: Path = FLIGHTS_DIR):
         self.flights_dir = flights_dir
         self._procs: dict = {}
+        self._keys_ports: dict = {}     # flight_id -> (port or None, monotonic time read)
 
     # ------------------------------------------------------------------ state
 
@@ -139,6 +142,8 @@ class DroneManager:
             "kill_requested": (d / KILL_FLAG).exists(),
             "save_answered": (d / SAVE_ANSWER).exists(),
             "has_camera_frame": (d / "camera_latest.jpg").exists(),
+            # the detached ClearML upload (fly_hoop -> clearml_sync.py record) is still running
+            "clearml_uploading": (d / "clearml_uploading.flag").exists(),
             "demo": _demo_label(d),
         }
 
@@ -206,12 +211,32 @@ class DroneManager:
     def set_camera(self, flight_id: str, enabled: bool):
         self._write_flag(flight_id, CAMERA_FLAG, enabled)
 
+    def _keys_port(self, flight_id: str) -> Optional[int]:
+        """The flight's keys port from meta.json, or None once it has ended.
+
+        Re-read at most every KEYS_META_TTL_S. This runs for every key message -- ten a
+        second from the heartbeat alone, inside the websocket's event loop -- and reading
+        a OneDrive-synced file that often both stalled the loop and, whenever the read
+        failed, silently dropped that key change. A failed re-read keeps the last answer.
+        """
+        now = time.monotonic()
+        hit = self._keys_ports.get(flight_id)
+        if hit is not None and now - hit[1] < KEYS_META_TTL_S:
+            return hit[0]
+        meta = _read_json(self._dir(flight_id) / "meta.json")
+        if meta is None:
+            return hit[0] if hit is not None else None
+        port = meta.get("keys_port")
+        if not isinstance(port, int) or meta.get("final_status"):
+            port = None
+        self._keys_ports[flight_id] = (port, now)
+        return port
+
     def send_keys(self, flight_id: str, held) -> bool:
         """Forward held keys to a live human flight. Unknown names are dropped here and
         again in the flight. Returns False if the flight takes no keys."""
-        meta = _read_json(self._dir(flight_id) / "meta.json") or {}
-        port = meta.get("keys_port")
-        if not isinstance(port, int) or meta.get("final_status"):
+        port = self._keys_port(flight_id)
+        if port is None:
             return False
         names = [k for k in held if k in HELD_KEYS]
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -230,9 +255,18 @@ class DroneManager:
 
     def build_argv(self, mode="expert", profile="typical", seed=0, attempts=1,
                    no_forward=False, no_commit=False, max_travel=None,
-                   max_airborne=40.0, record=False, model=None,
+                   max_airborne=150.0, record=False, model=None,
                    dry_run: bool = True, confirm: bool = False,
-                   human_gain: float = 0.6, keys_port: Optional[int] = None) -> list:
+                   human_gain: float = 0.6, keys_port: Optional[int] = None,
+                   max_height: int = 190, min_height: int = 10, start_height: int = 80,
+                   keys: str = "popup", clearml: bool = True) -> list:
+        """fly_hoop.py's command line for a dashboard flight.
+
+        keys="popup" (default since 2026-10-14): a human flight opens fly_hoop's own pygame
+        window, the same one a terminal flight uses -- click it and fly from it. Keys then go
+        straight from the OS to the flight loop, with none of the browser -> websocket -> UDP
+        hops (and the 1 s status poll before they engage) that made dashboard flying lag.
+        "browser" keeps the old path (keys typed in the dashboard)."""
         if not dry_run and not confirm:
             raise ValueError("a real flight needs confirm=true")
         if mode not in MODE_IDS:
@@ -249,10 +283,20 @@ class DroneManager:
             raise ValueError("human_gain must be in (0, 1]")
         if max_travel is not None and float(max_travel) <= 0:
             raise ValueError("max_travel must be positive")
+        if not 0 < int(min_height) < int(max_height) <= 250:
+            raise ValueError("need 0 < min_height < max_height <= 250 cm")
+        if not 0 <= int(start_height) < int(max_height):
+            raise ValueError("start_height must be below max_height")
+        if keys not in ("popup", "browser"):
+            raise ValueError("keys must be 'popup' or 'browser'")
 
         argv = [PYTHON_EXE, str(FLY_HOOP_SCRIPT),
                 "--mode", mode, "--seed", str(int(seed)),
-                "--max-airborne", str(float(max_airborne)), "--camera"]
+                "--max-airborne", str(float(max_airborne)), "--camera",
+                # the camera shows from the countdown on, not only after takeoff
+                "--preview-before-takeoff",
+                "--max-height", str(int(max_height)), "--min-height", str(int(min_height)),
+                "--start-height", str(int(start_height))]
         if dry_run:
             argv += ["--dry-run", "--profile", profile,
                      "--attempts", str(max(1, int(attempts))),
@@ -266,10 +310,15 @@ class DroneManager:
         if max_travel is not None:
             argv += ["--max-travel", str(float(max_travel))]
         if mode == "human":
-            argv += ["--keys", "udp", "--keys-port", str(keys_port or _free_udp_port()),
-                     "--human-gain", str(float(human_gain)), "--save-answer", "file"]
-        if record:
-            argv.append("--record")
+            if keys == "browser":
+                argv += ["--keys", "udp", "--keys-port", str(keys_port or _free_udp_port())]
+            else:
+                argv += ["--keys", "pygame"]
+            argv += ["--human-gain", str(float(human_gain)), "--save-answer", "file"]
+        if not clearml:
+            argv.append("--no-clearml")
+        # fly_hoop records human flights by default; the dashboard's checkbox decides.
+        argv.append("--record" if record else "--no-record")
         if model:
             argv += ["--model", str(model)]
         return argv

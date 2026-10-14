@@ -57,6 +57,8 @@
             <span id="overlay-run-when" class="note"></span>
             <button id="rename-btn" class="icon-btn" type="button" title="Rename this run">&#9998;</button>
           </div>
+          <button id="config-btn" class="secondary-btn" type="button"
+                  title="This run's settings and hyperparameters, and an editable copy for the next run">Config</button>
           <button id="back-to-setup-btn" class="secondary-btn" type="button">Back to setup</button>
         </div>
 
@@ -337,17 +339,34 @@
           <label for="opt-model">Policy</label>
           <select id="opt-model"></select>
         </div>
+        <div id="opt-model-info" class="note policy-info" hidden></div>
         <div class="field-row">
           <label for="opt-max-travel">Max travel (m)</label>
           <input type="number" id="opt-max-travel" step="0.1" min="0.1" placeholder="none">
         </div>
         <div class="field-row">
           <label for="opt-max-airborne">Max airborne (s)</label>
-          <input type="number" id="opt-max-airborne" step="5" min="5" value="40">
+          <input type="number" id="opt-max-airborne" step="5" min="5" value="150">
+        </div>
+        <div class="field-row">
+          <label for="opt-max-height">Max height (cm)</label>
+          <input type="number" id="opt-max-height" step="5" min="100" max="250" value="190">
+        </div>
+        <div class="field-row">
+          <label for="opt-start-height">Start height (cm)</label>
+          <input type="number" id="opt-start-height" step="5" min="0" max="180" value="80"
+                 title="after takeoff the drone hovers, climbs to this height, and only then hands over control">
         </div>
         <div class="field-row" id="opt-gain-row">
           <label for="opt-gain">Key strength</label>
           <input type="number" id="opt-gain" step="0.1" min="0.1" max="1" value="0.6">
+        </div>
+        <div class="field-row" id="opt-keys-row">
+          <label for="opt-keys">Keys from</label>
+          <select id="opt-keys">
+            <option value="popup" selected>Pop-up window (smooth; click it to fly)</option>
+            <option value="browser">This browser tab (laggier)</option>
+          </select>
         </div>
         <div class="field-row" id="opt-profile-row">
           <label for="opt-profile">Simulated drone</label>
@@ -358,6 +377,7 @@
           </select>
         </div>
         <label class="checkbox-row"><input type="checkbox" id="opt-record"> Record a demonstration</label>
+        <label class="checkbox-row"><input type="checkbox" id="opt-clearml" checked> Upload to ClearML after landing (in the background)</label>
         <div class="button-row">
           <button id="fly-start-btn" class="primary-btn" type="button">Take off</button>
         </div>
@@ -557,17 +577,29 @@
     </section>
   </main>
 
-  <script src="js/api.js?v=19"></script>
+  <div id="config-modal" hidden>
+    <div id="config-modal-card" role="dialog" aria-labelledby="config-modal-title">
+      <div id="config-modal-head">
+        <h2 id="config-modal-title">Configuration</h2>
+        <button id="config-modal-close" class="icon-btn" type="button" title="Close (Esc)">&#10005;</button>
+      </div>
+      <div id="config-modal-body"></div>
+    </div>
+  </div>
+
+  <script src="js/api.js?v=20"></script>
   <script src="js/scene3d.js?v=20"></script>
   <script src="js/controls.js?v=19"></script>
   <script src="js/chart.js?v=19"></script>
   <script src="js/tabs.js?v=19"></script>
-  <script src="js/keys.js?v=19"></script>
-  <script src="js/drone.js?v=19"></script>
+  <script src="js/frames.js?v=20"></script>
+  <script src="js/keys.js?v=20"></script>
+  <script src="js/drone.js?v=20"></script>
   <script src="js/imitation.js?v=19"></script>
-  <script src="js/history.js?v=19"></script>
+  <script src="js/runconfig.js?v=1"></script>
+  <script src="js/history.js?v=20"></script>
   <script src="js/envview.js?v=19"></script>
   <script src="js/reward.js?v=19"></script>
-  <script src="js/app.js?v=20"></script>
+  <script src="js/app.js?v=22"></script>
 </body>
 </html>

@@ -160,6 +160,7 @@ def test_camera_frames_are_served_whole(env):
     r = env["client"].get("/api/runs/ppo_x/camera/latest.jpg")
     assert r.status_code == 200 and r.content == b"\xff\xd8jpegdata"
     assert r.headers["content-type"] == "image/jpeg"
+    assert float(r.headers["x-frame-timestamp"]) > 0
 
 
 def test_until_stopped_run_passes_the_flag_and_has_no_end(env):

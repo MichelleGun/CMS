@@ -5,6 +5,7 @@ by a fake that records the argv, so these tests check what WOULD run.
     python -m pytest webapp/backend/tests -q
 """
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -109,9 +110,33 @@ def test_a_second_flight_is_refused_while_one_is_running(env):
     assert len(env["spawned"]) == 1
 
 
+def test_human_mode_flies_from_the_popup_window_by_default(env):
+    """The dashboard's browser -> websocket -> UDP key path lagged; the terminal's pygame window
+    did not. Human flights now open that window (click it, fly from it)."""
+    r = env["client"].post("/api/drone/flights", json={"mode": "human", "record": True})
+    assert r.status_code == 201
+    argv = env["spawned"][0].argv
+    assert argv[argv.index("--keys") + 1] == "pygame" and "--keys-port" not in argv
+    assert argv[argv.index("--save-answer") + 1] == "file"
+
+
+def test_the_flight_gets_the_height_window_and_starts_the_camera_early(env):
+    r = env["client"].post("/api/drone/flights", json={"mode": "expert", "max_height": 185,
+                                                       "clearml": False})
+    assert r.status_code == 201
+    argv = env["spawned"][0].argv
+    assert argv[argv.index("--max-height") + 1] == "185"
+    assert argv[argv.index("--start-height") + 1] == "80"
+    assert float(argv[argv.index("--max-airborne") + 1]) >= 120
+    assert "--preview-before-takeoff" in argv and "--no-clearml" in argv
+    bad = env["client"].post("/api/drone/flights", json={"min_height": 200, "max_height": 190})
+    assert bad.status_code == 400
+
+
 def test_human_mode_takes_keys_and_answers_from_the_dashboard(env):
     r = env["client"].post("/api/drone/flights",
-                           json={"mode": "human", "record": True, "human_gain": 0.5})
+                           json={"mode": "human", "record": True, "human_gain": 0.5,
+                                 "keys": "browser"})
     assert r.status_code == 201
     argv = env["spawned"][0].argv
     assert argv[argv.index("--keys") + 1] == "udp"
@@ -140,6 +165,38 @@ def test_keys_are_forwarded_to_the_flights_port(env):
     sock.close()
 
 
+def _udp_listener():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.settimeout(2)
+    return sock, sock.getsockname()[1]
+
+
+def test_an_unreadable_meta_does_not_drop_a_key(env, monkeypatch):
+    """meta.json lives on OneDrive and is read for every key message. A read that fails
+    mid-flight (a sync lock, a half-written replace) used to drop that key silently."""
+    monkeypatch.setattr(dm_mod, "KEYS_META_TTL_S", 0.0)       # re-read on every key
+    sock, port = _udp_listener()
+    d = make_flight(env["flights"], keys_port=port, final_status=None)
+    assert env["dm"].send_keys(d.name, ["fb+"])
+    (d / "meta.json").write_text("{")                          # unreadable for a moment
+    assert env["dm"].send_keys(d.name, ["lr-"]), "the key was dropped"
+    assert json.loads(sock.recv(4096)) == {"held": ["fb+"]}
+    assert json.loads(sock.recv(4096)) == {"held": ["lr-"]}
+    sock.close()
+
+
+def test_a_finished_flight_stops_taking_keys(env, monkeypatch):
+    monkeypatch.setattr(dm_mod, "KEYS_META_TTL_S", 0.0)
+    sock, port = _udp_listener()
+    d = make_flight(env["flights"], keys_port=port, final_status=None)
+    assert env["dm"].send_keys(d.name, ["fb+"])
+    meta = json.loads((d / "meta.json").read_text())
+    (d / "meta.json").write_text(json.dumps({**meta, "final_status": "ok"}))
+    assert env["dm"].send_keys(d.name, ["fb+"]) is False
+    sock.close()
+
+
 def test_the_save_answer_is_written_for_the_flight(env):
     d = make_flight(env["flights"])
     r = env["client"].post(f"/api/drone/flights/{d.name}/save",
@@ -164,6 +221,40 @@ def test_ticks_and_events_are_served_for_history(env):
     assert len(c.get(f"/api/drone/flights/{d.name}/ticks").json()["ticks"]) == 10
     assert c.get(f"/api/drone/flights/{d.name}/events").json()["events"][0][
         "event"] == "takeoff_done"
+
+
+def test_the_drone_camera_frame_is_served_whole(env):
+    d = make_flight(env["flights"])
+    (d / "camera_latest.jpg").write_bytes(b"\xff\xd8drone")
+    r = env["client"].get(f"/api/drone/flights/{d.name}/camera/latest.jpg")
+    assert r.status_code == 200 and r.content == b"\xff\xd8drone"
+    assert r.headers["content-type"] == "image/jpeg"
+
+
+def test_the_drone_camera_frame_is_read_into_memory_not_streamed(env):
+    """The regression this pins: streaming the frame with FileResponse held the file open
+    while fly_hoop tried to os.replace it, and on Windows that froze the dashboard camera a
+    few seconds into every flight. The body must already be in memory when the route
+    returns, so no handle on the file outlives the call."""
+    d = make_flight(env["flights"])
+    (d / "camera_latest.jpg").write_bytes(b"\xff\xd8first")
+    r = main.get_drone_camera_frame(d.name)
+    assert r.body == b"\xff\xd8first"
+    os.replace(_write(d / "camera_latest.jpg.tmp", b"\xff\xd8second"),
+               d / "camera_latest.jpg")
+    assert env["client"].get(
+        f"/api/drone/flights/{d.name}/camera/latest.jpg").content == b"\xff\xd8second"
+
+
+def test_a_flight_without_a_camera_frame_yet_is_a_404(env):
+    d = make_flight(env["flights"])
+    r = env["client"].get(f"/api/drone/flights/{d.name}/camera/latest.jpg")
+    assert r.status_code == 404
+
+
+def _write(path: Path, data: bytes) -> Path:
+    path.write_bytes(data)
+    return path
 
 
 # ------------------------------------------------------------------ imitation
@@ -247,3 +338,22 @@ def test_jobs_are_listed_newest_first_whatever_their_kind(env):
         (d / f"{jid}.json").write_text(json.dumps({"job_id": jid, "returncode": 0}))
     ids = [j["job_id"] for j in env["client"].get("/api/jobs").json()["jobs"]]
     assert ids == ["demos_20260101-130000", "train_20260101-120000", "eval_20260101-110000"]
+
+
+def test_policy_labels_are_readable_and_never_undefined(tmp_path):
+    """The Drone tab's picker: a run's dashboard label (else its id), what it was trained for, how,
+    and a score -- an RL run without evals used to print '(undefined/undefined in sim)'."""
+    from imitation_manager import describe_policy
+    d = tmp_path / "n6_same_from_W"
+    (d / "evals").mkdir(parents=True)
+    meta = {"env": "onboard", "lap_dir": "same", "laps": 0, "asym_critic": True,
+            "obs_history": [0, 1, 2], "ring_tracker": True}
+    plain = describe_policy(d, meta, "rl", {})
+    assert plain["title"] == "n6_same_from_W" and plain["score"] == "not evaluated yet"
+    assert plain["task_label"] == "same-side laps" and "asymmetric critic" in plain["method"]
+    (d / "label.json").write_text(json.dumps({"label": "laps v6", "starred": True}))
+    (d / "evals" / "deploy_eval.json").write_text(json.dumps(
+        {"laps_per_90s": 3.4, "min_zone": 1.5, "recommended": True}))
+    best = describe_policy(d, meta, "rl", {})
+    assert best["title"] == "laps v6" and best["recommended"] and "3.4 laps/90s" in best["score"]
+    assert "undefined" not in json.dumps([plain, best]) and "None" not in best["score"]

@@ -167,6 +167,7 @@ class ImitationManager:
                     continue
                 meta = read_json(d / "meta.json") or {}
                 out.append({
+                    **describe_policy(d, meta, "clone"),
                     "name": d.name, "kind": "clone", "model": str(zp),
                     "task": meta.get("task"), "demos": meta.get("demos"),
                     "samples": meta.get("n_samples"), "saved": meta.get("saved"),
@@ -183,6 +184,7 @@ class ImitationManager:
                 status = read_json(d / "live_status.json") or {}
                 bc = meta.get("bc") or {}
                 out.append({
+                    **describe_policy(d, meta, "rl", status),
                     "name": f"rl:{d.name}", "kind": "rl", "model": str(zp),
                     "task": meta.get("task", "onboard_hoop"), "demos": bc.get("demos"),
                     "samples": None, "saved": meta.get("finished_at") or status.get("updated_at"),
@@ -238,3 +240,49 @@ class ImitationManager:
 
 
 imitation_manager = ImitationManager()
+
+
+def describe_policy(d: Path, meta: dict, kind: str, status: dict = None) -> dict:
+    """What the Drone tab's policy picker shows (2026-10-14): a readable title (the run's
+    dashboard label, else its id), what it was trained to do, how, and its simulator score from
+    every start zone (hardware/privileged/eval_deploy.py writes evals/deploy_eval.json and the
+    label). Never a field that prints as "undefined"."""
+    label = read_json(d / "label.json") or {}
+    dep = read_json(d / "evals" / "deploy_eval.json") or {}
+    laps = meta.get("laps")
+    lap_dir = meta.get("lap_dir")
+    if laps == 1:
+        task = "single pass"
+    elif lap_dir == "same" or (laps is None and kind == "clone" and meta.get("obs_history")):
+        task = "same-side laps"
+    elif lap_dir == "alternate":
+        task = "back-and-forth laps"
+    else:
+        task = "laps" if laps == 0 else "hoop"
+    if kind == "clone":
+        method = meta.get("method") or "behaviour clone"
+    else:
+        method = "PPO"
+        if meta.get("asym_critic"):
+            method += " + asymmetric critic"
+        if meta.get("init_kind") == "clone":
+            method += " (from a clone)"
+    extras = []
+    if meta.get("obs_history"):
+        extras.append("memory")
+    if meta.get("ring_tracker"):
+        extras.append("ring tracker")
+    score = None
+    if dep.get("laps_per_90s") is not None:
+        score = f"{dep['laps_per_90s']:.1f} laps/90s in sim (worst zone {dep.get('min_zone', 0):.1f})"
+    elif status and status.get("best_mean_passes") is not None:
+        score = f"best {float(status['best_mean_passes']):.2f} passes/episode in training evals"
+    elif status and status.get("latest_success_rate") is not None:
+        score = f"{float(status['latest_success_rate']):.0%} episodes with a pass in training"
+    elif (meta.get("sim_eval") or {}).get("laps_per_90s") is not None:
+        score = f"{meta['sim_eval']['laps_per_90s']:.1f} laps/90s in sim"
+    title = label.get("label") or d.name
+    return {"title": title, "run_id": d.name, "task_label": task, "method": method,
+            "extras": extras, "score": score or "not evaluated yet",
+            "starred": bool(label.get("starred")), "recommended": bool(dep.get("recommended")),
+            "frame_dim": meta.get("frame_dim") or meta.get("obs_dim")}

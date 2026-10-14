@@ -9,7 +9,7 @@ with:
 Then open http://localhost:8000 in a browser.
 """
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config import ALGORITHMS, REWARD_INFO, ASSETS_DIR, FRONTEND_DIR, HOOP_SPEC, REACH_RADIUS, ROOM, RUNS_DIR, START_MARGIN, START_Z, XY_MARGIN, Z_RANGE
@@ -33,10 +33,14 @@ def _jpeg_snapshot(path):
     browser shows as a broken image."""
     for _ in range(3):
         try:
+            modified = path.stat().st_mtime_ns
             data = path.read_bytes()
             if data:
+                if path.stat().st_mtime_ns != modified:
+                    continue
                 return Response(content=data, media_type="image/jpeg",
-                                headers={"Cache-Control": "no-store"})
+                                headers={"Cache-Control": "no-store",
+                                         "X-Frame-Timestamp": str(modified / 1_000_000_000)})
         except OSError:
             pass
     raise HTTPException(status_code=503, detail="frame busy, try again")
@@ -115,12 +119,36 @@ def start_run(req: StartRunRequest):
             hard_start_p=req.hard_start_p, dr_steps=req.dr_steps, bc_augment=req.bc_augment,
             wind_steps=req.wind_steps, reward_mode=req.reward_mode, budget=req.budget,
             laps=req.laps, reward_weights=req.reward_weights, onboard_laps=req.onboard_laps,
+            learning_rate=req.learning_rate, gamma=req.gamma, gae_lambda=req.gae_lambda,
+            ent_coef=req.ent_coef, target_kl=req.target_kl, batch_size=req.batch_size,
+            n_epochs=req.n_epochs, critic_warmup_steps=req.critic_warmup_steps,
+            log_std_reset=req.log_std_reset, sde=req.sde, ring_tracker=req.ring_tracker,
+            streak_cap=req.streak_cap, bc_coef_min=req.bc_coef_min, bc_decay_steps=req.bc_decay_steps,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"run_id": run_id, "status": "starting"}
+
+
+@app.get("/api/runs/{run_id}/config")
+def get_run_config(run_id: str):
+    """The Config card: what this run was started with (grouped), which values can be edited for the
+    next run (the form schema), the model's architecture and the equivalent command line."""
+    cfg = run_manager.get_config(run_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"no such run '{run_id}'")
+    return cfg
+
+
+@app.post("/api/runs/command")
+def preview_run_command(req: StartRunRequest):
+    """The train_onboard.py command line a set of edited values would run (nothing is started)."""
+    try:
+        return run_manager.preview_command(req.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.put("/api/runs/{run_id}/label")
@@ -251,7 +279,9 @@ def start_drone_flight(req: StartFlightRequest, request: Request):
             no_forward=req.no_forward, no_commit=req.no_commit,
             max_travel=req.max_travel, max_airborne=req.max_airborne,
             record=req.record, model=req.model, dry_run=req.dry_run,
-            confirm=req.confirm, human_gain=req.human_gain)
+            confirm=req.confirm, human_gain=req.human_gain,
+            max_height=req.max_height, min_height=req.min_height,
+            start_height=req.start_height, keys=req.keys, clearml=req.clearml)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
@@ -329,7 +359,10 @@ def get_drone_camera_frame(flight_id: str):
     if not path.is_file():
         raise HTTPException(status_code=404,
                             detail="the drone camera has not been enabled for this flight yet")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    # Not FileResponse: on Windows its open handle blocks fly_hoop's os.replace of this
+    # file, and with the dashboard polling at the writer's own rate the frame froze for
+    # good a few seconds into every flight.
+    return _jpeg_snapshot(path)
 
 
 @app.websocket("/ws/drone/{flight_id}")

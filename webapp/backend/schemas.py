@@ -32,7 +32,7 @@ class StartRunRequest(BaseModel):
     demo_ids: List[str] = []            # onboard: demos for the behaviour-cloning term
     human_weight: float = Field(3.0, ge=0.0, le=20.0)  # onboard: weight of human vs simulated demos
     bc_coef: float = Field(1.0, ge=0.0, le=10.0)       # onboard: strength of the demo term at the start
-    profile: Literal["ideal", "typical", "harsh"] = "typical"   # onboard: simulated drone behaviour
+    profile: Literal["ideal", "typical", "harsh", "measured"] = "typical"   # onboard: simulated drone behaviour
     # onboard robustness (hardware/onboard/sim.py): randomisation strength, the ring's swing,
     # the share of hard starts (behind / beside / below / anywhere), the ramp-up, demo augmentation
     onboard_dr: float = Field(1.0, ge=0.0, le=1.0)
@@ -57,7 +57,23 @@ class StartRunRequest(BaseModel):
     reward_mode: Literal["shaped", "budget"] = "shaped"     # net env: MDP v2 / v3
     budget: float = Field(3.0, gt=0.0, le=100.0)            # net env, budget mode
     laps: int = Field(1, ge=0, le=20)                       # net env, shaped mode (0 = endless)
-    reward_weights: Optional[Dict[str, float]] = None       # net env: overrides of the defaults
+    reward_weights: Optional[Dict[str, float]] = None       # net / onboard env: overrides of the defaults
+    # --- onboard: PPO and the rest of the run configuration (run_config.FIELDS describes them for the
+    # Config card). None = the trainer's own default, so the old Training panel's payload is unchanged.
+    learning_rate: Optional[float] = Field(None, ge=1e-6, le=1e-2)
+    gamma: Optional[float] = Field(None, ge=0.8, le=0.9999)
+    gae_lambda: Optional[float] = Field(None, ge=0.8, le=1.0)
+    ent_coef: Optional[float] = Field(None, ge=0.0, le=0.1)
+    target_kl: Optional[float] = Field(None, ge=0.001, le=0.5)
+    batch_size: Optional[int] = Field(None, ge=16, le=65536)
+    n_epochs: Optional[int] = Field(None, ge=1, le=50)
+    critic_warmup_steps: Optional[int] = Field(None, ge=0, le=10_000_000)
+    log_std_reset: Optional[float] = Field(None, ge=-5.0, le=1.0)
+    sde: bool = False
+    ring_tracker: bool = False
+    streak_cap: Optional[float] = Field(None, ge=1.0, le=20.0)
+    bc_coef_min: Optional[float] = Field(None, ge=0.0, le=10.0)
+    bc_decay_steps: Optional[int] = Field(None, ge=1, le=100_000_000)
 
 
 class RunLabelRequest(BaseModel):
@@ -110,12 +126,20 @@ class StartFlightRequest(BaseModel):
     no_forward: bool = False
     no_commit: bool = False
     max_travel: Optional[float] = None
-    max_airborne: float = 40.0
+    max_airborne: float = 150.0
     record: bool = False
     model: Optional[str] = None
     dry_run: bool = True
     confirm: bool = False
     human_gain: float = 0.6
+    # 2026-10-14: the height window and start height reach fly_hoop (before, the dashboard
+    # always flew its CLI defaults), the human keys come from the popup window by default,
+    # and the ClearML upload can be skipped
+    max_height: int = 190
+    min_height: int = 10
+    start_height: int = 80
+    keys: Literal["popup", "browser"] = "popup"
+    clearml: bool = True
 
 
 class SaveAnswerRequest(BaseModel):

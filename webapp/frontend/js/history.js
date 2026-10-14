@@ -222,6 +222,11 @@ const History = (() => {
       lineChart(c.canvas, [{ label: "mean reward",
         data: r.curve.timesteps.map((x, i) => ({ x, y: r.curve.mean_reward[i] })) }], "timesteps");
     }
+    const cfgSec = node("div", "cfg-section");
+    d.append(node("h3", "", "Configuration"), cfgSec);
+    RunConfig.mount(cfgSec, id, {
+      onStarted: (newId) => { Tabs.show("sim"); if (window.SimApp) window.SimApp.selectRun(newId); },
+    });
     const open = node("button", "secondary-btn", "Open this run in the Simulator tab (replays)");
     open.type = "button";
     open.addEventListener("click", () => {

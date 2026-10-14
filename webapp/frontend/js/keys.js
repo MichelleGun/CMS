@@ -38,9 +38,17 @@ const Keys = (() => {
     onChange([...held]);
   }
 
+  // Inputs that take no typing. Any INPUT used to count as typing, so after clicking the
+  // Camera checkbox mid-flight every flight key -- land and kill included -- was ignored
+  // until something else was clicked.
+  const NOT_TYPING = new Set(["checkbox", "radio", "button", "submit", "reset", "range",
+                              "color", "file", "image"]);
+
   function typing(e) {
-    const tag = (e.target && e.target.tagName) || "";
-    return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
+    const t = e.target;
+    const tag = (t && t.tagName) || "";
+    if (tag === "INPUT") return !NOT_TYPING.has((t.type || "text").toLowerCase());
+    return tag === "SELECT" || tag === "TEXTAREA" || Boolean(t && t.isContentEditable);
   }
 
   function onKeyDown(e) {
