@@ -13,5 +13,6 @@
   "created_at": "2026-09-30T19:53:29.147958",
   "finished_at": "2026-09-30T19:56:04.949363",
   "final_status": "stopped",
-  "final_timesteps": 40000
+  "final_timesteps": 40000,
+  "clearml_task_id": "2b34e868c53a4761a0730939e26fbb11"
 }

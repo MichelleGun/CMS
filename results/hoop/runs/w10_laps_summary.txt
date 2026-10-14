@@ -1,0 +1,7 @@
+Week 10 experiments, stage 'laps', summary written 2026-10-13 09:07
+
+run                                status          steps  best passes  last 5 evals
+w10_laps_T_kl_tracker              completed    32630000        0.344         0.156
+
+best = best 5-evaluation moving average; last = mean of the final 5 evaluations.
+Open tutorial/week10_compare.ipynb for the curves and diagnostics.

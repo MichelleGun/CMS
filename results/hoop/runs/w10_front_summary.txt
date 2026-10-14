@@ -1,0 +1,12 @@
+Week 10 experiments, stage 'front', summary written 2026-10-13 10:55
+
+run                                status          steps  best passes  last 5 evals
+w10_front_A_baseline               completed    29650000        0.727         0.627
+w10_front_B_gamma                  completed    29650000        0.813         0.640
+w10_front_C_kl                     completed    29650000        0.940         0.913
+w10_front_D_entropy                completed    29650000        0.593         0.420
+w10_front_E_sde                    missing      27470000        0.280         0.000
+w10_front_F_lambda1                completed    29650000        0.827         0.660
+
+best = best 5-evaluation moving average; last = mean of the final 5 evaluations.
+Open tutorial/week10_compare.ipynb for the curves and diagnostics.

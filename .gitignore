@@ -23,6 +23,20 @@ results/hoop/runs/*/*
 !results/hoop/runs/*/passes.json
 *.log
 
+# ad-hoc stdout/stderr captures from overnight launchers (keep the *.md/*summary.txt reports,
+# drop the raw process logs). Same philosophy as the runs/ rule above: summaries, not live files.
+results/**/*.out
+results/**/*.err
+results/**/*.log.err
+results/**/*_stdout.txt
+results/**/*_stderr.txt
+results/**/*.stdout.txt
+results/**/*.stderr.txt
+results/hoop/gates_rerun.txt
+# superseded / buggy runs kept only for local reference: full telemetry, progress, camera
+# frames and .tmp files -- exactly the bulky live data the runs/ rule excludes.
+results/hoop/runs_archive/
+
 # OS / editor
 .DS_Store
 Thumbs.db
