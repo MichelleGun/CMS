@@ -120,6 +120,13 @@ EXPERIMENTS = {
     "O": ("oblique", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4"]),
     "Z": ("clearance", _N8 + ["--reward-weights", _N8_CLEAR_RW]),
     "OZ": ("oblique_clearance", _N8 + ["--reward-weights", _N8_CLEAR_RW, "--oblique-p", "0.4"]),
+    # TRAINING_SPEEDUPS.md: O plus one training change each, so each can be raced against O
+    "OF": ("oblique_zonefocus", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4",
+                                       "--zone-focus", "2"]),
+    "OS": ("oblique_stall30", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4",
+                                     "--stall-sec", "30"]),
+    "ON": ("oblique_normreward", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4",
+                                        "--norm-reward"]),
     "Y": ("trk_loopdemo", _C_TRK + ["--gamma", "0.995", "--gae-lambda", "0.97", "--streak", "1.0",
                                     "--streak-cap", "4", "--bc-coef", "0.1", "--bc-coef-min", "0.05"]),
 }

@@ -71,6 +71,7 @@ from onboard.gym_env import REWARD_WEIGHTS, OnboardHoopEnv
 from telemetry_callback import (CameraCallback, DashboardEvalCallback, PaceCallback, TelemetryCallback,
                                 replace_retry)
 from vec_util import VEC_CHOICES, load_for_resume, make_train_vec_env, resolve_model_path, resolve_vec
+import train_speedups as speed
 
 UNTIL_STOPPED_BUDGET = 10 ** 12
 EVAL_SEED_BASE = 900_000_000
@@ -172,18 +173,14 @@ def _widen_index(old_width: int) -> int:
     return spec.layout_slices(old_width)["last_centre"].stop + (1 if old_width == 34 else 0)
 
 
-class EvalSeedReset(BaseCallback):
-    """Put just before the eval callback: rewinds the eval env's episode seed so every
-    evaluation scores the SAME layouts. Differences between evaluations are then the policy,
-    not the luck of the draw, which is what picking best_model.zip depends on."""
-    def __init__(self, eval_env, eval_freq, seed):
-        super().__init__()
-        self.eval_env, self.eval_freq, self.seed = eval_env, eval_freq, seed
-
-    def _on_step(self) -> bool:
-        if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
-            self.eval_env.env_method("set_episode_seed", self.seed)
-        return True
+class EvalSeedReset(speed.EvalLayoutReset):
+    """Put just before the eval callback: rewinds the eval env's episode seeds AND start zones so
+    every evaluation scores the SAME layouts, on one eval copy or several (train_speedups.eval_plan).
+    Differences between evaluations are then the policy, not the luck of the draw, which is what
+    picking best_model.zip depends on. (Before 2026-10-15 only the seed was rewound, so the zones
+    shifted by one between evaluations.)"""
+    def __init__(self, eval_env, eval_freq, seed, n_episodes=18):
+        super().__init__(eval_env, eval_freq, seed, n_episodes)
 
 
 def _atomic_write_json(path: Path, obj: dict):
@@ -480,6 +477,26 @@ def main(argv=None):
                     help="don't sync this run to ClearML (also: CLEARML_OFF=1)")
     # PPO settings (Week 10 experiments). Left out = SB3's default from scratch, or the parent's
     # value when continuing a run, i.e. exactly what every run before these flags used.
+    s = ap.add_argument_group("Training speed (TRAINING_SPEEDUPS.md)")
+    s.add_argument("--n-eval-envs", type=int, default=None,
+                   help="evaluation copies run in parallel (default: --n-envs, at most 4, or 1 with "
+                        "--vec dummy). Same layouts as 1 copy (scores equal up to float rounding); each "
+                        "copy is a process (~0.3-0.5 GB)")
+    s.add_argument("--checkpoint-min", type=float, default=15.0,
+                   help="save latest_model.zip + checkpoints/ every this many minutes (0 = off)")
+    s.add_argument("--checkpoint-keep", type=int, default=5, help="checkpoints/ keeps the newest N")
+    s.add_argument("--min-std-warn", type=float, default=0.05,
+                   help="warn once when the action noise falls below this (0 = off)")
+    s.add_argument("--zone-focus", type=float, default=0.0,
+                   help="training starts favour the zones that fail: weight 1 + this x shortfall "
+                        "(0 = round-robin, 2 = the worst zone up to 3x as often). Evaluation unchanged")
+    s.add_argument("--stall-sec", type=float, default=0.0,
+                   help="cut a training episode after this many seconds without a pass (0 = off; "
+                        "try 30). Evaluation unchanged")
+    s.add_argument("--norm-reward", action="store_true",
+                   help="normalise training rewards (VecNormalize, reward only): steadier critic; "
+                        "nothing changes for replays or the drone")
+
     g = ap.add_argument_group("PPO settings (default: SB3 default / the parent's value)")
     g.add_argument("--gamma", type=float, default=None,
                    help="discount; 0.99 = ~6.7 s horizon at 15 Hz, 0.995 = ~13 s (one same-side lap)")
@@ -515,6 +532,7 @@ def main(argv=None):
         signal.signal(signal.SIGBREAK, _request_stop)
 
     vec = resolve_vec(args.vec, args.n_envs)
+    n_eval_envs = args.n_eval_envs or speed.default_eval_envs(args.n_envs, vec)
     init_path = resolve_model_path(args.init) if args.init else None
     init_meta = {}
     if init_path is not None and (init_path.parent / "meta.json").is_file():
@@ -595,6 +613,9 @@ def main(argv=None):
                 "samples": counts, "source_weights": sw,
                 "coef": args.bc_coef, "coef_min": args.bc_coef_min,
                 "decay_steps": args.bc_decay_steps} if demo_files else None),
+        "speedups": speed.speedup_meta(
+            n_eval_envs=n_eval_envs, checkpoint_min=args.checkpoint_min, zone_focus=args.zone_focus,
+            stall_sec=args.stall_sec, norm_reward=bool(args.norm_reward)),
         "pid": os.getpid(), "created_at": datetime.now().isoformat(),
         "finished_at": None, "final_status": None, "final_timesteps": None,
     }
@@ -607,15 +628,19 @@ def main(argv=None):
     ramped = args.dr_steps > 0 and (args.dr > 0 or args.hard_start_p > 0)
     env_kwargs = dict(profile=args.profile, seed=args.seed * 100_000, **robust,
                       ramp=0.0 if ramped else 1.0, near_pass_p=args.near_pass_p,
-                      oblique_p=args.oblique_p)
+                      oblique_p=args.oblique_p, stall_sec=args.stall_sec)
     train_env = make_train_vec_env(OnboardHoopEnv, env_kwargs, args.n_envs, seed=args.seed, vec=vec,
                                    rank_seed_kwarg="seed")
     # Evaluation layouts come from a separate stream that training never draws from;
     # EvalSeedReset rewinds it before every evaluation.
     # ... always at full robustness strength: its success rate is the robust one
+    # Several copies fly the same layouts one copy would (EvalSeedReset hands each its block).
     eval_env = make_train_vec_env(OnboardHoopEnv, dict(profile=args.profile, seed=EVAL_SEED_BASE,
                                                        **robust, ramp=1.0),
-                                  1, seed=args.seed + 1, vec="dummy")
+                                  n_eval_envs, seed=args.seed + 1,
+                                  vec="subproc" if n_eval_envs > 1 else "dummy")
+    if args.norm_reward:
+        train_env, eval_env = speed.wrap_reward_norm(train_env, eval_env, args.gamma or 0.99)
 
     import torch
     torch.set_num_threads(1)
@@ -684,6 +709,9 @@ def main(argv=None):
                     bc_augment=args.bc_augment)
     start_steps = int(model.num_timesteps)
     sync = clearml_sync.start("onboard-rl", run_dir, meta, no_clearml=args.no_clearml)
+    print(f"[INFO] evaluation on {n_eval_envs} cop{'y' if n_eval_envs == 1 else 'ies'}; "
+          f"checkpoints every {args.checkpoint_min:g} min" + (f"; zone focus {args.zone_focus:g}" if args.zone_focus else "")
+          + (f"; stall cut {args.stall_sec:g} s" if args.stall_sec else "") + ("; reward normalised" if args.norm_reward else ""))
     print(f"[INFO] envs {args.n_envs} ({vec}); actor frozen for the first {warmup} steps; "
           f"BC coef {args.bc_coef if demo_files else 0} -> {args.bc_coef_min if demo_files else 0}")
 
@@ -701,8 +729,14 @@ def main(argv=None):
              PaceCallback(run_dir=run_dir, ctrl_dt=spec.CTRL_DT)]
     if ramped:
         watch.append(RampCallback(args.dr_steps))
-    callback = CallbackList([*watch, EvalSeedReset(eval_env, args.eval_freq, EVAL_SEED_BASE), eval_cb,
-                             sync.callback(eval_cb), StopRequestCallback(run_dir)])
+    extra = [speed.ExplorationWatch(args.min_std_warn, run_dir)]
+    if args.checkpoint_min > 0:
+        extra.append(speed.TimedCheckpoint(run_dir, args.checkpoint_min, args.checkpoint_keep))
+    if args.zone_focus > 0 and args.start_mode == "zones":
+        extra.append(speed.ZoneFocus(args.zone_focus))
+    callback = CallbackList([*watch, *extra,
+                             EvalSeedReset(eval_env, args.eval_freq, EVAL_SEED_BASE, args.n_eval_episodes),
+                             eval_cb, sync.callback(eval_cb), StopRequestCallback(run_dir)])
 
     budget = UNTIL_STOPPED_BUDGET if args.until_stopped else args.timesteps
     final_status, final_timesteps = "crashed", 0

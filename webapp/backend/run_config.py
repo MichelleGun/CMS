@@ -116,6 +116,23 @@ FIELDS = [
          src="ppo.log_std_reset", flag="--log-std-reset", null_ok=True,
          help="a continued run can restart its action noise; empty = keep the parent's"),
     dict(key="sde", group="PPO", label="gSDE exploration", type="bool", src="ppo.use_sde", flag="--sde"),
+    # ---- training speed (TRAINING_SPEEDUPS.md)
+    dict(key="n_eval_envs", group="Speed", label="Evaluation copies", type="int", min=1, max=16,
+         src="speedups.n_eval_envs", flag="--n-eval-envs", null_ok=True,
+         help="evaluations run on this many copies at once (same layouts, faster; ~0.3-0.5 GB each); "
+              "empty = parallel envs, at most 4"),
+    dict(key="checkpoint_min", group="Speed", label="Checkpoint every (min)", type="float", min=0, max=1440,
+         step=5, src="speedups.checkpoint_min", flag="--checkpoint-min", null_ok=True,
+         help="latest_model.zip + checkpoints/ on a timer, so a crash loses minutes; 0 = off, empty = 15"),
+    dict(key="zone_focus", group="Speed", label="Focus on failing zones", type="float", min=0, max=10,
+         step=0.5, src="speedups.zone_focus", flag="--zone-focus", null_ok=True,
+         help="training starts favour the zones that fail (2 = worst zone up to 3x as often); 0 = even"),
+    dict(key="stall_sec", group="Speed", label="Cut stalled episodes (s)", type="float", min=0, max=600,
+         step=5, src="speedups.stall_sec", flag="--stall-sec", null_ok=True,
+         help="end a training episode after this long without a pass (try 30); 0 = off"),
+    dict(key="norm_reward", group="Speed", label="Normalise rewards", type="bool",
+         src="speedups.norm_reward", flag="--norm-reward",
+         help="steadier critic; nothing changes for replays or the drone"),
     # ---- imitation
     dict(key="bc_coef", group="Imitation", label="Demo term strength (start)", type="float", min=0, max=10,
          step=0.1, src="bc.coef"),
@@ -160,7 +177,7 @@ def current_values(meta: dict, arch: Optional[dict] = None) -> dict:
             v = (meta.get("obs_dim") or 0) > 37
         if v is None and f["key"] in PPO_FALLBACK:
             v = PPO_FALLBACK[f["key"]]
-        if v is None and f["key"] == "sde":
+        if v is None and f["key"] in ("sde", "norm_reward"):
             v = False
         if v is None and arch:
             v = arch.get(f"ppo.{f['key']}")
@@ -231,7 +248,7 @@ def onboard_argv(python_exe: str, run_id: str, run_dir, p: dict, init_dir=None, 
         argv += ["--lr", _num(float(p["learning_rate"]))]
     for key, f in FIELD_BY_KEY.items():
         flag = f.get("flag")
-        if not flag or f["group"] != "PPO":
+        if not flag or f["group"] not in ("PPO", "Speed"):
             continue
         v = p.get(key)
         if v is None or v is False:

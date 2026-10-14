@@ -21,6 +21,7 @@ results/hoop/runs/*/*
 !results/hoop/runs/*/live_status.json
 !results/hoop/runs/*/evaluations.npz
 !results/hoop/runs/*/passes.json
+!results/hoop/runs/*/rescore.json
 *.log
 
 # ad-hoc stdout/stderr captures from overnight launchers (keep the *.md/*summary.txt reports,

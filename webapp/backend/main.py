@@ -124,6 +124,8 @@ def start_run(req: StartRunRequest):
             n_epochs=req.n_epochs, critic_warmup_steps=req.critic_warmup_steps,
             log_std_reset=req.log_std_reset, sde=req.sde, ring_tracker=req.ring_tracker,
             streak_cap=req.streak_cap, bc_coef_min=req.bc_coef_min, bc_decay_steps=req.bc_decay_steps,
+            speed=dict(n_eval_envs=req.n_eval_envs, checkpoint_min=req.checkpoint_min,
+                       zone_focus=req.zone_focus, stall_sec=req.stall_sec, norm_reward=req.norm_reward),
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))

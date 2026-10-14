@@ -49,6 +49,7 @@ from hoop_env import HoopFindAviary, ROOM  # noqa: E402
 from hoop_net_env import HoopNetAviary, merge_reward_weights, LAP_DIRS, START_MODES  # noqa: E402
 from discrete_action_wrapper import HoopFindDiscreteVel  # noqa: E402
 import clearml_sync  # noqa: E402
+import train_speedups as speed  # noqa: E402
 from telemetry_callback import (TelemetryCallback, DashboardEvalCallback, CameraCallback,  # noqa: E402
                                 PaceCallback)
 from vec_util import (VEC_CHOICES, load_for_resume, make_train_vec_env, resolve_model_path,  # noqa: E402
@@ -194,6 +195,9 @@ def _make_env_kwargs(args):
         kwargs["streak_obs"] = args.armed_obs and args.streak_obs
         kwargs["lap_dir"] = args.lap_dir
         kwargs["start_mode"] = args.start_mode
+        kwargs["action_repeat"] = args.action_repeat
+        kwargs["act_hist"] = args.act_hist
+        kwargs["post_pass_p"] = args.post_pass_p
         if args.wind_steps > 0:
             kwargs["wind"] = 0.0       # the wind curriculum ramps it up from calm
     if args.seed is not None:
@@ -299,6 +303,37 @@ def main():
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--no-clearml", action="store_true",
                     help="don't sync this run to ClearML (also: CLEARML_OFF=1)")
+    s = ap.add_argument_group("Training speed and learning (TRAINING_SPEEDUPS.md)")
+    s.add_argument("--n-eval-envs", type=int, default=None,
+                   help="evaluation copies run in parallel (default: --n-envs up to 4, 1 with --vec "
+                        "dummy). Net env: every evaluation flies the same fixed layouts")
+    s.add_argument("--checkpoint-min", type=float, default=15.0,
+                   help="save latest_model.zip + checkpoints/ every this many minutes (0 = off)")
+    s.add_argument("--checkpoint-keep", type=int, default=5)
+    s.add_argument("--min-std-warn", type=float, default=0.05,
+                   help="warn once when the action noise falls below this (0 = off)")
+    s.add_argument("--action-repeat", type=int, default=1,
+                   help="net env: hold each action for N control steps (2 = decide at 15 Hz; the PID "
+                        "still runs at 30 Hz). Fresh runs get gamma 0.995^N (same look-ahead in seconds)")
+    s.add_argument("--act-hist", type=int, default=None,
+                   help="net env: keep only the last K actions in the observation (default all 15; "
+                        "4 cuts the input from 84 to 40 numbers). Fresh runs only")
+    s.add_argument("--post-pass-p", type=float, default=0.0,
+                   help="net env, laps: share of training episodes that start just past the ring, one "
+                        "pass counted, not re-armed (practise the turn-around). Evaluation unchanged")
+    s.add_argument("--zone-focus", type=float, default=0.0,
+                   help="net env, --start-mode zones: training starts favour failing zones "
+                        "(weight 1 + this x shortfall; 0 = round-robin)")
+    s.add_argument("--budget-start", type=float, default=None,
+                   help="net env, --reward budget: training budget starts here and rises to --budget "
+                        "over --budget-ramp-steps (more, shorter episodes early). Evaluation: --budget")
+    s.add_argument("--budget-ramp-steps", type=int, default=2_000_000)
+    s.add_argument("--sde", action="store_true",
+                   help="gSDE exploration (noise held ~--sde-sample-freq steps). Fresh runs only")
+    s.add_argument("--sde-sample-freq", type=int, default=8)
+    s.add_argument("--batch-size", type=int, default=None, help="PPO minibatch (net preset: 256)")
+    s.add_argument("--norm-reward", action="store_true",
+                   help="normalise training rewards (VecNormalize, reward only)")
     args = ap.parse_args()
 
     run_dir = args.out
@@ -325,6 +360,12 @@ def main():
         args.reward_weights = rw
         if args.episode_sec is None:
             args.episode_sec = 120.0 if args.reward == "budget" else 20.0
+    if args.env != "net" and (args.action_repeat != 1 or args.act_hist is not None or args.post_pass_p
+                              or args.zone_focus or args.budget_start is not None):
+        sys.exit("[ERROR] --action-repeat / --act-hist / --post-pass-p / --zone-focus / --budget-start "
+                 "are net-env options")
+    if args.init is not None and (args.sde or args.act_hist is not None):
+        sys.exit("[ERROR] --sde and --act-hist change the policy's shape: start a fresh run (no --init)")
     budget = UNTIL_STOPPED_BUDGET if args.until_stopped else args.timesteps
     curriculum_steps = args.curriculum_steps or (500_000 if args.until_stopped else args.timesteps // 2)
 
@@ -342,6 +383,11 @@ def main():
             if pm.get("algo") and pm["algo"] != args.algo:
                 sys.exit(f"[ERROR] --init {init_path} is a {pm['algo']} model; "
                          f"pass --algo {pm['algo']} to continue it")
+            if args.env == "net" and int(pm.get("action_repeat") or 1) != args.action_repeat:
+                sys.exit(f"[ERROR] --init {init_path} decided every {pm.get('action_repeat') or 1} "
+                         f"control step(s); pass --action-repeat {pm.get('action_repeat') or 1} or start fresh")
+            if pm.get("act_hist") is not None and args.act_hist is None:
+                args.act_hist = int(pm["act_hist"])     # keep the parent's observation layout
             if pm.get("env", "legacy") != args.env and pm.get("source") != "bc":
                 sys.exit(f"[ERROR] --init {init_path} was trained on env "
                          f"'{pm.get('env', 'legacy')}', not '{args.env}'")
@@ -374,6 +420,15 @@ def main():
         "streak_obs": bool(args.armed_obs and args.streak_obs) if args.env == "net" else None,
         "lap_dir": args.lap_dir if args.env == "net" else None,
         "start_mode": args.start_mode if args.env == "net" else None,
+        "action_repeat": args.action_repeat if args.env == "net" else None,
+        "act_hist": args.act_hist if args.env == "net" else None,
+        "post_pass_p": args.post_pass_p if args.env == "net" else None,
+        "budget_start": args.budget_start if args.env == "net" and args.reward == "budget" else None,
+        "budget_ramp_steps": (args.budget_ramp_steps if args.env == "net" and args.reward == "budget"
+                              and args.budget_start is not None else None),
+        "speedups": speed.speedup_meta(n_eval_envs=None, checkpoint_min=args.checkpoint_min,
+                                       zone_focus=args.zone_focus, norm_reward=bool(args.norm_reward),
+                                       sde=bool(args.sde), batch_size=args.batch_size),
         "obs_dim": None,
         "hyperparams": None,
         "n_envs": args.n_envs,
@@ -403,9 +458,14 @@ def main():
     if args.env == "net":
         eval_env_kwargs["hoop_radius_scale"] = 1.0     # always evaluate on the real-size ring
         eval_env_kwargs.pop("wind", None)              # ... in full wind
+    eval_env_kwargs.pop("post_pass_p", None)           # evaluation: ordinary starts only
     eval_env_kwargs["seed"] = (args.seed + 1) if args.seed is not None else 1
-    eval_env = make_train_vec_env(env_cls, eval_env_kwargs, 1, seed=eval_env_kwargs["seed"],
-                                  wrapper_class=wrapper_class, vec="dummy")
+    n_eval_envs = args.n_eval_envs or speed.default_eval_envs(args.n_envs, vec)
+    meta["speedups"]["n_eval_envs"] = n_eval_envs
+    eval_env = make_train_vec_env(env_cls, eval_env_kwargs, n_eval_envs, seed=eval_env_kwargs["seed"],
+                                  wrapper_class=wrapper_class, vec="subproc" if n_eval_envs > 1 else "dummy")
+    if args.norm_reward:
+        train_env, eval_env = speed.wrap_reward_norm(train_env, eval_env, 0.995 ** args.action_repeat)
 
     print(f"[INFO] algo:             {args.algo} ({env_variant})")
     print(f"[INFO] envs:             {args.n_envs} ({vec})")
@@ -422,7 +482,8 @@ def main():
             # an older parent without the "armed" flag / pass count is widened (zero weights for the
             # new inputs, which all sit just before the 3-number vector to the ring)
             widen = -3 if args.env == "net" and args.armed_obs else None
-            model, _ = load_for_resume(algo_cls, init_path, train_env, widen_at=widen)
+            over = {"batch_size": args.batch_size} if args.batch_size else {}
+            model, _ = load_for_resume(algo_cls, init_path, train_env, widen_at=widen, **over)
         except ValueError as e:
             train_env.close()
             eval_env.close()
@@ -440,6 +501,12 @@ def main():
         hp = {}
         if args.algo == "ppo" and args.env == "net":
             hp = dict(PPO_NET_KWARGS)
+            if args.env == "net" and args.action_repeat > 1:
+                hp["gamma"] = round(PPO_NET_KWARGS["gamma"] ** args.action_repeat, 6)
+            if args.batch_size:
+                hp["batch_size"] = args.batch_size
+            if args.sde:
+                hp.update(use_sde=True, sde_sample_freq=args.sde_sample_freq)
             if args.until_stopped:
                 hp["learning_rate"] = 1e-4
                 meta["hyperparams"] = dict(hp)
@@ -467,8 +534,18 @@ def main():
         deterministic=True,
         render=False,
     )
-    callbacks = [telemetry_cb, camera_cb, eval_cb, sync.callback(eval_cb), PaceCallback(run_dir=run_dir),
-                 StopRequestCallback()]
+    pace = PaceCallback(run_dir=run_dir, ctrl_dt=args.action_repeat / 30.0)
+    callbacks = [telemetry_cb, camera_cb]
+    if args.env == "net":                # fixed evaluation layouts (seed + zone), any number of copies
+        callbacks.append(speed.EvalLayoutReset(eval_env, args.eval_freq, 900_000_000, args.n_eval_episodes))
+    callbacks += [eval_cb, sync.callback(eval_cb), pace, StopRequestCallback(),
+                  speed.ExplorationWatch(args.min_std_warn, run_dir)]
+    if args.checkpoint_min > 0:
+        callbacks.append(speed.TimedCheckpoint(run_dir, args.checkpoint_min, args.checkpoint_keep))
+    if args.env == "net" and args.zone_focus > 0 and args.start_mode == "zones":
+        callbacks.append(speed.ZoneFocus(args.zone_focus))
+    if args.env == "net" and args.reward == "budget" and args.budget_start is not None:
+        callbacks.append(speed.BudgetRamp(args.budget_start, args.budget, args.budget_ramp_steps))
     if args.env == "net" and args.radius_start != 1.0:
         callbacks.append(RadiusCurriculumCallback(curriculum_steps, start=args.radius_start))
     if args.env == "net" and args.wind_steps > 0:

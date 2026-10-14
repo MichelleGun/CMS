@@ -76,6 +76,9 @@ python hardware/onboard/launch_detached.py results/hoop/loop_<yourname> -- hardw
 - `--n-envs` is the number of parallel simulators per run (each about 1 CPU core and ~0.7 GB of
   memory); `--parallel` is the number of runs at once. Training runs at below-normal priority.
 - To stop a run cleanly, create a file `stop.flag` in its folder. It saves `final_model.zip`.
+- **Faster training** ([TRAINING_SPEEDUPS.md](TRAINING_SPEEDUPS.md)): evaluation runs on several copies
+  with `--vec subproc` (it was ~60 % of the wall clock), `latest_model.zip` is saved every 15 min, and
+  `rescore_checkpoints.py` re-scores a run's policies on 100 episodes before you export one.
 - **Watch:** `results/hoop/loop_night.log` (one line per check), the run's `passes.json` (one entry
   per evaluation: mean laps/ep, max, per zone), and the report
   `results/hoop/overnight_loop_report_<tag>.md`.

@@ -236,6 +236,10 @@ class OnboardSim:
         # zones: the round-robin starts at a zone set by the seed (parallel envs get different
         # seeds, so they start spread over the zones); it is not reset with the episode seed
         self._zone_i = int(seed or 0) % 9
+        # training only (train_speedups.ZoneFocus): draw the zone from these probabilities instead
+        # of the round-robin, from a stream of its own so every other draw is unchanged
+        self.zone_weights = None
+        self._zone_rng = np.random.default_rng(int(seed or 0) + 7_919)
         self.clear_cross = 0           # open plane: last crossing clear of the noodle (+1 / -1)
         self.speed_scale = self.yaw_scale = 1.0
         self.start_type = "front"
@@ -357,8 +361,11 @@ class OnboardSim:
         """The next zone of the round-robin (sets start_type to zone_1 .. zone_9): a random point
         in that cell at about takeoff height, re-drawn if within 0.3 m of the ring; zone 9 is
         under the hoop, kept clear below its bottom."""
-        k = self._zone_i % 9
-        self._zone_i += 1
+        if self.zone_weights is not None:
+            k = int(self._zone_rng.choice(9, p=self.zone_weights))
+        else:
+            k = self._zone_i % 9
+            self._zone_i += 1
         self.start_type = f"zone_{k + 1}"
         U = self.rng.uniform
         lim = CAGE_XY - 0.12

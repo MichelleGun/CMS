@@ -106,6 +106,29 @@ def test_new_fields_become_trainer_flags(env):
     assert json.loads(after("--reward-weights")) == {"r_passed": 25.0, "drain": 0.0}
 
 
+def test_speed_fields_become_trainer_flags_and_every_flag_exists(env):
+    r = env["client"].post("/api/runs", json=dict(
+        algo="ppo", env="onboard", n_eval_envs=3, checkpoint_min=10, zone_focus=2, stall_sec=30,
+        norm_reward=True))
+    assert r.status_code == 201, r.text
+    a = env["spawned"][-1].argv
+
+    def after(flag):
+        return a[a.index(flag) + 1]
+    assert after("--n-eval-envs") == "3" and after("--zone-focus") == "2.0" and after("--stall-sec") == "30.0"
+    assert after("--checkpoint-min") == "10.0" and "--norm-reward" in a
+    trainer = (run_config.ONBOARD_TRAIN).read_text()
+    for f in run_config.FIELDS:
+        if f.get("flag"):
+            assert f'"{f["flag"]}"' in trainer, f["flag"]
+
+
+def test_an_old_payload_sends_no_speed_flags(env):
+    env["client"].post("/api/runs", json=dict(algo="ppo", env="onboard"))
+    a = env["spawned"][-1].argv
+    assert not {"--n-eval-envs", "--zone-focus", "--stall-sec", "--norm-reward", "--checkpoint-min"} & set(a)
+
+
 @pytest.mark.parametrize("bad", [dict(gamma=1.5), dict(target_kl=0.0), dict(batch_size=3),
                                  dict(n_epochs=0), dict(learning_rate=1.0), dict(profile="wild")])
 def test_out_of_range_values_are_refused(env, bad):
@@ -126,7 +149,7 @@ def test_the_config_of_a_run_lists_its_values_and_what_is_editable(env):
     assert v["profile"] == "measured" and v["gamma"] == 0.99 and v["target_kl"] == 0.02
     assert v["batch_size"] == 512 and v["same_side"] is True and v["start_zones"] is True
     assert v["ring_tracker"] is False and v["bc_coef"] == 0.1 and v["human_weight"] == 3.0
-    assert {f["group"] for f in c["fields"]} == {"Run", "Environment", "PPO", "Imitation"}
+    assert {f["group"] for f in c["fields"]} == {"Run", "Environment", "PPO", "Speed", "Imitation"}
     rw = {r["key"]: r for r in c["reward"]}
     assert rw["r_passed"]["value"] == 25.0 and rw["r_passed"]["default"] == 20.0
     assert rw["drain"]["type"] == "bool"

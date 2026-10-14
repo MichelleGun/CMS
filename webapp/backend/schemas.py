@@ -74,6 +74,12 @@ class StartRunRequest(BaseModel):
     streak_cap: Optional[float] = Field(None, ge=1.0, le=20.0)
     bc_coef_min: Optional[float] = Field(None, ge=0.0, le=10.0)
     bc_decay_steps: Optional[int] = Field(None, ge=1, le=100_000_000)
+    # onboard: training speed (TRAINING_SPEEDUPS.md). None = the trainer's default.
+    n_eval_envs: Optional[int] = Field(None, ge=1, le=16)
+    checkpoint_min: Optional[float] = Field(None, ge=0.0, le=1440.0)
+    zone_focus: Optional[float] = Field(None, ge=0.0, le=10.0)
+    stall_sec: Optional[float] = Field(None, ge=0.0, le=600.0)
+    norm_reward: bool = False
 
 
 class RunLabelRequest(BaseModel):
