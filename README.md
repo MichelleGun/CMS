@@ -165,6 +165,11 @@ Full feature list and notes: [webapp/README.md](webapp/README.md).
 Run these from `scripts/` with `drones` activated. Full walkthroughs and explanations of each are
 in [tutorial/TUTORIAL.md](tutorial/TUTORIAL.md).
 
+### Tracking runs in ClearML
+
+Every training run, clone and Tello flight syncs to ClearML (https://app.clear.ml) so runs can be
+compared. One-time setup, uploading old runs and where to look: [CLEARML.md](CLEARML.md).
+
 ### The notebook
 
 `tutorial/walkthrough.ipynb` already has training curves, full rollout diagnostics, and embedded
@@ -202,6 +207,7 @@ CMS/
 | Onboard-camera task: what is randomised (drone, swinging ring, hard starts, detector noise) | `hardware/onboard/sim.py`; tests in `hardware/onboard/tests/test_robust.py` |
 | 3D scene shared by the CLI and the webapp's replay generator | `scripts/court.py` (`build_room`, `build_hoop`) |
 | Anything about the real Tello: safety limits, calibration, camera, keyboard flying, imitation, running a policy | `hardware/` (settings in `hardware/config.yaml`) |
+| Experiment tracking: what is synced to ClearML, setup, turning it off | `scripts/clearml_sync.py` (see [CLEARML.md](CLEARML.md)) |
 
 ---
 

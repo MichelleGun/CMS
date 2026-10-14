@@ -8,6 +8,9 @@ fastapi==0.142.1
 uvicorn[standard]==0.54.0     # [standard] brings websockets, which the live view needs
 psutil==7.2.2
 PyYAML==6.0.3
+# Experiment tracking: every training run and flight syncs to ClearML (scripts/clearml_sync.py).
+# Optional: without it, or before `clearml-init`, runs carry on and just don't sync.
+clearml==2.1.12
 
 # Only for keyboard flying of a real Tello from the Drone tab (hardware/); skip it for simulation:
 #   pip install -r hardware/requirements-hardware.txt

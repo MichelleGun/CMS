@@ -31,16 +31,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from camera_capture import get_onboard_frame  # noqa: E402
 
 
+def replace_retry(tmp, path, tries: int = 40, wait_s: float = 0.25):
+    """os.replace, retried while Windows says the target is in use. The results folder lives in
+    OneDrive, which briefly locks a file it is uploading (a new meta.json above all); that crashed
+    an overnight run at startup (2026-10-13). Gives up only after tries x wait_s (10 s)."""
+    import time as _time
+    for i in range(tries):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            _time.sleep(wait_s)
+
+
 def _atomic_write_text(path: Path, text: str):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text)
-    os.replace(tmp, path)
+    replace_retry(tmp, path)
 
 
 def _atomic_write_bytes(path: Path, data: bytes):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_bytes(data)
-    os.replace(tmp, path)
+    replace_retry(tmp, path)
 
 
 class TelemetryCallback(BaseCallback):
@@ -270,7 +285,7 @@ class DashboardEvalCallback(EvalCallback):
             try:
                 tmp = self.run_dir / "latest_model.tmp.zip"
                 self.model.save(str(tmp))
-                os.replace(tmp, self.run_dir / "latest_model.zip")
+                replace_retry(tmp, self.run_dir / "latest_model.zip")
             except OSError as e:
                 if self.verbose:
                     print(f"[DashboardEvalCallback] latest model save failed: {e}")

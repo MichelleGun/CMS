@@ -48,6 +48,7 @@ sys.path.insert(0, str(HERE))
 from hoop_env import HoopFindAviary, ROOM  # noqa: E402
 from hoop_net_env import HoopNetAviary, merge_reward_weights, LAP_DIRS, START_MODES  # noqa: E402
 from discrete_action_wrapper import HoopFindDiscreteVel  # noqa: E402
+import clearml_sync  # noqa: E402
 from telemetry_callback import (TelemetryCallback, DashboardEvalCallback, CameraCallback,  # noqa: E402
                                 PaceCallback)
 from vec_util import (VEC_CHOICES, load_for_resume, make_train_vec_env, resolve_model_path,  # noqa: E402
@@ -296,6 +297,8 @@ def main():
                      help="18 = every start zone twice with --start-mode zones")
     ap.add_argument("--run-id", type=str, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--no-clearml", action="store_true",
+                    help="don't sync this run to ClearML (also: CLEARML_OFF=1)")
     args = ap.parse_args()
 
     run_dir = args.out
@@ -447,6 +450,7 @@ def main():
     meta["obs_dim"] = int(train_env.observation_space.shape[-1])
     _atomic_write_json(run_dir / "meta.json", meta)
     start_steps = int(model.num_timesteps)
+    sync = clearml_sync.start("pybullet", run_dir, meta, no_clearml=args.no_clearml)
 
     t0 = time.time()
     telemetry_cb = TelemetryCallback(run_dir=run_dir, env_index=0)
@@ -463,7 +467,8 @@ def main():
         deterministic=True,
         render=False,
     )
-    callbacks = [telemetry_cb, camera_cb, eval_cb, PaceCallback(run_dir=run_dir), StopRequestCallback()]
+    callbacks = [telemetry_cb, camera_cb, eval_cb, sync.callback(eval_cb), PaceCallback(run_dir=run_dir),
+                 StopRequestCallback()]
     if args.env == "net" and args.radius_start != 1.0:
         callbacks.append(RadiusCurriculumCallback(curriculum_steps, start=args.radius_start))
     if args.env == "net" and args.wind_steps > 0:
@@ -496,6 +501,7 @@ def main():
         meta["final_status"] = final_status
         meta["final_timesteps"] = final_timesteps
         _atomic_write_json(run_dir / "meta.json", meta)
+        sync.finish(final_status)
         try:
             train_env.close()
             eval_env.close()
