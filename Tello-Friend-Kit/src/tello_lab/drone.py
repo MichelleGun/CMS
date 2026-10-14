@@ -50,6 +50,26 @@ def connected(drone, *, wait_for_state: bool = True):
         drone.end()
 
 
+def try_set_video_bitrate(drone, mbps: int, events=None) -> bool:
+    """Request a video bitrate, carrying on if the drone refuses.
+
+    setbitrate is an SDK 3.0 (RoboMaster TT) command. A Tello EDU on SDK 2.0 answers
+    "unknown command", which aborted the survey and observation modes outright on that
+    aircraft. A lower bitrate only reduces video corruption, so it is never worth
+    stopping for. Returns whether it was accepted, so a restore is only sent after a
+    successful set.
+    """
+    try:
+        drone.set_video_bitrate(mbps)
+    except Exception as exc:
+        if events is not None:
+            events.write("video_bitrate_failed", mbps=mbps, error=str(exc))
+        return False
+    if events is not None:
+        events.write("video_bitrate", mbps=mbps)
+    return True
+
+
 @dataclass(frozen=True)
 class Step:
     command: str

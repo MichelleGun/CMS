@@ -5,7 +5,8 @@ import math
 import time
 
 from .config import PROJECT_ROOT
-from .drone import FlightError, assert_ready, connected, ensure_takeoff_clearance
+from .drone import (FlightError, assert_ready, connected, ensure_takeoff_clearance,
+                    try_set_video_bitrate)
 from .perception import annotate, blue_ring_candidates
 from .recording import EventLog, TelemetryRecorder, output_path
 
@@ -91,8 +92,7 @@ def run_survey(drone, settings, *, search_forward=False, landing_pad_id=None):
                 health(recorder, settings.minimum_battery_percent, airborne=False)
                 events.write("connected", purpose="identify targets using a camera sweep")
                 if search_forward:
-                    bitrate_attempted = True
-                    drone.set_video_bitrate(1)
+                    bitrate_attempted = try_set_video_bitrate(drone, 1, events)
                     drone.set_speed(settings.speed_cm_s)
                 pads_attempted = True
                 drone.enable_mission_pads()
@@ -205,7 +205,7 @@ def run_survey(drone, settings, *, search_forward=False, landing_pad_id=None):
                     finally:
                         try:
                             if bitrate_attempted:
-                                drone.set_video_bitrate(0)
+                                try_set_video_bitrate(drone, 0)
                         finally:
                             recorder.close()
     finally:

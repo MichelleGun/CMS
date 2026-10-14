@@ -211,6 +211,22 @@ def test_forward_search_rises_turns_and_returns_to_pad(fast_survey):
     assert ("bitrate", 0) in drone.calls
 
 
+def test_a_drone_that_refuses_setbitrate_still_surveys_and_lands(fast_survey):
+    """setbitrate is an SDK 3.0 (RoboMaster TT) command; a Tello EDU answers 'unknown
+    command'. That used to abort the whole survey before takeoff."""
+    drone = Drone()
+    drone.pad_id = 3
+
+    def refuse(value):
+        drone.calls.append(("bitrate", value))
+        raise RuntimeError("Command 'setbitrate 1' was unsuccessful for 2 tries. "
+                           "Latest response: 'unknown command: setbitrate'")
+    drone.set_video_bitrate = refuse
+    result = survey.run_survey(drone, Settings(), search_forward=True, landing_pad_id=3)
+    assert result["landing_acknowledged"] is True
+    assert ("bitrate", 0) not in drone.calls, "nothing to restore after a refused set"
+
+
 @pytest.mark.parametrize("failure", ["rise", "pad_go"])
 def test_search_command_failure_lands(fast_survey, failure):
     drone = Drone(failure=failure)

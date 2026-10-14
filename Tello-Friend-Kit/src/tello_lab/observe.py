@@ -5,7 +5,7 @@ import time
 import cv2
 
 from .config import PROJECT_ROOT
-from .drone import connected
+from .drone import connected, try_set_video_bitrate
 from .perception import annotate, blue_ring_candidates
 from .recording import EventLog, TelemetryRecorder, output_path
 from .survey import health
@@ -26,9 +26,7 @@ def observe(drone, settings, seconds, *, display=True, bitrate_mbps=None):
                 recorder.start()
                 health(recorder, settings.minimum_battery_percent, airborne=False)
                 if bitrate_mbps is not None:
-                    bitrate_attempted = True
-                    drone.set_video_bitrate(bitrate_mbps)
-                    events.write("video_bitrate", mbps=bitrate_mbps)
+                    bitrate_attempted = try_set_video_bitrate(drone, bitrate_mbps, events)
                 pads_attempted = True
                 drone.enable_mission_pads()
                 drone.set_mission_pad_detection_direction(2)
@@ -92,7 +90,7 @@ def observe(drone, settings, seconds, *, display=True, bitrate_mbps=None):
                     finally:
                         try:
                             if bitrate_attempted:
-                                drone.set_video_bitrate(0)  # Restore SDK automatic selection.
+                                try_set_video_bitrate(drone, 0)  # Restore automatic selection.
                         finally:
                             recorder.close()
     finally:

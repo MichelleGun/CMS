@@ -36,5 +36,10 @@ The basic `check`, `video`, `snapshot`, hover and square tests use standard Tell
 commands. Mission pads and the survey/observation modes require Tello EDU. Command support
 and firmware differences still need hardware testing on the receiving drone.
 
+One difference is known: the Tello EDU implements SDK 2.0 and answers `setbitrate` with
+`unknown command`, because that command is SDK 3.0 (RoboMaster TT). The survey and
+observation modes log `video_bitrate_failed` and continue at the drone's default bitrate.
+`check` prints the SDK version the drone reports.
+
 If a command fails, its exit status is nonzero. `land` is a normal landing request, not a
 motor-cut emergency. Run only one hardware command at a time and keep the aircraft in view.
