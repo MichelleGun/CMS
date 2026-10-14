@@ -63,6 +63,15 @@ _NO_BC = ["--bc-coef", "0", "--bc-coef-min", "0"]
 _LOOP_BC = ["--demos", "hardware/flights/demos/teacher_loop_*.npz", "--bc-coef", "0.2", "--bc-coef-min", "0.02",
             "--bc-decay-steps", "2000000"]
 _REFIND = ["--reward-weights", '{"r_found": 3.0}']
+# n8_dapg_nodrain's own settings (a memory policy: history stack + asymmetric critic, DAgger BC kept on)
+_N8 = ["--ring-tracker", "--history-lags", "0,1,2,4,8,16", "--asym-critic",
+       "--demos", "hardware/flights/demos/dagger_n1_r*.npz", "--bc-coef", "0.3", "--bc-coef-min", "0.3",
+       "--lr", "5e-5", "--target-kl", "0.01", "--batch-size", "512", "--n-epochs", "5",
+       "--critic-warmup-steps", "0", "--sway-deg", "2"]
+_N8_RW = '{"r_wrong_way": -20, "drain": false, "r_struck": -10, "w_dwell": 0.05}'
+# + line up on the axis before going in, and keep clear of the noodle
+_N8_CLEAR_RW = ('{"r_wrong_way": -20, "drain": false, "r_struck": -15, "w_dwell": 0.05, '
+                '"w_rim": 1.0, "rim_margin_m": 0.15, "axis_pull": 2.0}')
 
 EXPERIMENTS = {
     "A": ("baseline", []),
@@ -102,6 +111,15 @@ EXPERIMENTS = {
     "L": ("teacher_loop", _C_TRK + _LOOP_BC),
     "R": ("refind", _C_TRK + _NO_BC + _REFIND),
     "Q": ("teacher_loop_refind", _C_TRK + _LOOP_BC + _REFIND),
+    # n9 (2026-10-14 night), after the first real flights of the memory policy (n8): from three corners
+    # of the cage it found the hoop but clipped its edge going in. The sim scored every zone well, so
+    # this is a sim-to-real gap at slanted approaches. All continue n8 with its own settings (memory,
+    # asymmetric critic, DAgger BC 0.3); O: 40 % slanted starts; Z: line up first / keep clear of the
+    # noodle; OZ: both; K9: n8 continued (control).
+    "K9": ("n8_cont", _N8 + ["--reward-weights", _N8_RW]),
+    "O": ("oblique", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4"]),
+    "Z": ("clearance", _N8 + ["--reward-weights", _N8_CLEAR_RW]),
+    "OZ": ("oblique_clearance", _N8 + ["--reward-weights", _N8_CLEAR_RW, "--oblique-p", "0.4"]),
     "Y": ("trk_loopdemo", _C_TRK + ["--gamma", "0.995", "--gae-lambda", "0.97", "--streak", "1.0",
                                     "--streak-cap", "4", "--bc-coef", "0.1", "--bc-coef-min", "0.05"]),
 }

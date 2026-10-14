@@ -17,7 +17,7 @@ if __name__ == "__main__":
     prefix = sys.argv[1]
     args = sys.argv[sys.argv.index("--") + 1:]
     flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-             if sys.platform == "win32" else 0)
+             | subprocess.BELOW_NORMAL_PRIORITY_CLASS if sys.platform == "win32" else 0)
     p = subprocess.Popen([sys.executable, *args], stdout=open(prefix + ".stdout.txt", "w"),
                          stderr=open(prefix + ".stderr.txt", "w"), creationflags=flags,
                          start_new_session=sys.platform != "win32")

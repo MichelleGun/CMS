@@ -437,6 +437,44 @@ class OnboardSim:
             self._tracker.reset()
         return self.observe()
 
+    def place_oblique(self, rng=None) -> "RingObs":
+        """Move the drone (after reset) to 0.5-1.1 m from the ring centre, 35-80 deg off its axis,
+        at ring height +-15 cm, facing the ring +-25 deg: the ring is in view, seen at a slant,
+        the way it is from a corner of the real cage. Training only (curriculum): the real drone
+        found the ring from three corners but clipped its edge going in at that slant
+        (2026-10-14), which the zone starts alone did not teach."""
+        rng = self.rng if rng is None else rng
+        c = self.ring.centre
+        n = self.ring.normal.copy()
+        n[2] = 0.0
+        n /= np.linalg.norm(n) + 1e-12
+        u = np.array([-n[1], n[0], 0.0])
+        lim = CAGE_XY - WALL_MARGIN - 0.05
+        p = None
+        for _ in range(30):
+            d = 1.0 if rng.random() < 0.5 else -1.0           # which face of the ring
+            s = 1.0 if rng.random() < 0.5 else -1.0           # which side of the axis
+            ang = math.radians(float(rng.uniform(35.0, 80.0)))
+            r = float(rng.uniform(0.5, 1.1))
+            q = c - n * d * r * math.cos(ang) + u * s * r * math.sin(ang)
+            if np.all(np.abs(q[:2]) <= lim):
+                p = q
+                break
+        if p is None:                                          # no room: the nearest legal point
+            p = q.copy()
+            p[:2] = np.clip(p[:2], -lim, lim)
+        p[2] = c[2] + float(rng.uniform(-0.15, 0.15))
+        self.pos = p
+        to_ring = c - p
+        self.yaw_deg = math.degrees(math.atan2(to_ring[1], to_ring[0])) + float(rng.uniform(-25, 25))
+        self.vel = np.zeros(3)
+        self._prev_pose = (self.pos.copy(), self.yaw_deg)
+        self._prev_side = self._plane_side()
+        self.start_type = "oblique"
+        if self._tracker is not None:
+            self._tracker.reset()
+        return self.observe()
+
     def _sample_yaw(self) -> float:
         d = self.ring.centre - self.pos
         w = 180.0 if self.start_type != "front" else 25.0 + 10.0 * self.dr_eff

@@ -77,7 +77,7 @@ def score(model_path: Path, episodes=36, seed=SEED, meta_override=None):
         raise RuntimeError(f"{model_path}: the policy reads {fn.obs_width} inputs but the flight "
                            f"builder makes {env.observation_space.shape[0]}")
     env.set_episode_seed(seed)
-    passes, acts = [], []
+    passes, acts, zones = [], [], {}
     try:
         for _ in range(episodes):
             obs, _ = env.reset()
@@ -94,13 +94,39 @@ def score(model_path: Path, episodes=36, seed=SEED, meta_override=None):
                 obs, _, term, trunc, info = env.step(a)
                 done = term or trunc
             passes.append(int(info.get("passes", 0)))
+            zones.setdefault(str(info.get("start_type", "?")).replace("zone_", ""), []).append(passes[-1])
     finally:
         env.close()
     p = np.array(passes)
-    return dict(lpe=float(p.mean()), best_streak=int(p.max()), two_plus=float((p >= 2).mean()),
+    oblique = oblique_entry(fn, tracker, meta, seed=seed + 1)
+    return dict(zones={k: round(float(np.mean(v)), 2) for k, v in sorted(zones.items())},
+                oblique_entry=oblique, lpe=float(p.mean()), best_streak=int(p.max()), two_plus=float((p >= 2).mean()),
                 one_plus=float((p >= 1).mean()), episodes=episodes, obs_width=int(fn.obs_width),
                 yaw_converted=bool(fn.yaw_converted), algo=(fn.meta or {}).get("algo", "ppo"),
                 _probe=acts)
+
+
+def oblique_entry(fn, tracker, meta, episodes=30, seed=SEED + 1):
+    """Share of slanted starts (sim.place_oblique: 0.5-1.1 m from the ring, 35-80 deg off its axis,
+    ring in view) that end in a pass, not a strike: the corner approach that clipped the hoop on
+    the real drone (2026-10-14). Each episode ends at the first pass or failure."""
+    from onboard.gym_env import OnboardHoopEnv
+    env = OnboardHoopEnv(seed=seed, oblique_p=1.0, **dict(env_kwargs(meta, tracker), laps=1))
+    env.set_episode_seed(seed)
+    ok = 0
+    try:
+        for _ in range(episodes):
+            obs, _ = env.reset()
+            if hasattr(fn, "reset"):
+                fn.reset()
+            done, info = False, {}
+            while not done:
+                obs, _, term, trunc, info = env.step(fn(obs))
+                done = term or trunc
+            ok += info.get("phase") == "passed"
+    finally:
+        env.close()
+    return round(ok / episodes, 3)
 
 
 def _same_actions(path: Path, probe) -> bool:
@@ -185,12 +211,16 @@ def ranking_md(rows):
          "lpe = laps (passes) per 90 s episode. Fly the top row first; the file name is also written into "
          "each flight's meta.json (`model`), so a flight log always says which policy flew. Scores from fewer "
          "than 36 episodes are listed last. Memory = the policy keeps a history of past frames "
-         "(onboard/history.py); it flies as it is, `policy.load_policy` keeps the same history on the drone.", "",
-         "| # | File | From | Steps | Laps/ep | Best in 1 ep | 2+ passes | 1+ pass | Memory | Episodes |",
-         "|---|---|---|---|---|---|---|---|---|---|"]
+         "(onboard/history.py); it flies as it is, `policy.load_policy` keeps the same history on the drone. "
+         "Oblique entry = share of 30 slanted starts near the ring (35-80 deg off its axis, as from a corner "
+         "of the real cage) that end in a pass rather than a strike; per-zone scores are in each "
+         "file's .meta.json (export_scores.zones).", "",
+         "| # | File | From | Steps | Laps/ep | Best in 1 ep | 2+ passes | 1+ pass | Oblique entry | Memory | Episodes |",
+         "|---|---|---|---|---|---|---|---|---|---|---|"]
     for i, r in enumerate(rows, 1):
         L.append(f"| {i} | `{r['name']}.zip` | {r['run']} ({r['kind']}) | {r['steps'] or '?'} | {r['lpe']:.2f} | "
                  f"{r['best_streak']} | {r['two_plus']:.0%} | {r['one_plus']:.0%} | "
+                 f"{(format(r['oblique_entry'], '.0%') if r.get('oblique_entry') is not None else '-')} | "
                  f"{'yes' if r['memory'] else 'no'} | {r['episodes']} |")
     if rows:
         L += ["", "Fly the top one:", "", "```bash",

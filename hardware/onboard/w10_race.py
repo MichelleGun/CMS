@@ -132,8 +132,10 @@ def start(cmd, out):
 # Windows: each run gets its own hidden console in a new process group. A Ctrl+C that reached the
 # launcher's console stopped every run of round 5 at once (2026-10-14 12:23, "^C" in its log); a
 # new process group ignores Ctrl+C, and stop.flag / CTRL_BREAK still stop a run cleanly.
+# Below-normal priority too (inherited by the env worker processes), so whatever else runs on the
+# laptop gets the CPU first.
 DETACH_FLAGS = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-                if sys.platform == "win32" else 0)
+                | subprocess.BELOW_NORMAL_PRIORITY_CLASS if sys.platform == "win32" else 0)
 
 
 def retarget(cmd, out: Path):

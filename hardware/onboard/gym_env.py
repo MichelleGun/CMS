@@ -148,7 +148,8 @@ class OnboardHoopEnv(gym.Env):
                  wash_deg: float = 0.0, lap_dir: str = "alternate", start_mode: str = "ring",
                  streak: float = STREAK_GAIN, streak_cap: float = STREAK_CAP,
                  ring_tracker: bool = False, reward_weights: Optional[dict] = None,
-                 history_lags=None, privileged: bool = False, near_pass_p: float = 0.0):
+                 history_lags=None, privileged: bool = False, near_pass_p: float = 0.0,
+                 oblique_p: float = 0.0):
         """dr / sway_deg / hard_start_p / ramp / open_plane / wash_deg: see sim.py. open_plane
         defaults to on whenever starts can be away from the front runway. laps: passes per
         episode (1: the episode ends at the first crossing; 0: endless). lap_dir: "alternate"
@@ -195,6 +196,9 @@ class OnboardHoopEnv(gym.Env):
         # Its own random stream, so near_pass_p = 0 leaves every other draw unchanged.
         self.near_pass_p = float(near_pass_p)
         self._np_rng = np.random.default_rng(self._seed + 7_777)
+        # and this share starts close to the ring at a slant (sim.place_oblique), own stream too
+        self.oblique_p = float(oblique_p)
+        self._ob_rng = np.random.default_rng(self._seed + 8_888)
         if self.laps != 1:
             max_episode_sec = max(max_episode_sec, LAP_EPISODE_SEC)
         self.base_ticks = self.max_ticks = int(max_episode_sec * spec.CTRL_HZ)
@@ -296,6 +300,8 @@ class OnboardHoopEnv(gym.Env):
         ring_obs = self.sim.reset(seed=s)
         if self.near_pass_p > 0 and self._np_rng.random() < self.near_pass_p:
             ring_obs = self.sim.place_near_pass(self._np_rng)
+        elif self.oblique_p > 0 and self._ob_rng.random() < self.oblique_p:
+            ring_obs = self.sim.place_oblique(self._ob_rng)
         self.builder.reset()
         self._ticks = 0
         self.max_ticks = self.base_ticks if self.sim.start_type == "front" else self.hard_ticks

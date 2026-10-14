@@ -81,7 +81,9 @@ READER_RESTART_S = 1.0     # no frame this long and the decoder thread dead: reo
 CLIMB_TIMEOUT = 8.0        # seconds after takeoff for the height to reach 30 cm
 START_CLIMB_TIMEOUT = 4.0  # policy mode: seconds allowed to climb to --start-height
 START_CLIMB_RC = 30        # rc up/down used for that climb (gentle: ~0.3 m/s)
-FLOOR_CLIMB = 0.4          # up/down action forced below --floor-height minus 10 cm
+FLOOR_CLIMB = 0.4          # up/down action forced below --floor-height minus 10 cm (and, negated,
+#                            above the soft ceiling plus 10 cm)
+CEILING_SOFT_CM = 25       # no climbing within this of --max-height
 STATUS_HZ = 5.0
 CAMERA_HZ = 5.0
 
@@ -420,7 +422,13 @@ class Flight:
                               f"{lo}-{hi} cm range")
         tof = state.get("tof")
         if isinstance(tof, bool) or not isinstance(tof, int) or not 0 < tof < 6553:
-            raise FlightError("Downward range telemetry is invalid; stopping the flight")
+            # The range sensor reads invalid above ~2 m and over some floors; the barometer height
+            # (what _height_cm fell back to, checked above) still bounds the flight. Only a
+            # negative or missing barometer height as well means the height is really unknown.
+            raw_h = state.get("h")
+            if isinstance(raw_h, bool) or not isinstance(raw_h, int) or raw_h < 0:
+                raise FlightError("Neither the range sensor nor the barometer gives a valid height; "
+                                  "stopping the flight")
         return state
 
     # -- the tick ---------------------------------------------------------------------
@@ -433,6 +441,16 @@ class Flight:
         --min-height abort and end the flight; now it is held up and keeps flying."""
         reasons = []
         a = np.asarray(action, dtype=float).copy()
+        # soft ceiling, the floor's mirror: within CEILING_SOFT_CM of --max-height no climbing, and
+        # 10 cm higher a descent is forced (two real flights hit the 190 cm abort, 2026-10-14)
+        ceil = (self.a.max_height - CEILING_SOFT_CM) if getattr(self.a, "max_height", None) else None
+        if height_cm is not None and ceil is not None and height_cm > ceil:
+            if height_cm > ceil + 10 and a[spec.ACT_UD] > -FLOOR_CLIMB:
+                a[spec.ACT_UD] = -FLOOR_CLIMB
+                reasons.append("ceiling_descend")
+            elif a[spec.ACT_UD] > 0:
+                a[spec.ACT_UD] = 0.0
+                reasons.append("ceiling")
         floor = getattr(self.a, "floor_height", 0) or 0
         if height_cm is not None and floor > 0 and height_cm < floor:
             if height_cm < floor - 10 and a[spec.ACT_UD] < FLOOR_CLIMB:

@@ -875,3 +875,16 @@ cannot fix that for a policy that only sees the current frame. "Just passed, rin
 `fly_hoop.py` height rules (2026-10-13): policy mode climbs to `--start-height` 80 cm before the
 policy takes over; below `--floor-height` 40 cm the controller may not descend (forced climb +0.4
 below 30 cm); the hard abort is `--min-height` 10 cm (was 25).
+
+### After the first real flights (2026-10-14 night): corners
+
+The memory policy found the hoop from every corner of the real cage but clipped its edge going in
+from three of them. In the sim it entered only 70 % of slanted starts cleanly (new export column
+**Oblique entry**). Round n9 (`loop_night.py --tag n9 --keys OZ O Z K9 --parent
+results/hoop/runs/n8_dapg_nodrain_cont2 --parallel 2 --n-envs 4 --resume-crashed`):
+`--oblique-p 0.4` (slanted starts, `sim.place_oblique`) and/or a line-up/clearance reward (`w_rim`
+1.0, `rim_margin_m` 0.15, `axis_pull` 2.0, `r_struck` -15). Runs start at below-normal priority, with
+4 GB of memory free, at most 2 at once, so other work on the laptop keeps the CPU.
+`fly_hoop.py` now also has a soft ceiling (no climbing within 25 cm of `--max-height`, forced
+descent 10 cm higher), and an invalid range sensor alone no longer aborts a flight (the barometer
+height bounds it).

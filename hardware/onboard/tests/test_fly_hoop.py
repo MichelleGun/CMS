@@ -602,6 +602,35 @@ def test_the_clearml_upload_does_not_hold_the_flight_process(tmp_path, monkeypat
     assert started and started[0][-5:] == ["record", "flights", str(tmp_path), "--status", "landed"]
 
 
+def test_the_soft_ceiling_holds_a_climbing_controller_down(tmp_path):
+    flight, drone, d = run(tmp_path, "--max-airborne", "2", "--max-height", "190")
+    up = np.array([0.0, 0.0, 0.8, 0.0])
+    a, why = flight._safety_overrides(up, None, 170)           # within 25 cm of the ceiling: no climb
+    assert a[spec.ACT_UD] == 0.0 and why == ["ceiling"]
+    a, why = flight._safety_overrides(up, None, 180)           # 10 cm higher: made to descend
+    assert a[spec.ACT_UD] == pytest.approx(-0.4) and why == ["ceiling_descend"]
+    a, why = flight._safety_overrides(up, None, 120)
+    assert a[spec.ACT_UD] == pytest.approx(0.8) and why == []
+
+
+def test_an_invalid_range_sensor_alone_no_longer_stops_the_flight(tmp_path):
+    """Seen on the real drone: 'Downward range telemetry is invalid' high in the cage, while
+    the barometer height was fine. The barometer now bounds the flight on its own."""
+    flight, drone, d = run(tmp_path, "--max-airborne", "4")
+    _with_height_reading(drone, h=120, tof=6553)
+    res = flight.run(drone)
+    assert res["outcome"] == "airborne_budget"
+    assert_landed(drone)
+
+
+def test_no_valid_height_at_all_still_stops_the_flight(tmp_path):
+    flight, drone, d = run(tmp_path, "--max-airborne", "4")
+    _with_height_reading(drone, h=-90, tof=6553)                # seen: h = -90 cm, tof invalid
+    with pytest.raises(FlightError):
+        flight.run(drone)
+    assert_landed(drone)
+
+
 # --------------------------------------------------------------- a refused takeoff
 
 def test_takeoff_start_records_the_ground_state(tmp_path):

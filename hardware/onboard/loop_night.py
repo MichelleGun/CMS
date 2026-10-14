@@ -24,6 +24,7 @@ hardware/policies/ (see its README.md).
 """
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -41,7 +42,8 @@ from w10_race import STOP_GAP, WARN_GAP, WINDOW, curve, retarget, start  # noqa:
 PARENT = "results/hoop/runs/w10_front_C_kl/best_model.zip"
 RACE = ["X", "W", "Y", "U", "V"]          # start order when memory is short: the best guess first
 EVAL_STEPS = 20_000
-NEED_GB = 2.0                             # free commit wanted before starting one more run
+NEED_GB = 4.0                             # free commit wanted before starting one more run (headroom
+#                                           for whatever else runs on the laptop)
 RETRIES = 2                               # a run that dies at start (out of memory) is queued again
 BACKFILL = ["Y"]                          # the run whose demo term uses the looping human flight(s)
 # the yardstick: the 8-env laps run of T that already exists (same evaluation every 20k steps), so no
@@ -150,6 +152,7 @@ def race(a, demos):
     queue = [k for k in RACE if k not in BACKFILL or demos]
     running, rows, stopped, last_check = [], {}, set(), 0.0
     tries, started_at, last_start, waited = {}, {}, 0.0, False
+    parents = {}                       # key -> its own crashed run, when resuming (--resume-crashed)
     ref = REF
     while queue or running:
         # one start per minute, and only with memory to spare (5 at once ran out: WinError 1455)
@@ -168,7 +171,8 @@ def race(a, demos):
                     rows[key][2] = _status(out)
                     log(f"[SKIP] {out.name} already {_status(out)}")
                     continue
-                proc, f = start(run_cmd(key, PARENT, a.timesteps, a.n_envs, out, a.no_clearml, demos, a.vec), out)
+                proc, f = start(run_cmd(key, parents.get(key, PARENT), a.timesteps, a.n_envs, out,
+                                        a.no_clearml, demos, a.vec), out)
                 running.append((key, out, proc, f))
                 tries[key] = tries.get(key, 0) + 1
                 started_at[key] = last_start = time.time()
@@ -199,7 +203,15 @@ def race(a, demos):
                     rows[key][2] = _status(out) or f"exit {proc.returncode}"
                 log(f"[END] {out.name} exit {proc.returncode} ({_status(out)}), last-10 {last10(out):.3f}")
                 # any crash (not a stop) is retried: out-of-memory / WinError 1450 can hit mid-run too
-                if proc.returncode != 0 and out not in stopped and tries[key] <= RETRIES:
+                if (getattr(a, "resume_crashed", False) and proc.returncode != 0 and out not in stopped
+                        and curve(out) and (out / "latest_model.zip").exists() and tries[key] <= RETRIES):
+                    # keep what it learned: move the crashed run aside and continue from its latest model
+                    part = out.with_name(f"{out.name}_part{tries[key]}")
+                    shutil.move(str(out), str(part))
+                    parents[key] = str(part.relative_to(CMS))
+                    queue.append(key)
+                    log(f"[RESUME] {out.name} crashed after {steps_of(part):,} steps; continues from {part.name}")
+                elif proc.returncode != 0 and out not in stopped and tries[key] <= RETRIES:
                     queue.append(key)
                     log(f"[RETRY] {out.name} crashed (try {tries[key]}); queued again from the start")
         time.sleep(10)
@@ -282,6 +294,9 @@ def main(argv=None):
     ap.add_argument("--check-min", type=float, default=5.0)
     ap.add_argument("--export-episodes", type=int, default=36)
     ap.add_argument("--no-clearml", action="store_true")
+    ap.add_argument("--resume-crashed", action="store_true",
+                    help="a run that crashes after its first evaluation continues from its own latest model "
+                         "(the crashed folder is kept as <run>_partN) instead of starting again")
     ap.add_argument("--relabel", action="store_true",
                     help="before the extension, collect new teacher loop labels on the winner's states")
     ap.add_argument("--keys", nargs="*", default=None, help="runs to race (default: the round-3 set)")

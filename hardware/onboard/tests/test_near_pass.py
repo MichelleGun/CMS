@@ -41,3 +41,30 @@ def test_a_share_of_episodes_only():
         env.reset()
         kinds.append(env.sim.start_type == "near_pass")
     assert 0.3 < np.mean(kinds) < 0.7
+
+
+def test_an_oblique_start_sees_the_ring_at_a_slant_from_inside_the_cage():
+    env = OnboardHoopEnv(seed=4, oblique_p=1.0, **KW)
+    seen = 0
+    for _ in range(40):
+        env.reset()
+        s = env.sim
+        assert s.start_type == "oblique"
+        d = s.pos - s.ring.centre
+        n = s.ring.normal.copy()
+        n[2] = 0
+        n /= np.linalg.norm(n)
+        horiz = d[:2]
+        ang = np.degrees(np.arccos(abs(float(np.dot(horiz, n[:2]))) / np.linalg.norm(horiz)))
+        assert 30 < ang < 85 and 0.45 < np.linalg.norm(horiz) < 1.15
+        assert np.all(np.abs(s.pos[:2]) <= CAGE_XY)
+        seen += bool(s.observe().found)
+    assert seen >= 30                                   # the ring is in view at the start, nearly always
+
+
+def test_oblique_starts_are_off_by_default_and_change_nothing():
+    a, b = OnboardHoopEnv(seed=6, **KW), OnboardHoopEnv(seed=6, oblique_p=0.0, **KW)
+    for _ in range(5):
+        oa, _ = a.reset()
+        ob, _ = b.reset()
+        assert np.allclose(oa, ob) and a.sim.start_type != "oblique"

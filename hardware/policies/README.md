@@ -4,36 +4,38 @@ Written by `hardware/onboard/export_policy.py` (every export, ranked together; r
 
 ## Ranking (laps task in the sim: same-side laps from all 9 zones, 90 s, measured profile, full randomisation, fixed layouts)
 
-lpe = laps (passes) per 90 s episode. Fly the top row first; the file name is also written into each flight's meta.json (`model`), so a flight log always says which policy flew. Scores from fewer than 36 episodes are listed last. Memory = the policy keeps a history of past frames (onboard/history.py); it flies as it is, `policy.load_policy` keeps the same history on the drone.
+lpe = laps (passes) per 90 s episode. Fly the top row first; the file name is also written into each flight's meta.json (`model`), so a flight log always says which policy flew. Scores from fewer than 36 episodes are listed last. Memory = the policy keeps a history of past frames (onboard/history.py); it flies as it is, `policy.load_policy` keeps the same history on the drone. Oblique entry = share of 30 slanted starts near the ring (35-80 deg off its axis, as from a corner of the real cage) that end in a pass rather than a strike; per-zone scores are in each file's .meta.json (export_scores.zones).
 
-| # | File | From | Steps | Laps/ep | Best in 1 ep | 2+ passes | 1+ pass | Memory | Episodes |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | `LOOP_20261014_n8-dapg-nodrain_best_1.28lpe.zip` | n8_dapg_nodrain (best) | ? | 1.28 | 2 | 44% | 83% | yes | 36 |
-| 2 | `LOOP_20261014_n8-dapg-nodrain_final_1.03lpe.zip` | n8_dapg_nodrain (final) | ? | 1.03 | 3 | 22% | 72% | yes | 36 |
-| 3 | `LOOP_20261014_w10-laps4-M-np80_final_0.78lpe.zip` | w10_laps4_M_np80 (final) | 35955688 | 0.78 | 1 | 0% | 78% | no | 36 |
-| 4 | `LOOP_20261014_n6-same-from-W_final_0.75lpe.zip` | n6_same_from_W (final) | 35173940 | 0.75 | 2 | 8% | 67% | yes | 36 |
-| 5 | `LOOP_20261014_w10-laps4-M-np80_best_0.72lpe.zip` | w10_laps4_M_np80 (best) | 35955688 | 0.72 | 1 | 0% | 72% | no | 36 |
-| 6 | `LOOP_20261014_n7-dapg-from-dagger_best_0.69lpe.zip` | n7_dapg_from_dagger (best) | 2476000 | 0.69 | 2 | 6% | 64% | yes | 36 |
-| 7 | `LOOP_20261014_w10-laps4-P-pure-more_final_0.69lpe.zip` | w10_laps4_P_pure_more (final) | 35955688 | 0.69 | 1 | 0% | 69% | no | 36 |
-| 8 | `LOOP_20261014_W-trk-pure_best_0.67lpe.zip` | w10_laps3_W_trk_pure (best) | 31632944 | 0.67 | 1 | 0% | 67% | no | 36 |
-| 9 | `LOOP_20261014_w10-laps4-P-pure-more_best_0.67lpe.zip` | w10_laps4_P_pure_more (best) | 35955688 | 0.67 | 1 | 0% | 67% | no | 36 |
-| 10 | `LOOP_20261014_w10-laps5-K-pure-cont_best_0.64lpe.zip` | w10_laps5_K_pure_cont (best) | 36669800 | 0.64 | 2 | 3% | 61% | no | 36 |
-| 11 | `LOOP_20261014_W-trk-pure-ext_final_0.64lpe.zip` | w10_laps3_W_trk_pure_ext (final) | 34629800 | 0.64 | 1 | 0% | 64% | no | 36 |
-| 12 | `LOOP_20261014_w10-laps4-N-np50_best_0.64lpe.zip` | w10_laps4_N_np50 (best) | 35955688 | 0.64 | 1 | 0% | 64% | no | 36 |
-| 13 | `LOOP_20261014_n6-same-from-W_best_0.58lpe.zip` | n6_same_from_W (best) | 35173940 | 0.58 | 1 | 0% | 58% | yes | 36 |
-| 14 | `LOOP_20261014_W-trk-pure-ext_best_0.56lpe.zip` | w10_laps3_W_trk_pure_ext (best) | 34629800 | 0.56 | 1 | 0% | 56% | no | 36 |
-| 15 | `LOOP_20261014_w10-laps4-N-np50_final_0.56lpe.zip` | w10_laps4_N_np50 (final) | 35955688 | 0.56 | 1 | 0% | 56% | no | 36 |
-| 16 | `LOOP_20261014_w10-laps5-R-refind_best_0.56lpe.zip` | w10_laps5_R_refind (best) | 36690800 | 0.56 | 1 | 0% | 56% | no | 36 |
-| 17 | `LOOP_20261014_w10-laps5-R-refind_final_0.53lpe.zip` | w10_laps5_R_refind (final) | 36690800 | 0.53 | 2 | 6% | 47% | no | 36 |
-| 18 | `LOOP_20261014_W-trk-pure_final_0.53lpe.zip` | w10_laps3_W_trk_pure (final) | 31632944 | 0.53 | 1 | 0% | 53% | no | 36 |
-| 19 | `LOOP_20261014_Y-trk-loopdemo_best_0.39lpe.zip` | w10_laps3_Y_trk_loopdemo (best) | 31632944 | 0.39 | 2 | 3% | 36% | no | 36 |
-| 20 | `LOOP_20261014_w10-laps5-K-pure-cont_final_0.39lpe.zip` | w10_laps5_K_pure_cont (final) | 36669800 | 0.39 | 1 | 0% | 39% | no | 36 |
-| 21 | `LOOP_20261014_X-trk-combo_best_0.28lpe.zip` | w10_laps3_X_trk_combo (best) | 31632944 | 0.28 | 1 | 0% | 28% | no | 36 |
-| 22 | `LOOP_20261014_X-trk-combo_final_0.25lpe.zip` | w10_laps3_X_trk_combo (final) | 31632944 | 0.25 | 1 | 0% | 25% | no | 36 |
-| 23 | `LOOP_20261014_Y-trk-loopdemo_final_0.14lpe.zip` | w10_laps3_Y_trk_loopdemo (final) | 31632944 | 0.14 | 1 | 0% | 14% | no | 36 |
-| 24 | `LOOP_20261014_n7-dapg-from-dagger_final_0.08lpe.zip` | n7_dapg_from_dagger (final) | 2476000 | 0.08 | 1 | 0% | 8% | yes | 36 |
-| 25 | `LOOP_20261013_T-kl-tracker_best_0.25lpe.zip` | w10_laps_T_kl_tracker (best) | 32644656 | 0.25 | 1 | 0% | 25% | no | 12 |
-| 26 | `LOOP_20261013_T-kl-tracker_final_0.08lpe.zip` | w10_laps_T_kl_tracker (final) | 32644656 | 0.08 | 1 | 0% | 8% | no | 12 |
+| # | File | From | Steps | Laps/ep | Best in 1 ep | 2+ passes | 1+ pass | Oblique entry | Memory | Episodes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | `LOOP_20261014_n8-dapg-nodrain_best_1.28lpe.zip` | n8_dapg_nodrain (best) | ? | 1.28 | 2 | 44% | 83% | - | yes | 36 |
+| 2 | `LOOP_20261014_n8-dapg-nodrain-cont2_final_1.08lpe.zip` | n8_dapg_nodrain_cont2 (final) | 6768048 | 1.08 | 3 | 22% | 83% | 60% | yes | 36 |
+| 3 | `LOOP_20261014_n8-dapg-nodrain-cont2_best_1.03lpe.zip` | n8_dapg_nodrain_cont2 (best) | 6768048 | 1.03 | 3 | 22% | 78% | 70% | yes | 36 |
+| 4 | `LOOP_20261014_n8-dapg-nodrain_final_1.03lpe.zip` | n8_dapg_nodrain (final) | ? | 1.03 | 3 | 22% | 72% | - | yes | 36 |
+| 5 | `LOOP_20261014_w10-laps4-M-np80_final_0.78lpe.zip` | w10_laps4_M_np80 (final) | 35955688 | 0.78 | 1 | 0% | 78% | - | no | 36 |
+| 6 | `LOOP_20261014_n6-same-from-W_final_0.75lpe.zip` | n6_same_from_W (final) | 35173940 | 0.75 | 2 | 8% | 67% | - | yes | 36 |
+| 7 | `LOOP_20261014_w10-laps4-M-np80_best_0.72lpe.zip` | w10_laps4_M_np80 (best) | 35955688 | 0.72 | 1 | 0% | 72% | - | no | 36 |
+| 8 | `LOOP_20261014_n7-dapg-from-dagger_best_0.69lpe.zip` | n7_dapg_from_dagger (best) | 2476000 | 0.69 | 2 | 6% | 64% | - | yes | 36 |
+| 9 | `LOOP_20261014_w10-laps4-P-pure-more_final_0.69lpe.zip` | w10_laps4_P_pure_more (final) | 35955688 | 0.69 | 1 | 0% | 69% | - | no | 36 |
+| 10 | `LOOP_20261014_W-trk-pure_best_0.67lpe.zip` | w10_laps3_W_trk_pure (best) | 31632944 | 0.67 | 1 | 0% | 67% | - | no | 36 |
+| 11 | `LOOP_20261014_w10-laps4-P-pure-more_best_0.67lpe.zip` | w10_laps4_P_pure_more (best) | 35955688 | 0.67 | 1 | 0% | 67% | - | no | 36 |
+| 12 | `LOOP_20261014_w10-laps5-K-pure-cont_best_0.64lpe.zip` | w10_laps5_K_pure_cont (best) | 36669800 | 0.64 | 2 | 3% | 61% | - | no | 36 |
+| 13 | `LOOP_20261014_W-trk-pure-ext_final_0.64lpe.zip` | w10_laps3_W_trk_pure_ext (final) | 34629800 | 0.64 | 1 | 0% | 64% | - | no | 36 |
+| 14 | `LOOP_20261014_w10-laps4-N-np50_best_0.64lpe.zip` | w10_laps4_N_np50 (best) | 35955688 | 0.64 | 1 | 0% | 64% | - | no | 36 |
+| 15 | `LOOP_20261014_n6-same-from-W_best_0.58lpe.zip` | n6_same_from_W (best) | 35173940 | 0.58 | 1 | 0% | 58% | - | yes | 36 |
+| 16 | `LOOP_20261014_W-trk-pure-ext_best_0.56lpe.zip` | w10_laps3_W_trk_pure_ext (best) | 34629800 | 0.56 | 1 | 0% | 56% | - | no | 36 |
+| 17 | `LOOP_20261014_w10-laps4-N-np50_final_0.56lpe.zip` | w10_laps4_N_np50 (final) | 35955688 | 0.56 | 1 | 0% | 56% | - | no | 36 |
+| 18 | `LOOP_20261014_w10-laps5-R-refind_best_0.56lpe.zip` | w10_laps5_R_refind (best) | 36690800 | 0.56 | 1 | 0% | 56% | - | no | 36 |
+| 19 | `LOOP_20261014_w10-laps5-R-refind_final_0.53lpe.zip` | w10_laps5_R_refind (final) | 36690800 | 0.53 | 2 | 6% | 47% | - | no | 36 |
+| 20 | `LOOP_20261014_W-trk-pure_final_0.53lpe.zip` | w10_laps3_W_trk_pure (final) | 31632944 | 0.53 | 1 | 0% | 53% | - | no | 36 |
+| 21 | `LOOP_20261014_Y-trk-loopdemo_best_0.39lpe.zip` | w10_laps3_Y_trk_loopdemo (best) | 31632944 | 0.39 | 2 | 3% | 36% | - | no | 36 |
+| 22 | `LOOP_20261014_w10-laps5-K-pure-cont_final_0.39lpe.zip` | w10_laps5_K_pure_cont (final) | 36669800 | 0.39 | 1 | 0% | 39% | - | no | 36 |
+| 23 | `LOOP_20261014_X-trk-combo_best_0.28lpe.zip` | w10_laps3_X_trk_combo (best) | 31632944 | 0.28 | 1 | 0% | 28% | - | no | 36 |
+| 24 | `LOOP_20261014_X-trk-combo_final_0.25lpe.zip` | w10_laps3_X_trk_combo (final) | 31632944 | 0.25 | 1 | 0% | 25% | - | no | 36 |
+| 25 | `LOOP_20261014_Y-trk-loopdemo_final_0.14lpe.zip` | w10_laps3_Y_trk_loopdemo (final) | 31632944 | 0.14 | 1 | 0% | 14% | - | no | 36 |
+| 26 | `LOOP_20261014_n7-dapg-from-dagger_final_0.08lpe.zip` | n7_dapg_from_dagger (final) | 2476000 | 0.08 | 1 | 0% | 8% | - | yes | 36 |
+| 27 | `LOOP_20261013_T-kl-tracker_best_0.25lpe.zip` | w10_laps_T_kl_tracker (best) | 32644656 | 0.25 | 1 | 0% | 25% | - | no | 12 |
+| 28 | `LOOP_20261013_T-kl-tracker_final_0.08lpe.zip` | w10_laps_T_kl_tracker (final) | 32644656 | 0.08 | 1 | 0% | 8% | - | no | 12 |
 
 Fly the top one:
 
