@@ -47,6 +47,11 @@ Thumbs.db
 # (`flights/` is deliberately not called `runs/`, which the rule above would swallow anyway)
 hardware/flights/*
 !hardware/flights/.gitkeep
+# ... except the privileged teacher's DAgger demos with memory (14 files, ~4 MB each): every memory
+# run's imitation term needs them (HANDOVER.md)
+!hardware/flights/demos/
+hardware/flights/demos/*
+!hardware/flights/demos/dagger_n1_r*.npz
 hardware/config.local.yaml
 hardware/calibration/camera_intrinsics.json
 hardware/calibration/markers/
