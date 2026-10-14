@@ -121,9 +121,9 @@
   },
   "pid": 41704,
   "created_at": "2026-10-14T13:35:25.345562",
-  "finished_at": null,
-  "final_status": null,
-  "final_timesteps": null,
+  "finished_at": "2026-10-14T16:24:44.039954",
+  "final_status": "crashed",
+  "final_timesteps": 0,
   "ppo": {
     "gamma": 0.99,
     "gae_lambda": 0.95,
