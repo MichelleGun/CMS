@@ -1,5 +1,9 @@
 # Drone RL, Assignment 3 (CMS)
 
+> **Helping to train?** Start with [HANDOVER.md](HANDOVER.md) (where we are, how to run an
+> experiment, what to try next). The illustrated explanation of the policy and the training is
+> [docs/Onboard Hoop Policy Anatomy.html](docs/Onboard%20Hoop%20Policy%20Anatomy.html).
+
 A simulated quadrotor (PyBullet, via [`gym-pybullet-drones`](https://github.com/utiasDSL/gym-pybullet-drones),
 trained with [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3)) that learns two
 things: how to hover, and how to **take off from the floor, find a hoop and fly through it** inside
