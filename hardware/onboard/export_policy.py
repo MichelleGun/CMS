@@ -102,6 +102,7 @@ def score(model_path: Path, episodes=36, seed=SEED, meta_override=None):
     return dict(zones={k: round(float(np.mean(v)), 2) for k, v in sorted(zones.items())},
                 oblique_entry=oblique, lpe=float(p.mean()), best_streak=int(p.max()), two_plus=float((p >= 2).mean()),
                 one_plus=float((p >= 1).mean()), episodes=episodes, obs_width=int(fn.obs_width),
+                per_episode=[int(v) for v in p],
                 yaw_converted=bool(fn.yaw_converted), algo=(fn.meta or {}).get("algo", "ppo"),
                 _probe=acts)
 

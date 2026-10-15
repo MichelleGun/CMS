@@ -149,7 +149,7 @@ class OnboardHoopEnv(gym.Env):
                  streak: float = STREAK_GAIN, streak_cap: float = STREAK_CAP,
                  ring_tracker: bool = False, reward_weights: Optional[dict] = None,
                  history_lags=None, privileged: bool = False, near_pass_p: float = 0.0,
-                 oblique_p: float = 0.0):
+                 oblique_p: float = 0.0, stall_sec: float = 0.0):
         """dr / sway_deg / hard_start_p / ramp / open_plane / wash_deg: see sim.py. open_plane
         defaults to on whenever starts can be away from the front runway. laps: passes per
         episode (1: the episode ends at the first crossing; 0: endless). lap_dir: "alternate"
@@ -159,7 +159,10 @@ class OnboardHoopEnv(gym.Env):
         reward_weights: overrides of REWARD_WEIGHTS by name (a typo raises). The module constants
         are the defaults, so None behaves exactly as before; streak / streak_cap given here win
         over the streak / streak_cap arguments.
-        history_lags / privileged: hardware/onboard/history.py (None / False = the plain observation)."""
+        history_lags / privileged: hardware/onboard/history.py (None / False = the plain observation).
+        stall_sec > 0 (training): cut the episode short (truncated, like a time limit, so PPO still
+        bootstraps the value) after this many seconds without a counted pass. A policy that parks
+        then wastes seconds, not the rest of a 90 s episode, and gets more fresh starts."""
         super().__init__()
         if lap_dir not in LAP_DIRS:
             raise ValueError(f"lap_dir must be one of {LAP_DIRS}")
@@ -202,6 +205,10 @@ class OnboardHoopEnv(gym.Env):
         if self.laps != 1:
             max_episode_sec = max(max_episode_sec, LAP_EPISODE_SEC)
         self.base_ticks = self.max_ticks = int(max_episode_sec * spec.CTRL_HZ)
+        self.stall_ticks = int(round(float(stall_sec) * spec.CTRL_HZ))
+        self._last_pass_tick = 0
+        self._zone_weights = None        # training: failure-weighted start zones (set_zone_weights)
+        self._next_zone_index = None     # evaluation: the next start zone (set_zone_index)
         self.hard_ticks = int(max(max_episode_sec, HARD_START_EPISODE_SEC) * spec.CTRL_HZ)
         self._found_once = True
         self.sim: Optional[OnboardSim] = None
@@ -297,6 +304,10 @@ class OnboardHoopEnv(gym.Env):
         self._seed += 1                                  # fresh layout each episode
         if self.sim is None:
             self.sim = OnboardSim(seed=s, **self._kwargs)
+        if self._next_zone_index is not None:
+            self.sim._zone_i = self._next_zone_index
+            self._next_zone_index = None
+        self.sim.zone_weights = self._zone_weights
         ring_obs = self.sim.reset(seed=s)
         if self.near_pass_p > 0 and self._np_rng.random() < self.near_pass_p:
             ring_obs = self.sim.place_near_pass(self._np_rng)
@@ -304,6 +315,7 @@ class OnboardHoopEnv(gym.Env):
             ring_obs = self.sim.place_oblique(self._ob_rng)
         self.builder.reset()
         self._ticks = 0
+        self._last_pass_tick = 0
         self.max_ticks = self.base_ticks if self.sim.start_type == "front" else self.hard_ticks
         self._found_once = bool(ring_obs.found)          # in view from the start: no bonus
         self.passes = 0
@@ -379,6 +391,7 @@ class OnboardHoopEnv(gym.Env):
                     self.streak_mult = min(1.0 + self.streak * self.passes, max(1.0, self.streak_cap))
                     reward += self.rw["r_passed"] * self.streak_mult
                     self.passes += 1
+                    self._last_pass_tick = self._ticks
                     info["phase"] = "passed"
                     terminated = self.laps > 0 and self.passes >= self.laps
                     if not terminated:
@@ -411,6 +424,10 @@ class OnboardHoopEnv(gym.Env):
             info["phase"] = "out_of_cage"
 
         truncated = (not terminated) and self._ticks >= self.max_ticks
+        if (not terminated and not truncated and self.stall_ticks > 0
+                and self._ticks - self._last_pass_tick >= self.stall_ticks):
+            truncated = True
+            info["stalled"] = True
         info["passes"] = self.passes                     # the dashboard HUD's pass count
         if terminated or truncated:
             # SB3's EvalCallback reads this at episode end: the dashboard's success rate.
@@ -466,6 +483,18 @@ class OnboardHoopEnv(gym.Env):
         self._kwargs["sway_deg"] = float(deg)
         if self.sim is not None:
             self.sim.sway_deg = float(deg)
+
+    def set_zone_index(self, index: int):
+        """Start zone (0-8) of the next reset (zones mode): rewinds the round-robin, so evaluations
+        pair the same seeds with the same zones every time (train_speedups.reset_eval_layouts)."""
+        self._next_zone_index = int(index)
+
+    def set_zone_weights(self, weights):
+        """Training only: draw start zones with these 9 probabilities (None = round-robin)."""
+        self._zone_weights = None if weights is None else np.asarray(weights, dtype=float) / np.sum(weights)
+
+    def set_stall_sec(self, sec: float):
+        self.stall_ticks = int(round(float(sec) * spec.CTRL_HZ))
 
     def set_episode_seed(self, seed: int):
         """Seed of the next reset() that is not given one (callable through VecEnv.env_method,

@@ -83,12 +83,19 @@ def loop_demos(min_passes=2):
     return found
 
 
+EXTRA_ARGS = []                           # --extra-args: added to every training command
+N_EVAL_ENVS = None                        # --n-eval-envs: None = the trainer's default
+
+
 def run_cmd(key, parent, steps, n_envs, out, no_clearml, demos, vec="dummy"):
     cmd, _ = command("laps", key, parent, steps, n_envs, 0, no_clearml)
     cmd = retarget(cmd, out)
     # one process per run (each extra env process costs ~0.7 GB of commit for torch alone), and an
     # evaluation every EVAL_STEPS steps whatever the env count (eval-freq is per env)
     cmd += ["--vec", vec, "--eval-freq", str(max(1, EVAL_STEPS // n_envs))]
+    if N_EVAL_ENVS:
+        cmd += ["--n-eval-envs", str(N_EVAL_ENVS)]
+    cmd += EXTRA_ARGS
     if key in BACKFILL:
         cmd += ["--demos", *demos]          # argparse keeps the last --demos
     return cmd
@@ -302,8 +309,17 @@ def main(argv=None):
     ap.add_argument("--keys", nargs="*", default=None, help="runs to race (default: the round-3 set)")
     ap.add_argument("--parent", default=None, help="model or run folder every run starts from")
     ap.add_argument("--tag", default=None, help="run folders are w10_<tag>_<key>_<name>")
+    ap.add_argument("--n-eval-envs", type=int, default=None,
+                    help="evaluation copies per run (default: the trainer's: --n-envs up to 4 with "
+                         "--vec subproc, 1 with dummy). Same layouts, faster; ~0.3-0.5 GB each")
+    ap.add_argument("--extra-args", default="",
+                    help="more train_onboard.py flags for every run, in quotes, e.g. "
+                         "\"--checkpoint-min 10 --min-std-warn 0.08\"")
     a = ap.parse_args(argv)
-    global PARENT, RACE, TAG, REPORT
+    global PARENT, RACE, TAG, REPORT, EXTRA_ARGS, N_EVAL_ENVS
+    import shlex
+    EXTRA_ARGS = shlex.split(a.extra_args) if a.extra_args else []
+    N_EVAL_ENVS = a.n_eval_envs
     if a.parent:
         PARENT = a.parent
     if a.keys:

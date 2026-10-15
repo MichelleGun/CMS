@@ -157,7 +157,8 @@ class RunManager:
                   batch_size: Optional[int] = None, n_epochs: Optional[int] = None,
                   critic_warmup_steps: Optional[int] = None, log_std_reset: Optional[float] = None,
                   sde: bool = False, ring_tracker: bool = False, streak_cap: Optional[float] = None,
-                  bc_coef_min: Optional[float] = None, bc_decay_steps: Optional[int] = None) -> str:
+                  bc_coef_min: Optional[float] = None, bc_decay_steps: Optional[int] = None,
+                  speed: Optional[dict] = None) -> str:
         if env == "onboard":
             algo = "ppo"                            # the onboard trainer is PPO (+ demo term)
         if algo not in ALGORITHM_IDS:
@@ -209,7 +210,8 @@ class RunManager:
                     bc_decay_steps=bc_decay_steps, learning_rate=learning_rate, gamma=gamma,
                     gae_lambda=gae_lambda, ent_coef=ent_coef, target_kl=target_kl,
                     batch_size=batch_size, n_epochs=n_epochs, critic_warmup_steps=critic_warmup_steps,
-                    log_std_reset=log_std_reset, sde=sde, reward_weights=reward_weights))
+                    log_std_reset=log_std_reset, sde=sde, reward_weights=reward_weights,
+                    **{k: v for k, v in (speed or {}).items() if v is not None}))
         else:
             argv = [PYTHON_EXE, str(SCRIPTS_DIR / "train_hoop_multi.py"), "--algo", algo,
                     "--env", env, *common]
@@ -312,7 +314,8 @@ class RunManager:
                 "starred": bool(tags.get("starred")),
                 "best_success_rate": self._best_success(d),
                 "best_mean_passes": status_doc.get("best_mean_passes"),
-                "comparable": (meta.get("env") == "net" and meta.get("obs_dim") in NET_OBS_DIMS)
+                "comparable": (meta.get("env") == "net" and (meta.get("obs_dim") in NET_OBS_DIMS
+                                                             or meta.get("act_hist") is not None))
                               or meta.get("env") == "onboard",
             })
         current_run_id = runs[-1]["run_id"] if runs else None
