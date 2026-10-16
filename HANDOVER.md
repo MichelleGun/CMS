@@ -101,8 +101,15 @@ on **laps/ep** and **2+ passes %** without dropping **oblique entry**, ideally o
 | a | **O, longer** | O was still improving when stopped (best eval 1.64) | `--keys O`, 5M steps | |
 | b | **Z / OZ: line up first** | a reward for lining up on the axis and keeping clear of the noodle stops the corner clipping seen on the real drone | `--keys Z OZ` (`w_rim` 1.0, `rim_margin_m` 0.15, `axis_pull` 2.0, `r_struck` -15) | |
 | c | **More slant + loop practice** | more slanted starts, plus starts just before the hoop, give more loop practice now that the policy has memory | new key: O's flags with `--oblique-p 0.6 --near-pass-p 0.3` | |
-| d | **Second DAgger pass with memory** | the teacher relabelling O's own states (DAgger) then DAPG again lifts the loop rate, as `dagger_n1` → n8 did | `hardware/privileged/dagger_hist.py` from O, then DAPG as in `_N8` | |
-| e | **Sim-to-real: corners** | real drift and command delay make slanted entries fail; more delay/drift randomisation in training makes the policy line up earlier | raise the delay/drift ranges in `sim.py` profiles (`sample_profile`), then `--keys O` | |
+| d | **Second DAgger pass with memory** | the teacher relabelling O's own states (DAgger) then DAPG again lifts the loop rate, as `dagger_n1` → n8 did | `hardware/privileged/dagger_hist.py` from O, then DAPG as in `_N8` | Michelle's PC (`loop_forever.py`, tag `mg`: key **D9**) |
+| e | **Sim-to-real: corners** | real drift and command delay make slanted entries fail; more delay/drift randomisation in training makes the policy line up earlier | raise the delay/drift ranges in `sim.py` profiles (`sample_profile`), then `--keys O` | Michelle's PC (key **E9**: `--stress-p 0.3`, +0.06 s delay, drift x2) |
+
+**Running continuously on Michelle's PC (2026-10-17):** `hardware/onboard/loop_forever.py` races the best
+variant so far against the next idea (D9, E9, C9, DE9, OF, OS, ON), round after round. Every round first
+relabels the current best policy's own states with the teacher (`hardware/privileged/dagger_from_policy.py`,
+demo files `dagger_mg_r*.npz`). It scores by laps/ep + 0.5 x oblique entry and carries the winner forward.
+Runs are `results/hoop/runs/w10_mg<round>_*`; the log is `results/hoop/mg_loop.log`. To avoid duplicate
+work, pick other keys or tags.
 
 To add an experiment, add a line to `EXPERIMENTS` in `week10_experiments.py` (copy `"O"` and change
 the flags), and use its key with `--keys`.

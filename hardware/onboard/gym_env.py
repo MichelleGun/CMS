@@ -149,7 +149,7 @@ class OnboardHoopEnv(gym.Env):
                  streak: float = STREAK_GAIN, streak_cap: float = STREAK_CAP,
                  ring_tracker: bool = False, reward_weights: Optional[dict] = None,
                  history_lags=None, privileged: bool = False, near_pass_p: float = 0.0,
-                 oblique_p: float = 0.0, stall_sec: float = 0.0):
+                 oblique_p: float = 0.0, stall_sec: float = 0.0, stress_p: float = 0.0):
         """dr / sway_deg / hard_start_p / ramp / open_plane / wash_deg: see sim.py. open_plane
         defaults to on whenever starts can be away from the front runway. laps: passes per
         episode (1: the episode ends at the first crossing; 0: endless). lap_dir: "alternate"
@@ -201,6 +201,7 @@ class OnboardHoopEnv(gym.Env):
         self._np_rng = np.random.default_rng(self._seed + 7_777)
         # and this share starts close to the ring at a slant (sim.place_oblique), own stream too
         self.oblique_p = float(oblique_p)
+        self.stress_p = float(stress_p)          # training only: sim.STRESS_* drone, a share of episodes
         self._ob_rng = np.random.default_rng(self._seed + 8_888)
         if self.laps != 1:
             max_episode_sec = max(max_episode_sec, LAP_EPISODE_SEC)
@@ -304,6 +305,7 @@ class OnboardHoopEnv(gym.Env):
         self._seed += 1                                  # fresh layout each episode
         if self.sim is None:
             self.sim = OnboardSim(seed=s, **self._kwargs)
+            self.sim.stress_p = self.stress_p
         if self._next_zone_index is not None:
             self.sim._zone_i = self._next_zone_index
             self._next_zone_index = None

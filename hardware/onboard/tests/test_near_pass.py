@@ -1,6 +1,7 @@
 """Near-pass starts (training curriculum for the loop): where they put the drone, and that they
 change nothing when off."""
 import numpy as np
+import pytest
 
 from onboard.gym_env import OnboardHoopEnv
 from onboard.sim import CAGE_XY
@@ -68,3 +69,19 @@ def test_oblique_starts_are_off_by_default_and_change_nothing():
         oa, _ = a.reset()
         ob, _ = b.reset()
         assert np.allclose(oa, ob) and a.sim.start_type != "oblique"
+
+
+def test_stress_episodes_have_a_slower_driftier_drone_and_are_off_by_default():
+    from onboard.sim import STRESS_DELAY_S
+    env = OnboardHoopEnv(seed=11, stress_p=1.0, **KW)
+    env.reset()
+    base = OnboardHoopEnv(seed=11, **KW)
+    base.reset()
+    assert env.sim.stressed and not base.sim.stressed
+    assert env.sim.profile.delay_s == pytest.approx(base.sim.profile.delay_s + STRESS_DELAY_S)
+    assert env.sim.profile.drift_mps > base.sim.profile.drift_mps
+    a, b = OnboardHoopEnv(seed=6, **KW), OnboardHoopEnv(seed=6, stress_p=0.0, **KW)
+    for _ in range(3):
+        oa, _ = a.reset()
+        ob, _ = b.reset()
+        assert np.allclose(oa, ob)
