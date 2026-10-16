@@ -48,7 +48,11 @@ SLIDERS = [
     ("hue lo", "hsv_lo", 0, 179),
     ("hue hi", "hsv_hi", 0, 179),
     ("sat lo", "hsv_lo", 1, 255),
+    ("sat hi", "hsv_hi", 1, 255),
     ("val lo", "hsv_lo", 2, 255),
+    # val hi: a bright daylight window is pale blue (low saturation, very high value); lowering
+    # this (and raising sat lo) is what keeps it out of the mask
+    ("val hi", "hsv_hi", 2, 255),
     ("residual x100", "residual_max", None, 100),
     ("min major px", "min_major_px", None, 200),
     ("min arc deg", "min_arc_deg", None, 360),
@@ -85,8 +89,9 @@ def read_sliders(cv2, params):
         val = raw / 100.0 if "x100" in label else raw
         _set(params, field, index, val)
     # Keep the paired bounds ordered, or inRange silently matches nothing.
-    if params.hsv_hi[0] < params.hsv_lo[0]:
-        _set(params, "hsv_hi", 0, params.hsv_lo[0])
+    for i in range(3):                       # hue, sat, val: the upper bound never below the lower
+        if params.hsv_hi[i] < params.hsv_lo[i]:
+            _set(params, "hsv_hi", i, params.hsv_lo[i])
     if params.fill_ratio[1] < params.fill_ratio[0]:
         _set(params, "fill_ratio", 1, params.fill_ratio[0])
     return params
@@ -164,6 +169,17 @@ class Source:
         return False
 
 
+def _save(a, params):
+    """To a named preset (--preset, see detector_presets.py) or to detector.json."""
+    if a.preset:
+        from onboard.detector_presets import save_preset
+        d = save_preset(a.preset, params.to_json(), condition=a.condition)
+        print(f"saved preset '{d['slug']}' ({d['path']})")
+    else:
+        a.out.write_text(json.dumps(params.to_json(), indent=2), encoding="utf-8")
+        print(f"saved {a.out}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -172,6 +188,10 @@ def main(argv=None):
     ap.add_argument("--save", action="store_true",
                     help="write detector.json on exit (S also saves at any time)")
     ap.add_argument("--out", type=Path, default=DETECTOR_FILE)
+    ap.add_argument("--preset", default=None,
+                    help="save into this named camera preset (e.g. 'Day') instead of detector.json; "
+                         "fly it with fly_hoop.py --detector day")
+    ap.add_argument("--condition", choices=("day", "night", "other"), default="other")
     ap.add_argument("--ring-opening", type=float, default=spec.RING_OPENING_M)
     ap.add_argument("--ring-noodle", type=float, default=spec.RING_NOODLE_M)
     ap.add_argument("--hfov", type=float, default=spec.CAMERA_HFOV_DEG)
@@ -259,9 +279,8 @@ def main(argv=None):
             if k in (ord("q"), 27):
                 break
             if k == ord("s"):
-                a.out.write_text(json.dumps(params.to_json(), indent=2), encoding="utf-8")
+                _save(a, params)
                 saved = True
-                print(f"saved {a.out}")
             if k == ord("r"):
                 tracker.reset()
             try:
@@ -272,9 +291,8 @@ def main(argv=None):
 
     if not a.no_window:
         cv2.destroyAllWindows()
-    if a.save and not saved:
-        a.out.write_text(json.dumps(params.to_json(), indent=2), encoding="utf-8")
-        print(f"saved {a.out}")
+    if (a.save or a.preset) and not saved:
+        _save(a, params)
     return params
 
 

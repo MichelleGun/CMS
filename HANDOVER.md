@@ -52,6 +52,10 @@ checks (ceiling, a bad range-sensor reading, mainboard over 80 °C). The first t
 | teacher labels on the loop leg for a policy **without** memory | collapsed to ~0 | to a memoryless policy "just passed, ring behind" looks like "blind before a pass", so the labels average out |
 | bigger reward for re-finding the ring | no change | |
 
+**Lighting matters (2026-10-17).** Night flights worked; daytime flights locked onto the window.
+Calibrate the camera per lighting in the dashboard (Drone tab → *Calibrate camera…*, see
+[webapp/README.md](webapp/README.md)) and pick the matching **Camera preset** when flying.
+
 ## 2. Setup
 
 1. Follow [SETUP.md](SETUP.md) (conda env `drones`, Python 3.12, CPU-only PyTorch is fine).

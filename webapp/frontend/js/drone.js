@@ -149,6 +149,8 @@ const Drone = (() => {
       clearml: el.clearml.checked,
       record: el.record.checked,
       model: stage.mode === "policy" ? el.model.value || null : null,
+      // the camera calibration preset (js/calib.js fills this select); "default" = detector.json
+      detector_preset: (document.getElementById("opt-detector") || {}).value || null,
       human_gain: Number(el.gain.value) || 0.6,
       profile: el.profile.value,
       dry_run: !real,

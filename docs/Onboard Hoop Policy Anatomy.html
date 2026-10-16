@@ -976,6 +976,9 @@ footer{margin-top:60px;padding-top:14px;border-top:1px solid var(--line);color:v
 </tbody></table></div>
 <p><b>Reading it.</b> O is the best policy yet for looping: one episode in two has two or more passes. But its oblique entry did not improve, so slanted starts taught <i>more loops</i>, not <i>cleaner slanted entries</i>. In OZ, the stronger noodle penalty made the policy more cautious overall, and it passed less. The corner problem is still open; <code>HANDOVER.md</code> lists the next experiments for it.</p>
 <p>The export ranking now has an <b>Oblique entry</b> column (and per-zone scores in each file's <code>.meta.json</code>), so the policy to fly from the corners is the one with both a high laps/ep and a high oblique entry.</p>
+<h3>Day versus night: the camera calibration (2026-10-17)</h3>
+<p>Later test flights worked at night and failed in the day: in daylight the ring detector locked onto the <b>window</b> (and a glass door) seen through the net. Their pale, washed-out blue fell inside the colour window tuned at night. The noodle is a strongly saturated mid-blue; glass and glare have low saturation and high brightness. So the colour window needs a higher minimum saturation and a lower maximum brightness in daylight. The dashboard now has a <b>Calibrate camera</b> panel (ground only): click the hoop, click the window, auto-fit, and save the result as a named <b>camera preset</b> (day / night / other). Each flight picks its preset. On the recorded daytime frames, the fitted preset no longer sees the window or the glass door, and still finds the hoop on a night frame.</p>
+<p class="where">hardware/onboard/calib_session.py, detector_presets.py, ring_detect.fit_hsv_pixels; webapp/backend/calib_manager.py; webapp/frontend/js/calib.js; fly_hoop.py --detector.</p>
 <h3>Flight-tool fixes from the same flights</h3>
 <div class="scroll"><table>
 <thead><tr><th>Seen</th><th>Change</th></tr></thead>

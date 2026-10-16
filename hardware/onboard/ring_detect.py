@@ -319,3 +319,79 @@ class RingTracker:
             age=int(self._age), clipped=clipped, blue_fraction=blue_fraction,
             n_candidates=n, raw=raw,
         )
+
+
+def _patch_pixels(hsv, points, radius):
+    """HSV pixels in square patches around points given as (x, y) fractions of the frame."""
+    h, w = hsv.shape[:2]
+    out = []
+    for fx, fy in points:
+        x, y = int(round(float(fx) * (w - 1))), int(round(float(fy) * (h - 1)))
+        x0, x1 = max(0, x - radius), min(w, x + radius + 1)
+        y0, y1 = max(0, y - radius), min(h, y + radius + 1)
+        if x1 > x0 and y1 > y0:
+            out.append(hsv[y0:y1, x0:x1].reshape(-1, 3))
+    return np.concatenate(out).astype(np.int32) if out else np.zeros((0, 3), np.int32)
+
+
+def _in_range(px, lo, hi):
+    if len(px) == 0:
+        return 0.0
+    return float(np.mean(np.all((px >= np.array(lo)) & (px <= np.array(hi)), axis=1)))
+
+
+def sample_hsv(bgr, ring_points=(), reject_points=()):
+    """HSV pixels around clicks (fractions of the frame): (ring pixels, rejected pixels)."""
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    return _patch_pixels(hsv, ring_points, 3), _patch_pixels(hsv, reject_points, 6)
+
+
+def fit_hsv(bgr, ring_points, reject_points=(), base: Optional[DetectorParams] = None,
+            keep_min: float = 0.90):
+    """Fit the colour window from clicks on one frame (see fit_hsv_pixels)."""
+    pos, neg = sample_hsv(bgr, ring_points, reject_points)
+    return fit_hsv_pixels(pos, neg, base, keep_min)
+
+
+def fit_hsv_pixels(pos, neg=None, base: Optional[DetectorParams] = None, keep_min: float = 0.90):
+    """Fit the colour window to sampled HSV pixels: ON the ring (pos) and on things to reject
+    (neg: a bright window, a blue chair), possibly gathered over several frames.
+
+    The window starts at the 5th-95th percentile of the ring pixels plus a margin; then, one
+    bound at a time, it is tightened towards the ring pixels while that removes rejected pixels
+    and keeps at least `keep_min` of the ring's. Returns (params, stats) with stats = ring
+    pixels kept and rejected pixels still in the window (fractions), before and after."""
+    base = base or DetectorParams()
+    pos = np.asarray(pos, np.int32).reshape(-1, 3)
+    neg = np.zeros((0, 3), np.int32) if neg is None else np.asarray(neg, np.int32).reshape(-1, 3)
+    if len(pos) == 0:
+        raise ValueError("click at least one point on the ring")
+    q = lambda col, p: float(np.percentile(pos[:, col], p))         # noqa: E731
+    lo = [max(0, int(q(0, 5) - 6)), max(0, int(q(1, 5) - 25)), max(0, int(q(2, 5) - 35))]
+    hi = [min(179, int(q(0, 95) + 6)), 255, 255]
+    before = dict(ring_kept=_in_range(pos, base.hsv_lo, base.hsv_hi),
+                  rejected_in=_in_range(neg, base.hsv_lo, base.hsv_hi))
+    if len(neg):
+        for _ in range(200):
+            cur_neg = _in_range(neg, lo, hi)
+            if cur_neg <= 0.01:
+                break
+            best = None
+            for idx, side, step in ((1, "lo", 5), (2, "lo", 5), (2, "hi", -5), (1, "hi", -5),
+                                    (0, "lo", 2), (0, "hi", -2)):
+                tlo, thi = list(lo), list(hi)
+                (tlo if side == "lo" else thi)[idx] += step
+                if tlo[idx] > thi[idx]:
+                    continue
+                kept, n_in = _in_range(pos, tlo, thi), _in_range(neg, tlo, thi)
+                if kept < keep_min or n_in >= cur_neg:
+                    continue
+                score = (cur_neg - n_in) / max(1e-6, 1.0 - kept + 0.01)
+                if best is None or score > best[0]:
+                    best = (score, tlo, thi)
+            if best is None:
+                break
+            lo, hi = best[1], best[2]
+    params = DetectorParams.from_json(dict(base.to_json(), hsv_lo=lo, hsv_hi=hi))
+    after = dict(ring_kept=_in_range(pos, lo, hi), rejected_in=_in_range(neg, lo, hi))
+    return params, dict(before=before, after=after, ring_px=int(len(pos)), reject_px=int(len(neg)))
