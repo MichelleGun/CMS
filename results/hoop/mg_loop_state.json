@@ -1,0 +1,231 @@
+{
+  "round": 8,
+  "parent": "results/hoop/runs/w10_mg6_C9_loop_practice",
+  "parent_key": "C9",
+  "parent_score": 2.6168333333333336,
+  "tried": [],
+  "history": [
+    {
+      "round": 1,
+      "keys": [
+        "O",
+        "D9"
+      ],
+      "results": [
+        {
+          "key": "O",
+          "run": "w10_mg1_O_oblique",
+          "score": null,
+          "lpe": null,
+          "two_plus": null,
+          "oblique": null,
+          "file": null
+        },
+        {
+          "key": "D9",
+          "run": "w10_mg1_D9_dagger_relabel",
+          "score": null,
+          "lpe": null,
+          "two_plus": null,
+          "oblique": null,
+          "file": null
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_n9_O_oblique",
+      "at": "2026-10-17T08:09"
+    },
+    {
+      "round": 2,
+      "keys": [
+        "O",
+        "E9"
+      ],
+      "results": [
+        {
+          "key": "O",
+          "run": "w10_mg2_O_oblique",
+          "score": 1.9276111111111112,
+          "lpe": 1.6111111111111112,
+          "two_plus": 0.4722222222222222,
+          "oblique": 0.633,
+          "file": "LOOP_20261018_w10-mg2-O-oblique_best_1.61lpe"
+        },
+        {
+          "key": "E9",
+          "run": "w10_mg2_E9_stress",
+          "score": 2.2665,
+          "lpe": 2.0,
+          "two_plus": 0.6388888888888888,
+          "oblique": 0.533,
+          "file": "LOOP_20261018_w10-mg2-E9-stress_best_2.00lpe"
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg2_E9_stress",
+      "at": "2026-10-18T07:09"
+    },
+    {
+      "round": 3,
+      "keys": [
+        "E9",
+        "C9"
+      ],
+      "results": [
+        {
+          "key": "E9",
+          "run": "w10_mg3_E9_stress",
+          "score": 2.116833333333333,
+          "lpe": 1.8333333333333333,
+          "two_plus": 0.5277777777777778,
+          "oblique": 0.567,
+          "file": "LOOP_20261018_w10-mg3-E9-stress_final_1.83lpe"
+        },
+        {
+          "key": "C9",
+          "run": "w10_mg3_C9_loop_practice",
+          "score": 2.4944444444444445,
+          "lpe": 2.1944444444444446,
+          "two_plus": 0.6388888888888888,
+          "oblique": 0.6,
+          "file": "LOOP_20261018_w10-mg3-C9-loop-practice_best_2.19lpe"
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg3_C9_loop_practice",
+      "at": "2026-10-18T11:43"
+    },
+    {
+      "round": 4,
+      "keys": [
+        "C9",
+        "DE9"
+      ],
+      "results": [
+        {
+          "key": "C9",
+          "run": "w10_mg4_C9_loop_practice",
+          "score": 2.155388888888889,
+          "lpe": 1.8888888888888888,
+          "two_plus": 0.6666666666666666,
+          "oblique": 0.533,
+          "file": "LOOP_20261018_w10-mg4-C9-loop-practice_best_1.89lpe"
+        },
+        {
+          "key": "DE9",
+          "run": "w10_mg4_DE9_dagger_stress",
+          "score": 2.0557222222222222,
+          "lpe": 1.7222222222222223,
+          "two_plus": 0.5277777777777778,
+          "oblique": 0.667,
+          "file": "LOOP_20261018_w10-mg4-DE9-dagger-stress_final_1.72lpe"
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg3_C9_loop_practice",
+      "at": "2026-10-18T14:57"
+    },
+    {
+      "round": 5,
+      "keys": [
+        "C9",
+        "OF"
+      ],
+      "results": [
+        {
+          "key": "C9",
+          "run": "w10_mg5_C9_loop_practice",
+          "score": 2.155388888888889,
+          "lpe": 1.8888888888888888,
+          "two_plus": 0.6666666666666666,
+          "oblique": 0.533,
+          "file": "LOOP_20261018_w10-mg5-C9-loop-practice_best_1.89lpe"
+        },
+        {
+          "key": "OF",
+          "run": "w10_mg5_OF_oblique_zonefocus",
+          "score": 2.205388888888889,
+          "lpe": 1.8888888888888888,
+          "two_plus": 0.5555555555555556,
+          "oblique": 0.633,
+          "file": "LOOP_20261018_w10-mg5-OF-oblique-zonefocus_best_1.89lpe"
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg3_C9_loop_practice",
+      "at": "2026-10-18T17:49"
+    },
+    {
+      "round": 6,
+      "keys": [
+        "C9",
+        "OS"
+      ],
+      "results": [
+        {
+          "key": "C9",
+          "run": "w10_mg6_C9_loop_practice",
+          "score": 2.6168333333333336,
+          "lpe": 2.3333333333333335,
+          "two_plus": 0.6388888888888888,
+          "oblique": 0.567,
+          "file": "LOOP_20261019_w10-mg6-C9-loop-practice_final_2.33lpe"
+        },
+        {
+          "key": "OS",
+          "run": "w10_mg6_OS_oblique_stall30",
+          "score": 2.0557222222222222,
+          "lpe": 1.7222222222222223,
+          "two_plus": 0.5555555555555556,
+          "oblique": 0.667,
+          "file": "LOOP_20261019_w10-mg6-OS-oblique-stall30_best_1.72lpe"
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg6_C9_loop_practice",
+      "at": "2026-10-19T12:14"
+    },
+    {
+      "round": 7,
+      "keys": [
+        "C9",
+        "ON"
+      ],
+      "results": [
+        {
+          "key": "C9",
+          "run": "w10_mg7_C9_loop_practice",
+          "score": null,
+          "lpe": null,
+          "two_plus": null,
+          "oblique": null,
+          "file": null
+        },
+        {
+          "key": "ON",
+          "run": "w10_mg7_ON_oblique_normreward",
+          "score": null,
+          "lpe": null,
+          "two_plus": null,
+          "oblique": null,
+          "file": null
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg6_C9_loop_practice",
+      "at": "2026-10-19T23:31"
+    },
+    {
+      "round": 8,
+      "keys": [
+        "C9"
+      ],
+      "results": [
+        {
+          "key": "C9",
+          "run": "w10_mg8_C9_loop_practice",
+          "score": null,
+          "lpe": null,
+          "two_plus": null,
+          "oblique": null,
+          "file": null
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg6_C9_loop_practice",
+      "at": "2026-10-19T23:31"
+    }
+  ]
+}
