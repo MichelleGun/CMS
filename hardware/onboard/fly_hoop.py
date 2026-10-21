@@ -161,8 +161,13 @@ def _clearml_record(flight_dir: Path, meta: dict, status: str, background: bool 
         print(f"[flight] ClearML upload skipped: {e}", file=sys.stderr)
 
 
-def load_detector(path: Path = DETECTOR_FILE) -> DetectorParams:
-    """Thresholds measured by tune_detector.py, or the (untuned) defaults."""
+def load_detector(path: Path = DETECTOR_FILE, preset: Optional[str] = None) -> DetectorParams:
+    """Thresholds measured by tune_detector.py, or the (untuned) defaults. With `preset`, a named
+    camera calibration from detector_presets/ (day, night, ...), as saved by the dashboard's
+    Calibrate camera panel; an unknown preset is an error, never a silent fall-back."""
+    if preset:
+        from onboard.detector_presets import get_preset
+        return DetectorParams.from_json(get_preset(preset)["params"])
     if path.is_file():
         try:
             return DetectorParams.from_json(json.loads(path.read_text(encoding="utf-8")))
@@ -258,7 +263,7 @@ class Flight:
         self._ask = (self._file_ask() if getattr(args, "save_answer", "prompt") == "file"
                      else input)
         self._ring_seen = False         # recording starts at the first lock
-        self.detector = load_detector()
+        self.detector = load_detector(preset=getattr(args, "detector", None))
         # Ranging uses the OUTER diameter, because the noodle's outer edge is what the
         # camera measures. Confusing it with the opening biases every range by ~12 cm.
         outer = (args.ring_opening or spec.RING_OPENING_M) + 2 * (
@@ -1205,6 +1210,10 @@ def parse(argv=None):
                     help="--mode human --record: answer the post-landing save questions "
                          "in the terminal, or from save_answer.json written by the dashboard")
     ap.add_argument("--model", type=Path, default=None, help="--mode policy: a .zip")
+    ap.add_argument("--detector", default=None, metavar="PRESET",
+                    help="camera calibration preset (hardware/onboard/detector_presets/, e.g. 'day' or "
+                         "'night', saved from the dashboard's Calibrate camera panel) or a .json path; "
+                         "default: detector.json")
     ap.add_argument("--algo", default=None, choices=["ppo", "a2c", "sac", "td3"])
 
     ap.add_argument("--no-forward", action="store_true",
@@ -1281,6 +1290,12 @@ def parse(argv=None):
                     help="don't upload the flight to ClearML after landing (also: CLEARML_OFF=1)")
     a = ap.parse_args(argv)
 
+    if a.detector:
+        from onboard.detector_presets import get_preset
+        try:
+            get_preset(a.detector)
+        except (KeyError, ValueError) as e:
+            ap.error(str(e).strip("'\""))
     if a.mode == "policy" and a.model is None:
         ap.error("--mode policy needs --model")
     if a.keys == "udp" and not 0 < a.keys_port < 65536:
@@ -1332,6 +1347,7 @@ def main(argv=None):
             "drone_width_m": a.drone_width or spec.DRONE_WIDTH_M,
             "commit_range_m": a.commit_range, "commit_speed_mps": a.commit_speed,
             "model": str(a.model) if a.model else None,
+            "detector_preset": a.detector or "default",
             "keys_port": a.keys_port if a.keys == "udp" else None,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "final_status": None,
@@ -1344,6 +1360,9 @@ def main(argv=None):
             print("REAL FLIGHT: props guarded, cage clear, hand on Ctrl+C.")
 
         flight = Flight(a, settings, d)
+        # the exact camera calibration this flight used, beside the log
+        write_json(d / "detector_used.json", {"preset": a.detector or "default",
+                                               "params": flight.detector.to_json()})
         if wants_recording(a):
             from imitation.record_demo import DemoRecorder
             flight.recorder = DemoRecorder(

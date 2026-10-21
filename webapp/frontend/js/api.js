@@ -37,6 +37,16 @@ async function apiPut(path, body) {
   return res.json();
 }
 
+async function apiDelete(path) {
+  const res = await fetch(API_BASE + path, { method: "DELETE" });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try { detail = (await res.json()).detail || detail; } catch (e) { /* ignore */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 // How a training run is named everywhere (run list, Start from, History, overlay): its own
 // name if it was given one, else its algorithm and start time. `when` is always the date & time.
 const RunNames = {
@@ -101,6 +111,20 @@ const Api = {
   getDroneStatus: () => apiGet("/api/drone/status"),
   getDroneFlights: (limit = 25) => apiGet("/api/drone/flights?limit=" + limit),
   startFlight: (payload) => apiPost("/api/drone/flights", payload),
+  // camera calibration (webapp/backend/calib_manager.py)
+  calibStatus: () => apiGet("/api/calib/status"),
+  calibStart: (body) => apiPost("/api/calib/start", body),
+  calibStop: () => apiPost("/api/calib/stop"),
+  calibParams: (params) => apiPut("/api/calib/params", { params }),
+  calibAutofit: (ring, reject, clear = false) => apiPost("/api/calib/autofit", { ring, reject, clear }),
+  calibImage: (image) => apiPost("/api/calib/image", { image }),
+  calibSnapshot: () => apiPost("/api/calib/snapshot"),
+  calibImages: () => apiGet("/api/calib/images"),
+  calibPresets: () => apiGet("/api/calib/presets"),
+  calibSavePreset: (body) => apiPost("/api/calib/presets", body),
+  calibDefaultPreset: (slug) => apiPost(`/api/calib/presets/${encodeURIComponent(slug)}/default`),
+  calibLoadPreset: (slug) => apiPost(`/api/calib/presets/${encodeURIComponent(slug)}/load`),
+  calibDeletePreset: (slug) => apiDelete(`/api/calib/presets/${encodeURIComponent(slug)}`),
   getDroneTicks: (id) => apiGet(`/api/drone/flights/${encodeURIComponent(id)}/ticks`),
   getDroneEvents: (id) => apiGet(`/api/drone/flights/${encodeURIComponent(id)}/events`),
   answerSave: (id, save, passed) =>

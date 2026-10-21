@@ -146,6 +146,9 @@ class StartFlightRequest(BaseModel):
     start_height: int = 80
     keys: Literal["popup", "browser"] = "popup"
     clearml: bool = True
+    # 2026-10-17: which camera calibration (hardware/onboard/detector_presets/) the flight uses;
+    # None = detector.json. Daytime light needs its own (the window looked like the hoop).
+    detector_preset: Optional[str] = None
 
 
 class SaveAnswerRequest(BaseModel):
@@ -196,3 +199,33 @@ class EvaluateRequest(BaseModel):
 
 class DroneCameraToggleRequest(BaseModel):
     enabled: bool
+
+
+class CalibStartRequest(BaseModel):
+    """A ground-only camera calibration session (hardware/onboard/calib_session.py)."""
+    source: Literal["tello", "webcam", "image"] = "tello"
+    webcam_index: int = Field(0, ge=0, le=9)
+    image: Optional[str] = None          # one of GET /api/calib/images
+    preset: Optional[str] = None         # start from this preset (default: detector.json)
+
+
+class CalibParamsRequest(BaseModel):
+    """Detector params to change (only the given keys); see ring_detect.DetectorParams."""
+    params: Dict[str, object]
+
+
+class CalibAutofitRequest(BaseModel):
+    """Clicks as [x, y] fractions of the frame: on the hoop, and on things to ignore."""
+    ring: List[List[float]] = []
+    reject: List[List[float]] = []
+    clear: bool = False               # forget the samples gathered so far first
+
+
+class CalibImageRequest(BaseModel):
+    image: str
+
+
+class CalibPresetRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    condition: Literal["day", "night", "other"] = "other"
+    notes: str = Field("", max_length=500)

@@ -197,3 +197,37 @@ the whole database: there is no separate registry, restarting the backend just r
   adds the `drones` conda env's own `Library/bin` to the subprocess `PATH` automatically, so a
   `conda install -c conda-forge ffmpeg` into that env is enough, no separate PATH setup needed.
 - `results/hoop/runs/` is git-ignored already (the existing `.gitignore`'s `runs/` rule).
+
+## Calibrating the camera (Drone tab → Calibrate camera…)
+
+Daytime flights locked onto the **window** instead of the hoop with the calibration that worked at
+night: the glass and glare are a pale blue that the old colour window let in. So the ring detector's
+settings are now saved as **camera presets** (day / night / other), and each flight picks one.
+
+**How to calibrate** (ground only: the drone never takes off; battery on, on the ground):
+1. Drone tab → **Calibrate camera…** → Camera: *Tello*, *Webcam* or *Saved frame* (any recent
+   flight's camera frame, or your snapshots) → **Start camera**. Left: what the detector sees (green
+   = the chosen ring, yellow = other candidates). Right: the colour mask (only the hoop should be white).
+2. Choose **Click the hoop** and click 3+ spots around the noodle, then **Auto-fit colours**.
+3. Point the camera at the window (or pick a daytime frame), choose **Click what to ignore**, click
+   the window / glare / anything blue that isn't the hoop, then **Auto-fit colours** again. Samples add
+   up across frames, so the hoop and the window don't have to be in the same picture. The result line
+   says how much of the hoop is kept and how much of the ignored stuff still counts as hoop.
+4. Fine-tune with the sliders if needed. Daylight usually needs a higher *Saturation low* and a lower
+   *Brightness high*. If a fully visible hoop is never found, press **Reset shape gates**.
+   *Note:* `detector.json` currently has `fill_ratio [2.0, 2.0]` and `min_major_px 200`, which
+   reject any hoop that is fully in view; only a hoop clipped at the frame edge passes.
+5. Check it from 3 places in the cage and with the hoop at the frame edge, then **Save as preset**
+   (name, Day/Night/Other, notes). **Set as default** copies a preset into `detector.json`, which
+   flights without a preset (and terminal flights) use.
+
+**Flying with a preset:** Options → **Camera preset** (the hint suggests the newest preset that
+matches the time of day, but you always choose). Terminal: `fly_hoop.py ... --detector day`. Each
+flight records the preset in `meta.json` (`detector_preset`) and the full settings in
+`detector_used.json`. The CLI tuner has the same: `tune_detector.py --preset Day --condition day`.
+
+Files: presets in `hardware/onboard/detector_presets/<slug>.json` (+ `.jpg` thumbnail, tracked in
+git so the team shares them); sessions in `hardware/calibration/sessions/` (not tracked).
+Code: `hardware/onboard/calib_session.py` (the camera process), `detector_presets.py`,
+`ring_detect.fit_hsv_pixels` (the auto-fit), `webapp/backend/calib_manager.py` (`/api/calib/*`),
+`webapp/frontend/js/calib.js`. A Tello calibration and a flight exclude each other.

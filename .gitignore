@@ -56,4 +56,7 @@ hardware/flights/demos/*
 hardware/config.local.yaml
 hardware/calibration/camera_intrinsics.json
 hardware/calibration/markers/
+# the dashboard's camera calibration sessions (live frames); the saved presets in
+# hardware/onboard/detector_presets/ ARE tracked, so the team shares them
+hardware/calibration/sessions/
 .pytest_cache/

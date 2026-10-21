@@ -435,6 +435,9 @@ def main(argv=None):
     ap.add_argument("--wash-deg", type=float, default=15.0,
                     help="largest tilt of the ring when the drone's prop wash pushes it away (deg, "
                          "0 = off): the real noodle tilts up about its rope as the drone nears")
+    ap.add_argument("--stress-p", type=float, default=0.0,
+                    help="training only: share of episodes with a slower, driftier drone (command delay "
+                         "+0.06 s, drift x2; onboard/sim.py STRESS_*), for the real drone's corner clipping")
     ap.add_argument("--oblique-p", type=float, default=0.0,
                     help="training only: share of episodes that start 0.5-1.1 m from the ring, 35-80 deg "
                          "off its axis, ring in view at a slant (as from a corner of the real cage)")
@@ -599,7 +602,8 @@ def main(argv=None):
         "robust": {"dr": args.dr, "sway_deg": args.sway_deg, "hard_start_p": args.hard_start_p,
                    "wash_deg": args.wash_deg, "start_mode": args.start_mode,
                    "dr_steps": args.dr_steps, "bc_augment": bool(args.bc_augment),
-                   "near_pass_p": args.near_pass_p, "oblique_p": args.oblique_p},
+                   "near_pass_p": args.near_pass_p, "oblique_p": args.oblique_p,
+                   "stress_p": args.stress_p},
         "obs_dim": full_w,
         "frame_dim": frame_w,            # one frame: what ObsBuilder builds on the drone
         "ring_tracker": bool(args.ring_tracker),
@@ -628,7 +632,7 @@ def main(argv=None):
     ramped = args.dr_steps > 0 and (args.dr > 0 or args.hard_start_p > 0)
     env_kwargs = dict(profile=args.profile, seed=args.seed * 100_000, **robust,
                       ramp=0.0 if ramped else 1.0, near_pass_p=args.near_pass_p,
-                      oblique_p=args.oblique_p, stall_sec=args.stall_sec)
+                      oblique_p=args.oblique_p, stall_sec=args.stall_sec, stress_p=args.stress_p)
     train_env = make_train_vec_env(OnboardHoopEnv, env_kwargs, args.n_envs, seed=args.seed, vec=vec,
                                    rank_seed_kwarg="seed")
     # Evaluation layouts come from a separate stream that training never draws from;

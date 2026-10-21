@@ -259,7 +259,8 @@ class DroneManager:
                    dry_run: bool = True, confirm: bool = False,
                    human_gain: float = 0.6, keys_port: Optional[int] = None,
                    max_height: int = 190, min_height: int = 10, start_height: int = 80,
-                   keys: str = "popup", clearml: bool = True) -> list:
+                   keys: str = "popup", clearml: bool = True,
+                   detector_preset: Optional[str] = None) -> list:
         """fly_hoop.py's command line for a dashboard flight.
 
         keys="popup" (default since 2026-10-14): a human flight opens fly_hoop's own pygame
@@ -321,6 +322,12 @@ class DroneManager:
         argv.append("--record" if record else "--no-record")
         if model:
             argv += ["--model", str(model)]
+        if detector_preset and detector_preset != "default":
+            from calib_manager import presets
+            try:
+                argv += ["--detector", presets.get_preset(detector_preset)["slug"]]
+            except KeyError as e:
+                raise ValueError(str(e).strip("'\""))
         return argv
 
     def start_flight(self, **kw) -> str:

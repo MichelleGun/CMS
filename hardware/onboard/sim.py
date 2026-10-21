@@ -80,6 +80,11 @@ WASH_PERIOD_S = 2.2
 WASH_DAMPING = 0.6
 WASH_SIDE_SOFT_M = 0.10   # the push direction fades through the ring's plane over about this
 LATENCY_P = 0.15       # chance per episode that the camera lags one tick behind
+# training only (OnboardSim.stress_p, train_onboard --stress-p): a share of episodes gets a slower,
+# driftier drone on top of the randomised one. The real drone clipped the hoop on slanted entries
+# from the cage corners (2026-10-14), which more command delay and drift make more likely.
+STRESS_DELAY_S = 0.06
+STRESS_DRIFT_X = 2.0
 NOISE_CXY = 0.02       # detector noise (half-frames), size (fraction), axis ratio
 NOISE_MAJOR = 0.05
 NOISE_RATIO = 0.04
@@ -236,6 +241,9 @@ class OnboardSim:
         # zones: the round-robin starts at a zone set by the seed (parallel envs get different
         # seeds, so they start spread over the zones); it is not reset with the episode seed
         self._zone_i = int(seed or 0) % 9
+        self.stress_p = 0.0                      # set by OnboardHoopEnv; its own random stream
+        self._stress_rng = np.random.default_rng(int(seed or 0) + 9_999)
+        self.stressed = False
         # training only (train_speedups.ZoneFocus): draw the zone from these probabilities instead
         # of the round-robin, from a stream of its own so every other draw is unchanged
         self.zone_weights = None
@@ -294,6 +302,12 @@ class OnboardSim:
             self.profile = self.base_profile
             self.speed_scale = self.yaw_scale = 1.0
             self._latency = False
+        self.stressed = bool(self.stress_p > 0 and self._stress_rng.random() < self.stress_p)
+        if self.stressed:
+            p = self.profile
+            self.profile = replace(p, delay_s=p.delay_s + STRESS_DELAY_S,
+                                   drift_mps=p.drift_mps * STRESS_DRIFT_X + 0.005,
+                                   yaw_drift_dps=p.yaw_drift_dps * STRESS_DRIFT_X)
         pos, yaw = self._fixed_start
         self.start_type = "front"
         self.clear_cross = 0

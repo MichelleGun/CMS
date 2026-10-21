@@ -68,6 +68,7 @@ _N8 = ["--ring-tracker", "--history-lags", "0,1,2,4,8,16", "--asym-critic",
        "--demos", "hardware/flights/demos/dagger_n1_r*.npz", "--bc-coef", "0.3", "--bc-coef-min", "0.3",
        "--lr", "5e-5", "--target-kl", "0.01", "--batch-size", "512", "--n-epochs", "5",
        "--critic-warmup-steps", "0", "--sway-deg", "2"]
+_MG_DEMOS = ["--demos", "hardware/flights/demos/dagger_n1_r*.npz", "hardware/flights/demos/dagger_mg_r*.npz"]
 _N8_RW = '{"r_wrong_way": -20, "drain": false, "r_struck": -10, "w_dwell": 0.05}'
 # + line up on the axis before going in, and keep clear of the noodle
 _N8_CLEAR_RW = ('{"r_wrong_way": -20, "drain": false, "r_struck": -15, "w_dwell": 0.05, '
@@ -127,6 +128,17 @@ EXPERIMENTS = {
                                      "--stall-sec", "30"]),
     "ON": ("oblique_normreward", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4",
                                         "--norm-reward"]),
+    # 2026-10-17 continuous optimiser (loop_forever.py), all from the best policy so far (O line):
+    # D9: DAPG with a fresh DAgger relabelling of the policy's OWN states (privileged/
+    #     dagger_from_policy.py, files dagger_mg_r*.npz) pooled with n8's dagger_n1 labels;
+    # E9: 30 % of episodes with a slower, driftier drone (sim.STRESS_*): the real corner clipping;
+    # C9: more slanted starts (0.6) plus starts just before the hoop (0.3): more loop practice;
+    # DE9: D9 + E9.
+    "D9": ("dagger_relabel", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4"] + _MG_DEMOS),
+    "E9": ("stress", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4", "--stress-p", "0.3"]),
+    "C9": ("loop_practice", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.6", "--near-pass-p", "0.3"]),
+    "DE9": ("dagger_stress", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4", "--stress-p", "0.3"]
+            + _MG_DEMOS),
     "Y": ("trk_loopdemo", _C_TRK + ["--gamma", "0.995", "--gae-lambda", "0.97", "--streak", "1.0",
                                     "--streak-cap", "4", "--bc-coef", "0.1", "--bc-coef-min", "0.05"]),
 }

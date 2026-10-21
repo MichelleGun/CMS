@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config import ALGORITHMS, REWARD_INFO, ASSETS_DIR, FRONTEND_DIR, HOOP_SPEC, REACH_RADIUS, ROOM, RUNS_DIR, START_MARGIN, START_Z, XY_MARGIN, Z_RANGE
+from calib_manager import CalibManager, presets as calib_presets_mod
 from drone_manager import drone_manager
 from drone_ws import stream_flight
 from imitation_manager import imitation_manager
@@ -21,10 +22,11 @@ from run_manager import run_manager
 from schemas import (CameraToggleRequest, DroneCameraToggleRequest, EvaluateRequest,
                      GenerateDemosRequest, LabelDemoRequest, ReplayRequest,
                      RealtimeToggleRequest, RunLabelRequest, RunStarRequest, SaveAnswerRequest, ShowcaseRequest, StartFlightRequest, StartRunRequest,
-                     TeacherDemosRequest, TrainCloneRequest)
+                     TeacherDemosRequest, TrainCloneRequest, CalibAutofitRequest, CalibImageRequest, CalibParamsRequest, CalibPresetRequest, CalibStartRequest)
 from telemetry_ws import stream_run
 
 app = FastAPI(title="Hoop-finding drone dashboard")
+calib_manager = CalibManager()
 
 
 def _jpeg_snapshot(path):
@@ -275,6 +277,8 @@ def start_drone_flight(req: StartFlightRequest, request: Request):
         raise HTTPException(status_code=403,
                             detail="real and keyboard flights start only from the computer "
                                    "running the dashboard")
+    if calib_manager.uses_drone():
+        raise HTTPException(status_code=409, detail="a camera calibration is using the drone: stop it first")
     try:
         job = drone_manager.start_flight(
             mode=req.mode, profile=req.profile, seed=req.seed, attempts=req.attempts,
@@ -283,7 +287,8 @@ def start_drone_flight(req: StartFlightRequest, request: Request):
             record=req.record, model=req.model, dry_run=req.dry_run,
             confirm=req.confirm, human_gain=req.human_gain,
             max_height=req.max_height, min_height=req.min_height,
-            start_height=req.start_height, keys=req.keys, clearml=req.clearml)
+            start_height=req.start_height, keys=req.keys, clearml=req.clearml,
+            detector_preset=req.detector_preset)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
@@ -364,6 +369,143 @@ def get_drone_camera_frame(flight_id: str):
     # Not FileResponse: on Windows its open handle blocks fly_hoop's os.replace of this
     # file, and with the dashboard polling at the writer's own rate the frame froze for
     # good a few seconds into every flight.
+    return _jpeg_snapshot(path)
+
+
+# ------------------------------------------------------------- camera calibration
+# Ground only (calib_session.py never sends takeoff or stick commands). See calib_manager.py.
+
+def _msg(e):
+    return str(e).strip("'\"")
+
+
+@app.get("/api/calib/status")
+def calib_status():
+    return calib_manager.status()
+
+
+@app.post("/api/calib/start", status_code=201)
+def calib_start(req: CalibStartRequest, request: Request):
+    if req.source == "tello" and not _is_local(request.client):
+        raise HTTPException(status_code=403, detail="the drone's camera is opened only from this computer")
+    try:
+        sid = calib_manager.start(source=req.source, webcam_index=req.webcam_index, image=req.image,
+                                  preset=req.preset, flight_active=drone_manager.is_flight_active())
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=_msg(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"session": sid}
+
+
+@app.post("/api/calib/stop")
+def calib_stop():
+    return {"stopped": calib_manager.stop()}
+
+
+@app.get("/api/calib/frame/{kind}.jpg")
+def calib_frame(kind: str):
+    path = calib_manager.frame_path(kind)
+    if path is None:
+        raise HTTPException(status_code=404, detail="no frame yet")
+    return _jpeg_snapshot(path)
+
+
+@app.put("/api/calib/params")
+def calib_params(req: CalibParamsRequest):
+    try:
+        return {"params": calib_manager.set_params(req.params)}
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/calib/autofit")
+def calib_autofit(req: CalibAutofitRequest):
+    try:
+        return calib_manager.autofit(req.ring, req.reject, clear=req.clear)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/calib/image")
+def calib_switch_image(req: CalibImageRequest):
+    try:
+        calib_manager.switch_image(req.image)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
+@app.post("/api/calib/snapshot")
+def calib_snapshot():
+    try:
+        calib_manager.snapshot()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"ok": True}
+
+
+@app.get("/api/calib/images")
+def calib_images():
+    return {"images": calib_manager.images()}
+
+
+@app.get("/api/calib/presets")
+def calib_presets():
+    return calib_manager.list_presets()
+
+
+@app.post("/api/calib/presets", status_code=201)
+def calib_save_preset(req: CalibPresetRequest):
+    try:
+        return calib_manager.save_preset(req.name, req.condition, req.notes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/calib/presets/{slug}/default")
+def calib_set_default(slug: str):
+    try:
+        calib_presets_mod.set_default(slug)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=_msg(e))
+    return calib_manager.list_presets()
+
+
+@app.post("/api/calib/presets/{slug}/load")
+def calib_load_preset(slug: str):
+    try:
+        return {"params": calib_manager.load_preset_into_session(slug)}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=_msg(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.delete("/api/calib/presets/{slug}")
+def calib_delete_preset(slug: str):
+    try:
+        calib_presets_mod.delete_preset(slug)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=_msg(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return calib_manager.list_presets()
+
+
+@app.get("/api/calib/presets/{slug}/thumb.jpg")
+def calib_preset_thumb(slug: str):
+    path = calib_manager.preset_thumb(slug)
+    if path is None:
+        raise HTTPException(status_code=404, detail="no thumbnail")
     return _jpeg_snapshot(path)
 
 
