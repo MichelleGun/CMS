@@ -69,6 +69,13 @@ def load_policy(model_path, algo: Optional[str] = None, deterministic: bool = Tr
     model_path = Path(model_path)
     if not model_path.is_file():
         raise FileNotFoundError(f"no model at {model_path}")
+    if model_path.suffix == ".json":
+        # a fixed-switch hierarchy (hrl.write_phase_bundle): skills only, no manager model
+        meta = json.loads(model_path.read_text(encoding="utf-8"))
+        if not meta.get("hrl"):
+            raise ValueError(f"{model_path.name} is not a hierarchy bundle (no 'hrl' in it)")
+        from .hrl import HierarchicalPolicy
+        return HierarchicalPolicy(meta, None, deterministic)
     meta = _load_meta(model_path)
     algo = (algo or meta.get("algo") or "ppo").lower()
     if algo not in ALGOS:
@@ -82,6 +89,10 @@ def load_policy(model_path, algo: Optional[str] = None, deterministic: bool = Tr
 
     from stable_baselines3 import A2C, PPO, SAC, TD3
     cls = {"ppo": PPO, "a2c": A2C, "sac": SAC, "td3": TD3}[algo]
+    if meta.get("hrl"):
+        # a learned hierarchy (train_hrl.py): this zip is the MANAGER; meta.json names its skills
+        from .hrl import HierarchicalPolicy
+        return HierarchicalPolicy(meta, cls.load(str(model_path), device="cpu"), deterministic)
     custom = None
     if meta.get("asym_critic"):
         # the policy class is pickled by reference; hand it over explicitly so a model loads

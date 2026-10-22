@@ -107,6 +107,7 @@ footer{margin-top:60px;padding-top:14px;border-top:1px solid var(--line);color:v
   <a href="#totello">21. From a training run to the Tello</a>
   <a href="#realtest">22. First real flights, and training for the corners</a>
   <a href="#optimiser">23. Optimising the loop policy (the optimiser)</a>
+  <a href="#hrl">24. Hierarchical RL: skills and a manager</a>
 </nav>
 
 <main>
@@ -1011,7 +1012,57 @@ footer{margin-top:60px;padding-top:14px;border-top:1px solid var(--line);color:v
 <p>Round 2 of the optimiser (from 2026-10-23) builds on C9 with ideas aimed at the corners: <b>CZ</b> (reward lining up on the axis and keeping clear of the noodle), <b>CO</b> (even more slanted starts), <b>CE</b> (C9 + stress drone); at loops: <b>CD</b> (DAgger relabel of C9's own states); and at stability: <b>CL</b> (a gentler learning rate). It restarts by itself at logon and never runs twice. The running results are in <code>HANDOVER.md</code> §7.</p>
 <p class="where">hardware/onboard/loop_forever.py, start_loop_optimiser.cmd, week10_experiments.py (E9, C9, CZ, CE, CD, CL, CO); sim.py STRESS_*; privileged/dagger_from_policy.py; results/hoop/mg_loop.log, mg_loop_rescore.json.</p>
 
-<footer>Built from the CMS code and run folders on 2026-10-12; sections 12–17 added 2026-10-13, 18–22 on 2026-10-14, 23 on 2026-10-23. Values marked SB3 default are Stable-Baselines3's own settings for <code>PPO("MlpPolicy")</code>; they are not written anywhere in this project, so changing them means adding the argument where the model is created (train_onboard.py:465).</footer>
+<h2 id="hrl">24. Hierarchical RL: skills and a manager</h2>
+<p>The loop task has <b>phases</b>: find the hoop, line up and go through, then fly round the outside and find it again. One flat policy has to do all of them with the same network, and training showed a <b>trade-off</b>. Practising the loop made loops better but slanted (corner) entries worse (67 % → 57 %). A reward for lining up helped corners but made loops worse. Hierarchical RL splits the problem: each phase gets its own <b>skill</b>, and a <b>manager</b> learns which skill to use when.</p>
+<p>We use the <b>options framework</b> (Sutton, Precup &amp; Singh, 1999):</p>
+<ul>
+<li>An <b>option</b> is a skill run for a while: here a memory policy that flies for up to 8 ticks (0.53 s), or until a pass.</li>
+<li>The <b>manager</b> is a policy over options. Its world is a <i>semi-MDP</i>: one step = one whole option, and its reward = the sum of the rewards while that option flew. Since one decision covers 8 ticks, its discount is 0.92 per decision, about 0.99 per tick.</li>
+<li>The skills are frozen while the manager learns. That is what makes the manager's job small: 3 choices every half second instead of 4 continuous stick values 15 times a second.</li>
+</ul>
+<div class="diagram"><svg viewBox="0 0 1000 230" role="img" aria-label="Hierarchy: manager picks a skill every 0.5 s; the skill flies the drone at 15 Hz">
+<defs><marker id="ah24" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>
+<rect x="20" y="85" width="170" height="70" rx="6" class="bx"/>
+<text x="105" y="115" text-anchor="middle" class="t-m t-b">camera + telemetry</text>
+<text x="105" y="135" text-anchor="middle" class="t-s t-mut">41 inputs, 1 s of history</text>
+<rect x="260" y="20" width="220" height="70" rx="6" class="bx-ring"/>
+<text x="370" y="48" text-anchor="middle" class="t-m t-b">manager (PPO, 64×64)</text>
+<text x="370" y="68" text-anchor="middle" class="t-s">picks a skill every 0.53 s or at a pass</text>
+<rect x="560" y="10" width="200" height="50" rx="6" class="bx-ok"/>
+<text x="660" y="40" text-anchor="middle" class="t-m">SE: enter (corners)</text>
+<rect x="560" y="70" width="200" height="50" rx="6" class="bx-ok"/>
+<text x="660" y="100" text-anchor="middle" class="t-m">SL: loop &amp; re-find</text>
+<rect x="560" y="130" width="200" height="50" rx="6" class="bx-ok"/>
+<text x="660" y="160" text-anchor="middle" class="t-m">C9: generalist</text>
+<rect x="830" y="85" width="150" height="70" rx="6" class="bx"/>
+<text x="905" y="115" text-anchor="middle" class="t-m t-b">sticks</text>
+<text x="905" y="135" text-anchor="middle" class="t-s t-mut">4 values, 15 Hz</text>
+<path d="M190,110 C230,110 230,55 256,55" class="ln" marker-end="url(#ah24)"/>
+<path d="M190,130 C380,200 480,170 556,155" class="ln-dash" marker-end="url(#ah24)"/>
+<path d="M480,55 H556" class="ln-ring" marker-end="url(#ah24)"/>
+<path d="M760,35 C800,35 800,110 826,115" class="ln" marker-end="url(#ah24)"/>
+<path d="M760,95 H826" class="ln" marker-end="url(#ah24)"/>
+<path d="M760,155 C800,155 800,130 826,128" class="ln" marker-end="url(#ah24)"/>
+<text x="500" y="215" text-anchor="middle" class="t-s t-mut">the chosen skill sees the same inputs and flies until the manager's next decision</text>
+</svg></div>
+<div class="scroll"><table>
+<thead><tr><th>Skill</th><th>Trained on</th><th>Its job</th></tr></thead>
+<tbody>
+<tr><td><b>SE</b> enter</td><td>episodes that end at the first pass, 60 % slanted starts, reward for lining up and keeping clear of the noodle</td><td>get in cleanly from any angle: the corner problem</td></tr>
+<tr><td><b>SL</b> loop</td><td>every episode starts just before the hoop, so most of it is going round and coming back</td><td>loop and re-enter</td></tr>
+<tr><td><b>C9</b> generalist</td><td>the best flat policy</td><td>a fallback the manager can choose</td></tr>
+</tbody></table></div>
+<p><b>A fair test.</b> The learned manager has to beat two things on the same referee as the optimiser (72 laps episodes + 60 slanted starts, score = laps/ep + corner entry):</p>
+<ul>
+<li>the <b>flat policy</b> C9;</li>
+<li>a <b>fixed switch</b>: the enter skill until the first pass, then the loop skill. The switch reads "a pass happened" from the drone's own pass detector (telemetry), so it works on the real drone too.</li>
+</ul>
+<p>If the fixed switch already wins, the gain comes from the skills. If the learned manager wins on top of that, it has learned something about <i>when</i> to switch (for example, back to "enter" when a loop goes wrong).</p>
+<!--HRLRESULTS-->
+<div class="call"><p><b>Same in the sim and on the drone.</b> The hierarchy flies through the same loader as every policy (<code>policy.load_policy</code> → <code>HierarchicalPolicy</code>). It decides at the same ticks as in training: every 8 ticks, or when the pass counter changes. A test feeds the frames the simulator produced to the flight version and checks that it sends the same stick commands, tick for tick.</p></div>
+<p class="where">hardware/onboard/hrl.py (OptionEnv, HierarchicalPolicy, PhaseSwitch), train_hrl.py, hrl_pipeline.py, week10_experiments.py (SE, SL), tests/test_hrl.py; results/hoop/hrl_compare.md.</p>
+
+<footer>Built from the CMS code and run folders on 2026-10-12; sections 12–17 added 2026-10-13, 18–22 on 2026-10-14, 23–24 on 2026-10-23. Values marked SB3 default are Stable-Baselines3's own settings for <code>PPO("MlpPolicy")</code>; they are not written anywhere in this project, so changing them means adding the argument where the model is created (train_onboard.py:465).</footer>
 </main>
 </div>
 

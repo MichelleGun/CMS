@@ -118,6 +118,11 @@ hand with `hardware\onboard\start_loop_optimiser.cmd`, and stop it after the cur
 To add an experiment, add a line to `EXPERIMENTS` in `week10_experiments.py` (copy `"O"` and change
 the flags), and use its key with `--keys`.
 
+**Hierarchical RL (2026-10-23).** `hardware/onboard/hrl_pipeline.py` runs unattended: skills SE and SL
+(`loop_night.py --tag hrl`), then the manager (`train_hrl.py --tag v1`), then a fair comparison
+(`results/hoop/hrl_compare.md`). A hierarchy flies like any policy: `fly_hoop.py --mode policy --model
+results/hoop/runs/hrl_v1/best_model.zip` (learned) or `.../hrl_v1/phase_bundle.json` (fixed switch).
+
 ## 5. Sharing results
 
 - Work on your own branch: `git checkout -b train/<yourname>`.
@@ -144,6 +149,7 @@ Newest first. "laps/ep" = passes per 90 s sim episode (same-side laps, all 9 sta
 
 | Date | Change | Why | Impact (measured) |
 |---|---|---|---|
+| 2026-10-23 | **Hierarchical RL** (`hrl.py`, options framework): skills **SE** (enter, corners) and **SL** (loop) trained from C9, a **learned manager** (PPO over skills, decides every 0.53 s or at a pass) and a **fixed switch** baseline (enter until the first pass, then loop) | One flat policy traded corners against loops (loop practice: corners 67 % -> 57 %; corner reward: fewer loops). Separate skills don't have to trade | pending: `results/hoop/hrl_compare.md` compares flat C9, the fixed switch and the learned manager on the optimiser's referee |
 | 2026-10-23 | **Optimiser fixes** (`loop_forever.py`): a new seed every round; every candidate re-scored on the same layouts with 72 laps episodes + 60 slanted starts; a challenger must win by **> 0.10**; score = laps/ep **+ 1.0 x oblique** (was 0.5); restarts at logon; one copy at a time (lock file) | Rounds 4 and 5 trained the *identical* run (seed 0 both times: both 2.155). One 36-episode number wobbles about +-0.15, so some "new best" calls were noise. Corners got worse while loops improved. The PC shutdown on 19 Oct killed the loop | Fewer wasted rounds; corners now count as much as loops. Results from round 9 on are in the table below this one |
 | 2026-10-23 | **New ideas on top of C9**: CZ (line-up / clearance reward), CE (+ stress drone), CD (+ DAgger relabel), CL (lr 2e-5), CO (oblique starts 0.8) | C9 loops best but enters corners worst; these target corners (CZ, CO, CE), loops (CD) or stability (CL) | pending (rounds 9+) |
 | 2026-10-19 | Optimiser round 6: **C9 continued** (seed 0) | – | **2.33 laps/ep, 64 % 2+ passes, oblique 57 %**: the current best (`w10_mg6_C9_loop_practice`) |

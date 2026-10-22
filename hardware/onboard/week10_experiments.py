@@ -148,6 +148,13 @@ EXPERIMENTS = {
     "CD": ("loop_dagger", _N8 + ["--reward-weights", _N8_RW] + _C9_STARTS + _MG_DEMOS),
     "CL": ("loop_lowlr", _N8 + ["--reward-weights", _N8_RW, "--lr", "2e-5"] + _C9_STARTS),
     "CO": ("loop_oblique08", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.8", "--near-pass-p", "0.3"]),
+    # 2026-10-23 hierarchical RL (hrl.py): two SKILLS for the options framework, both from C9.
+    # SE "enter": the episode ends at the first pass (--laps 1), slanted starts, line-up / clearance
+    #   reward: it only has to get in cleanly from any angle (the corner problem).
+    # SL "loop": every episode starts just before the hoop (--near-pass-p 1), so most of it is going
+    #   round and re-entering.
+    "SE": ("skill_enter", _N8 + ["--reward-weights", _N8_CLEAR_RW, "--laps", "1", "--oblique-p", "0.6"]),
+    "SL": ("skill_loop", _N8 + ["--reward-weights", _N8_RW, "--near-pass-p", "1.0"]),
     "Y": ("trk_loopdemo", _C_TRK + ["--gamma", "0.995", "--gae-lambda", "0.97", "--streak", "1.0",
                                     "--streak-cap", "4", "--bc-coef", "0.1", "--bc-coef-min", "0.05"]),
 }

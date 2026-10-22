@@ -888,3 +888,19 @@ results/hoop/runs/n8_dapg_nodrain_cont2 --parallel 2 --n-envs 4 --resume-crashed
 `fly_hoop.py` now also has a soft ceiling (no climbing within 25 cm of `--max-height`, forced
 descent 10 cm higher), and an invalid range sensor alone no longer aborts a flight (the barometer
 height bounds it).
+
+## Hierarchical RL (2026-10-23): skills + a manager
+
+`hrl.py` (options framework, Sutton, Precup & Singh 1999):
+- **skills** are memory policies trained per phase (`week10_experiments` **SE** enter: `--laps 1`, slanted
+  starts, line-up reward; **SL** loop: `--near-pass-p 1.0`);
+- the **manager** is a PPO policy over skills (`train_hrl.py`): `OptionEnv` runs the chosen skill for up to
+  8 ticks (0.53 s) or until the pass counter changes, with reward = the env's reward summed over the option;
+- the **fixed switch** baseline (`PhaseSwitch`, `write_phase_bundle`) uses the enter skill until the first
+  pass, then the loop skill.
+
+`policy.load_policy` returns a `HierarchicalPolicy` for a manager zip whose `meta.json` has `hrl`, or for a
+`phase_bundle.json`. So `fly_hoop.py`, `export_policy.py` and the optimiser score a hierarchy like any policy;
+`tests/test_hrl.py` checks the flight version sends the same commands as the simulator, tick for tick.
+`hrl_pipeline.py` chains skills -> manager -> comparison (`results/hoop/hrl_compare.md`).
+
