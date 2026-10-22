@@ -106,6 +106,7 @@ footer{margin-top:60px;padding-top:14px;border-top:1px solid var(--line);color:v
   <a href="#loophelp">20. Teaching the way back: curriculum and teacher labels</a>
   <a href="#totello">21. From a training run to the Tello</a>
   <a href="#realtest">22. First real flights, and training for the corners</a>
+  <a href="#optimiser">23. Optimising the loop policy (the optimiser)</a>
 </nav>
 
 <main>
@@ -990,7 +991,27 @@ footer{margin-top:60px;padding-top:14px;border-top:1px solid var(--line);color:v
 <div class="call"><p><b>Running it next to other work.</b> This training runs at most 2 runs at once (4 envs each, about 10 of 16 cores) at <b>below-normal priority</b>, and only starts a run with 4 GB of memory free. Anything else on the laptop (such as a Colab session) gets the CPU first. A run that crashes (out of memory) now continues from its own latest model instead of starting again.</p></div>
 <p class="where">sim.place_oblique, gym_env.OnboardHoopEnv(oblique_p), train_onboard.py --oblique-p; week10_experiments.py (K9, O, Z, OZ); loop_night.py --resume-crashed; export_policy.py (oblique_entry, zones); fly_hoop.py (_safety_overrides ceiling, _check).</p>
 
-<footer>Built from the CMS code and run folders on 2026-10-12; sections 12–17 added 2026-10-13, 18–22 on 2026-10-14. Values marked SB3 default are Stable-Baselines3's own settings for <code>PPO("MlpPolicy")</code>; they are not written anywhere in this project, so changing them means adding the argument where the model is created (train_onboard.py:465).</footer>
+<h2 id="optimiser">23. Optimising the loop policy (the optimiser)</h2>
+<p>From 2026-10-17 a script, <code>loop_forever.py</code>, keeps improving the policy by itself. Each <b>round</b> it takes the best policy so far (the <i>parent</i>), trains two copies of it for 2M more steps (the parent's own recipe, and one new idea), scores both, and keeps whichever is best. This is the same idea as a race (§15), repeated: <b>successive improvement with a fixed referee</b>.</p>
+<div class="scroll"><table>
+<thead><tr><th>Round</th><th>Idea raced against the parent's recipe</th><th>What it changes</th><th>Result (laps/ep · oblique entry)</th></tr></thead>
+<tbody>
+<tr><td>2</td><td><b>E9: stress drone</b></td><td>30 % of training episodes use a slower, driftier drone (+0.06 s command delay, twice the drift)</td><td><b>1.61 → 2.00</b> · 63 % → 53 %: kept</td></tr>
+<tr><td>3</td><td><b>C9: loop practice</b></td><td>more slanted starts (60 %) and starts just before the hoop (30 %), so more of each episode is the loop</td><td><b>1.83 → 2.19</b> · 57 % → 60 %: kept</td></tr>
+<tr><td>4–6</td><td>DE9 (DAgger relabel + stress), OF (zone focus), OS (stall cut)</td><td>see §20 and the speed-up notes</td><td>none beat C9 (2.06–2.21); C9 continued reached <b>2.33</b> · 57 %</td></tr>
+<tr><td>7–8</td><td>ON (reward normalisation)</td><td>–</td><td>stopped by a PC shutdown</td></tr>
+</tbody></table></div>
+<p><b>Why the stress drone helped.</b> A slower, driftier drone punishes a late, slanted entry: by the time the command acts the drone has drifted onto the noodle. Training against it pushes the policy to commit more decisively and to recover faster, and that also helped loops in the normal sim. <b>Why loop practice helped now but not in §20:</b> with memory the policy can use the practice: it knows where it is on the way round.</p>
+<div class="call warn"><p><b>Three things we learned about the referee.</b></p>
+<ul>
+<li><b>Same seed, same run.</b> Continuing the same model with the same seed trains the identical policy. Rounds 4 and 5 both gave exactly 2.155, so one round was wasted. Each round now uses its own seed.</li>
+<li><b>Noise.</b> One 36-episode evaluation wobbles by about ±0.15 laps/ep. A "new best" by less than that can be luck. Now every candidate, and the parent, is re-scored on the same 72 episodes plus 60 slanted starts, and a challenger must win by more than 0.10.</li>
+<li><b>What you reward is what you get.</b> The score counted loops fully and corners at half weight. Loops went 1.58 → 2.33 while clean corner entries fell 67 % → 57 %, the opposite of what the real drone needs. Since 2026-10-23 the score is <b>laps/ep + 1.0 × oblique entry</b>.</li>
+</ul></div>
+<p>Round 2 of the optimiser (from 2026-10-23) builds on C9 with ideas aimed at the corners: <b>CZ</b> (reward lining up on the axis and keeping clear of the noodle), <b>CO</b> (even more slanted starts), <b>CE</b> (C9 + stress drone); at loops: <b>CD</b> (DAgger relabel of C9's own states); and at stability: <b>CL</b> (a gentler learning rate). It restarts by itself at logon and never runs twice. The running results are in <code>HANDOVER.md</code> §7.</p>
+<p class="where">hardware/onboard/loop_forever.py, start_loop_optimiser.cmd, week10_experiments.py (E9, C9, CZ, CE, CD, CL, CO); sim.py STRESS_*; privileged/dagger_from_policy.py; results/hoop/mg_loop.log, mg_loop_rescore.json.</p>
+
+<footer>Built from the CMS code and run folders on 2026-10-12; sections 12–17 added 2026-10-13, 18–22 on 2026-10-14, 23 on 2026-10-23. Values marked SB3 default are Stable-Baselines3's own settings for <code>PPO("MlpPolicy")</code>; they are not written anywhere in this project, so changing them means adding the argument where the model is created (train_onboard.py:465).</footer>
 </main>
 </div>
 

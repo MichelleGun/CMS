@@ -60,3 +60,6 @@ hardware/calibration/markers/
 # hardware/onboard/detector_presets/ ARE tracked, so the team shares them
 hardware/calibration/sessions/
 .pytest_cache/
+
+# the loop optimiser's single-copy lock (loop_forever.py)
+results/hoop/mg_loop.lock

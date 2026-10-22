@@ -1,0 +1,35 @@
+{
+  "name": "Evening 6pm",
+  "condition": "other",
+  "notes": "",
+  "created_at": "2026-10-20T07:44:45",
+  "params": {
+    "hsv_lo": [
+      101,
+      40,
+      0
+    ],
+    "hsv_hi": [
+      149,
+      235,
+      255
+    ],
+    "min_area_px": 400.0,
+    "min_side_px": 20,
+    "opening_ratio": [
+      0.8,
+      0.97
+    ],
+    "fill_ratio": [
+      2,
+      2
+    ],
+    "residual_max": 1,
+    "min_axis_ratio": 0.15,
+    "allow_edge": true,
+    "close_kernel": 5,
+    "border_tol": 2,
+    "min_arc_deg": 216,
+    "min_major_px": 200
+  }
+}

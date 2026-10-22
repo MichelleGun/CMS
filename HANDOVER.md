@@ -1,8 +1,8 @@
 # Hand-over: training the hoop-looping Tello policy together
 
-Written 2026-10-15 for everyone helping to train. Read this first, then the illustrated version in
-[docs/Onboard Hoop Policy Anatomy.html](docs/Onboard%20Hoop%20Policy%20Anatomy.html) (§18–22 cover
-the last two days).
+Written 2026-10-15 for everyone helping to train, updated 2026-10-23. Read this first, then the
+illustrated version in [docs/Onboard Hoop Policy Anatomy.html](docs/Onboard%20Hoop%20Policy%20Anatomy.html)
+(§18–23). **Section 7 is the running log of what changed, why, and what it did.**
 
 ## 1. Where we are
 
@@ -16,7 +16,9 @@ laps, starts from all 9 zones of the cage).
 
 | Policy | Laps / 90 s | Episodes with 2+ passes | Oblique entry* | Notes |
 |---|---|---|---|---|
-| `w10_n9_O_oblique` (best) | **1.58** | **53 %** | 67 % | **current best**; trained with slanted starts |
+| `w10_mg6_C9_loop_practice` (final) | **2.33** | **64 %** | 57 % | **current best** (optimiser, 2026-10-19): O + stress drone, then more slanted and near-hoop starts |
+| `w10_mg2_E9_stress` (best) | 2.00 | 64 % | 53 % | O + a slower, driftier drone in 30 % of episodes |
+| `w10_n9_O_oblique` (best) | 1.58 | 53 % | 67 % | trained with slanted starts |
 | `w10_n9_OZ_oblique_clearance` (best) | 0.94 | 19 % | 57 % | slanted starts + line-up reward |
 | `n8_dapg_nodrain_cont2` (best) | 1.03 | 22 % | 70 % | **the one flown on the real drone** |
 | best policy *without* memory | 0.78 | 0 % | – | never loops |
@@ -24,9 +26,10 @@ laps, starts from all 9 zones of the cage).
 \* Oblique entry = share of 30 slanted starts near the hoop (35–80° off its axis, like the cage
 corners) that end in a clean pass.
 
-**The open problem: corners.** O loops much more often than the flown policy, but its oblique
-entry (67 %) is no better than the flown policy's 70 %. Slanted starts taught more loops, not cleaner
-slanted entries. That is why experiments (b) and (e) below matter most.
+**The open problem: corners.** The policies loop more and more (1.03 → 1.58 → 2.33 laps/ep), but
+clean entry from slanted starts went the other way (70 % → 67 % → 57 %). That slanted entry is the
+corner clipping seen on the real drone. So since 2026-10-23 the optimiser scores corners as heavily
+as loops (section 7).
 
 **What the real drone did** (n8_cont2, 2026-10-14). From the bottom-right corner it got in 2 times
 out of 3 but rarely looped. From the other three corners it found the hoop but **clipped the edge
@@ -104,12 +107,13 @@ on **laps/ep** and **2+ passes %** without dropping **oblique entry**, ideally o
 | d | **Second DAgger pass with memory** | the teacher relabelling O's own states (DAgger) then DAPG again lifts the loop rate, as `dagger_n1` → n8 did | `hardware/privileged/dagger_hist.py` from O, then DAPG as in `_N8` | Michelle's PC (`loop_forever.py`, tag `mg`: key **D9**) |
 | e | **Sim-to-real: corners** | real drift and command delay make slanted entries fail; more delay/drift randomisation in training makes the policy line up earlier | raise the delay/drift ranges in `sim.py` profiles (`sample_profile`), then `--keys O` | Michelle's PC (key **E9**: `--stress-p 0.3`, +0.06 s delay, drift x2) |
 
-**Running continuously on Michelle's PC (2026-10-17):** `hardware/onboard/loop_forever.py` races the best
-variant so far against the next idea (D9, E9, C9, DE9, OF, OS, ON), round after round. Every round first
-relabels the current best policy's own states with the teacher (`hardware/privileged/dagger_from_policy.py`,
-demo files `dagger_mg_r*.npz`). It scores by laps/ep + 0.5 x oblique entry and carries the winner forward.
-Runs are `results/hoop/runs/w10_mg<round>_*`; the log is `results/hoop/mg_loop.log`. To avoid duplicate
-work, pick other keys or tags.
+**Running continuously on Michelle's PC** (since 2026-10-17; round 2 since 2026-10-23):
+`hardware/onboard/loop_forever.py` races the best policy so far against the next idea, round after
+round, and carries the winner forward. Pool now: CZ, CE, CD, CL, CO (all built on C9; section 7).
+Runs are `results/hoop/runs/w10_mg<round>_*`; the log is `results/hoop/mg_loop.log`. It starts by
+itself at logon (`CMS loop optimiser.cmd` in the Startup folder, `Win+R` → `shell:startup`); start it by
+hand with `hardware\onboard\start_loop_optimiser.cmd`, and stop it after the current round with
+`type nul > results\hoop\mg_loop.stop`. To avoid duplicate work, pick other keys or tags.
 
 To add an experiment, add a line to `EXPERIMENTS` in `week10_experiments.py` (copy `"O"` and change
 the flags), and use its key with `--keys`.
@@ -132,3 +136,30 @@ the flags), and use its key with `--keys`.
 - Memory policies (history + asymmetric critic) need `--ring-tracker --history-lags 0,1,2,4,8,16
   --asym-critic` and the `dagger_n1` demos. The `_N8` flag list in `week10_experiments.py` has it all.
 - Don't run `loop_night.py` attached to a terminal you might close: use `launch_detached.py`.
+
+## 7. What changed, why, and what it did (running log)
+
+Newest first. "laps/ep" = passes per 90 s sim episode (same-side laps, all 9 start zones); "oblique"
+= share of slanted starts near the hoop that end in a clean pass (the cage-corner approach).
+
+| Date | Change | Why | Impact (measured) |
+|---|---|---|---|
+| 2026-10-23 | **Optimiser fixes** (`loop_forever.py`): a new seed every round; every candidate re-scored on the same layouts with 72 laps episodes + 60 slanted starts; a challenger must win by **> 0.10**; score = laps/ep **+ 1.0 x oblique** (was 0.5); restarts at logon; one copy at a time (lock file) | Rounds 4 and 5 trained the *identical* run (seed 0 both times: both 2.155). One 36-episode number wobbles about +-0.15, so some "new best" calls were noise. Corners got worse while loops improved. The PC shutdown on 19 Oct killed the loop | Fewer wasted rounds; corners now count as much as loops. Results from round 9 on are in the table below this one |
+| 2026-10-23 | **New ideas on top of C9**: CZ (line-up / clearance reward), CE (+ stress drone), CD (+ DAgger relabel), CL (lr 2e-5), CO (oblique starts 0.8) | C9 loops best but enters corners worst; these target corners (CZ, CO, CE), loops (CD) or stability (CL) | pending (rounds 9+) |
+| 2026-10-19 | Optimiser round 6: **C9 continued** (seed 0) | – | **2.33 laps/ep, 64 % 2+ passes, oblique 57 %**: the current best (`w10_mg6_C9_loop_practice`) |
+| 2026-10-18 | Optimiser round 3: **C9 = more slanted starts (0.6) + starts just before the hoop (0.3)**, from E9 | More practice of the loop itself, now that the policy has memory (without memory this didn't help, round 4 of 2026-10-14) | 1.83 → **2.19 laps/ep** (E9 continued vs C9), oblique 57 % → 60 % |
+| 2026-10-18 | Optimiser round 2: **E9 = stress drone** (`--stress-p 0.3`: 30 % of episodes with +0.06 s command delay and 2x drift), from O | The real drone clipped the hoop from the corners; a slower, driftier drone in training should teach earlier lining-up | **1.61 → 2.00 laps/ep**, 2+ passes 47 % → 64 %; oblique 63 % → 53 % (worse) |
+| 2026-10-17..19 | Optimiser rounds 1, 4, 5, 6: **D9 / DE9** (DAgger relabel of the policy's own states), **OF** (zone focus), **OS** (stall cut 30 s) | DAgger made n8; zone focus and stall cut are the speed-up options | none beat the parent: DE9 2.06, OF 2.21, OS 2.06 vs C9 2.16-2.49; D9 crashed in round 1 |
+| 2026-10-17 | **Camera calibration** in the dashboard + saved day/night presets; `fly_hoop.py --detector` | Daytime flights locked onto the window / a glass door (pale blue glare) | On the recorded daytime frames the fitted preset ignores the window and glass door and still finds the hoop at night. Real check pending |
+| 2026-10-15 | **Training speed-ups** (Cedric): parallel evaluation, timed checkpoints, zone focus, stall cut, reward normalisation, rescore and sweep tools | Evaluation was ~60 % of wall-clock time | Faster runs; evaluation numbers now about +-0.15 noisy across copy counts (TRAINING_SPEEDUPS.md) |
+| 2026-10-14 | **Slanted starts** (O: `--oblique-p 0.4`) on the memory policy | Corners clipped on the real drone | 1.03 → **1.58 laps/ep**; oblique 70 % → 67 % |
+| 2026-10-14 | `fly_hoop.py`: soft ceiling, invalid range sensor no longer aborts, soft floor, start at 80 cm | Real flights were aborted by our own checks | Fewer aborted test flights |
+| 2026-10-14 | **Memory + DAgger + PPO (DAPG)** (n8, Cedric's line) | A one-frame policy can't tell "just passed" from "before a pass" | 0.78 → **1.28 laps/ep**: the first policy that loops (44 % 2+ passes) |
+| 2026-10-14 | Teacher loop labels for a policy *without* memory (L, Q) | Show it the way back | Collapsed to 0.02-0.04: the labels average out without memory |
+| 2026-10-13/14 | **No imitation of demos** (W); near-pass starts (N, M) | The demos never loop | W: 0.16 → **0.45 laps/ep**; near-pass starts: no gain |
+
+**Optimiser rounds since the 2026-10-23 fixes** (re-scored; updated as they finish):
+
+| Round | Parent | Raced | Result | Kept |
+|---|---|---|---|---|
+| 9 | mg6 C9 | C9 (seed 9) vs CZ | running | – |
