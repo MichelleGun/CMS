@@ -123,6 +123,11 @@ the flags), and use its key with `--keys`.
 (`results/hoop/hrl_compare.md`). A hierarchy flies like any policy: `fly_hoop.py --mode policy --model
 results/hoop/runs/hrl_v1/best_model.zip` (learned) or `.../hrl_v1/phase_bundle.json` (fixed switch).
 
+**Showcase website (2026-10-23).** `site/` is a static site (GitHub Pages: https://michellegun.github.io/CMS/)
+with the milestone policies flying in 3D (recorded in the simulator), the leaderboard, learning curves, the
+optimiser's rounds and the HRL comparison. Refresh it after new results:
+`python scripts/build_site.py --record`, then commit `site/` and push (the Pages workflow publishes it).
+
 ## 5. Sharing results
 
 - Work on your own branch: `git checkout -b train/<yourname>`.

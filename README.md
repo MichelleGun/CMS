@@ -1,5 +1,8 @@
 # Drone RL, Assignment 3 (CMS)
 
+> **Showcase site:** https://michellegun.github.io/CMS/ (policies flying in 3D, learning curves, results;
+> built from `site/` by `scripts/build_site.py`, published by `.github/workflows/pages.yml`).
+>
 > **Helping to train?** Start with [HANDOVER.md](HANDOVER.md) (where we are, how to run an
 > experiment, what to try next). The illustrated explanation of the policy and the training is
 > [docs/Onboard Hoop Policy Anatomy.html](docs/Onboard%20Hoop%20Policy%20Anatomy.html).

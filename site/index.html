@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hoop Looper</title>
+<meta name="description" content="A Tello drone learns, by reinforcement learning, to fly through a 30 cm hoop with its own camera and loop back through it again and again.">
+<link rel="stylesheet" href="css/site.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%23ff7130' stroke-width='5'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top"><nav class="nav" aria-label="Main">
+  <a class="brand" href="index.html">Hoop<span>Looper</span></a>
+  <a class="link" href="index.html">Overview</a>
+  <a class="link" href="policies.html">Policies</a>
+  <a class="link" href="training.html">Training</a>
+  <a class="link" href="anatomy.html">How it works</a>
+  <a class="link" href="run.html">Run it yourself</a>
+  <button id="theme-btn" type="button">Dark</button>
+</nav></header>
+<main>
+  <div class="eyebrow">Reinforcement learning · DJI Tello · UTS 42028</div>
+  <h1>A drone that flies through a hoop, loops round, and goes through again</h1>
+  <p class="lede">A Tello sees a 30 cm foam hoop only through its own front camera. With 8 cm of room on each
+    side, it has to find the hoop, line up, go through, fly round the outside, find it again and re-enter, as many
+    times as it can in 90 seconds. Every policy here was trained in our simulator with reinforcement learning, and
+    the best ones were flown on the real drone.</p>
+
+  <div class="stats" id="stats"></div>
+
+  <h2>The best policy, flying</h2>
+  <p class="note">A recording from the simulator (the same physics, camera model and randomisation the policy was
+    trained on). Drag to rotate, scroll to zoom. The hoop turns green on a pass, and it swings, as the real one does.</p>
+  <div id="hero"></div>
+
+  <div style="margin:18px 0">
+    <a class="cta" href="policies.html">Compare all policies</a>
+    <a class="cta ghost" href="anatomy.html">How the policy works</a>
+    <a class="cta ghost" id="repo-link" href="https://github.com/MichelleGun/CMS">Code on GitHub</a>
+  </div>
+
+  <h2>How we got here</h2>
+  <p class="note">Every change, why it was made, and what it did (from the project's running log).</p>
+  <div class="timeline" id="timeline"></div>
+</main>
+<footer><div class="in" id="foot">Static showcase. Training and flying run locally: see <a href="run.html">Run it yourself</a>.</div></footer>
+<script src="vendor/three.min.js"></script>
+<script src="vendor/OrbitControls.js"></script>
+<script src="js/common.js"></script>
+<script src="js/replay.js"></script>
+<script>
+(async () => {
+  const [meta, board, ms, tl] = await Promise.all([Site.data("meta.json"), Site.data("leaderboard.json"),
+    Site.data("milestones.json"), Site.data("timeline.json")]);
+  const best = board[0];
+  const firstLoop = board.filter((r) => r.memory).length;
+  const stat = (v, k) => `<div class="stat"><div class="v">${v}</div><div class="k">${k}</div></div>`;
+  document.getElementById("stats").innerHTML =
+    stat(Site.num(best.lpe), "passes per 90 s episode, best policy (sim)") +
+    stat(Site.pct(best.two_plus), "of episodes with 2+ passes (it loops)") +
+    stat(best.best, "most passes in one episode") +
+    stat(board.length, "trained policies scored");
+  const hero = ms.find((m) => m.id === "C9") || ms[ms.length - 1];
+  new Replay(document.getElementById("hero"), { id: hero.id, title: hero.label, tall: true });
+  document.getElementById("timeline").innerHTML = tl.map((t) =>
+    `<div class="item"><div class="date">${Site.esc(t.date)}</div><div>${Site.md(t.change)}</div>
+     <div class="imp"><b>Why:</b> ${Site.md(t.why)}<br><b>Impact:</b> ${Site.md(t.impact)}</div></div>`).join("");
+  document.getElementById("foot").innerHTML += ` Data built ${Site.esc(meta.built.replace("T", " "))}.`;
+})();
+</script>
+</body>
+</html>
