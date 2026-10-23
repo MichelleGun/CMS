@@ -1,0 +1,84 @@
+{
+  "episodes": 100,
+  "seed": 960000000,
+  "ranking": [
+    {
+      "run": "w10_n9_O_oblique",
+      "label": "latest",
+      "path": "C:\\Users\\Steven\\Documents\\drones-project\\CMS\\results\\hoop\\runs\\w10_n9_O_oblique\\latest_model.zip",
+      "lpe": 1.28,
+      "ci95": [
+        1.11,
+        1.45
+      ],
+      "two_plus": 0.35,
+      "one_plus": 0.83,
+      "oblique_entry": 0.467,
+      "best_streak": 3,
+      "episodes": 100,
+      "zones": {
+        "1": 1.45,
+        "2": 1.55,
+        "3": 1.64,
+        "4": 1.64,
+        "5": 0.91,
+        "6": 1.27,
+        "7": 1.45,
+        "8": 1.58,
+        "9": 0.0
+      }
+    },
+    {
+      "run": "w10_n9_O_oblique",
+      "label": "final",
+      "path": "C:\\Users\\Steven\\Documents\\drones-project\\CMS\\results\\hoop\\runs\\w10_n9_O_oblique\\final_model.zip",
+      "lpe": 1.26,
+      "ci95": [
+        1.076,
+        1.444
+      ],
+      "two_plus": 0.34,
+      "one_plus": 0.79,
+      "oblique_entry": 0.533,
+      "best_streak": 3,
+      "episodes": 100,
+      "zones": {
+        "1": 1.55,
+        "2": 1.55,
+        "3": 1.18,
+        "4": 1.55,
+        "5": 0.55,
+        "6": 1.55,
+        "7": 1.82,
+        "8": 1.58,
+        "9": 0.0
+      }
+    },
+    {
+      "run": "w10_n9_O_oblique",
+      "label": "best",
+      "path": "C:\\Users\\Steven\\Documents\\drones-project\\CMS\\results\\hoop\\runs\\w10_n9_O_oblique\\best_model.zip",
+      "lpe": 1.24,
+      "ci95": [
+        1.055,
+        1.425
+      ],
+      "two_plus": 0.28,
+      "one_plus": 0.81,
+      "oblique_entry": 0.567,
+      "best_streak": 4,
+      "episodes": 100,
+      "zones": {
+        "1": 1.18,
+        "2": 1.73,
+        "3": 1.27,
+        "4": 1.45,
+        "5": 0.73,
+        "6": 1.18,
+        "7": 2.0,
+        "8": 1.58,
+        "9": 0.0
+      }
+    }
+  ]
+}
