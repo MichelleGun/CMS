@@ -1,3 +1,3 @@
-LOOP_20261024_w10-mg13-CL-loop-lowlr_final_3.03lpe.zip
+LOOP_20261024_w10-mg14-CL-loop-lowlr_final_3.31lpe.zip
 
-python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/LOOP_20261024_w10-mg13-CL-loop-lowlr_final_3.03lpe.zip
+python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/LOOP_20261024_w10-mg14-CL-loop-lowlr_final_3.31lpe.zip
