@@ -1,13 +1,14 @@
 {
-  "round": 12,
-  "parent": "results/hoop/runs/w10_mg12_CL_loop_lowlr",
+  "round": 13,
+  "parent": "results/hoop/runs/w10_mg13_CL_loop_lowlr",
   "parent_key": "CL",
-  "parent_score": 3.1833333333333336,
+  "parent_score": 3.4336666666666664,
   "tried": [
     "CZ",
     "CE",
     "CD",
-    "CL"
+    "CL",
+    "CO"
   ],
   "history": [
     {
@@ -347,7 +348,36 @@
       ],
       "parent_after": "results/hoop/runs/w10_mg12_CL_loop_lowlr",
       "at": "2026-10-23T23:08"
+    },
+    {
+      "round": 13,
+      "keys": [
+        "CL",
+        "CO"
+      ],
+      "results": [
+        {
+          "key": "CL",
+          "run": "w10_mg13_CL_loop_lowlr",
+          "score": 3.4336666666666664,
+          "model": "results/hoop/runs/w10_mg13_CL_loop_lowlr/final_model.zip",
+          "lpe": 2.9166666666666665,
+          "two_plus": 0.6388888888888888,
+          "oblique": 0.517
+        },
+        {
+          "key": "CO",
+          "run": "w10_mg13_CO_loop_oblique08",
+          "score": 2.758,
+          "model": "results/hoop/runs/w10_mg13_CO_loop_oblique08/best_model.zip",
+          "lpe": 2.125,
+          "two_plus": 0.6111111111111112,
+          "oblique": 0.633
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg13_CL_loop_lowlr",
+      "at": "2026-10-24T03:04"
     }
   ],
-  "parent_model": "results/hoop/runs/w10_mg12_CL_loop_lowlr/final_model.zip"
+  "parent_model": "results/hoop/runs/w10_mg13_CL_loop_lowlr/final_model.zip"
 }

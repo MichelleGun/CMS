@@ -181,7 +181,8 @@ Newest first. "laps/ep" = passes per 90 s sim episode (same-side laps, all 9 sta
 | 10 | mg6 C9 | C9 (seed 10) vs CE (+ stress drone) | C9 best 2.55; CE: 1.86 / 63 % -> 2.49 | parent |
 | 11 | mg6 C9 | C9 (seed 11) vs CD (DAgger relabel of C9's states) | C9 final 2.55; CD best: 1.86 / 63 % -> 2.49 | parent |
 | 12 | mg6 C9 | C9 (seed 12) vs **CL** (lr 2e-5) | C9 best 2.60; **CL final: 2.58 laps/ep, 61 % 2+ passes, 60 % oblique -> 3.18** | **CL** (first win since C9) |
-| 13 | mg12 CL | CL (seed 13) vs CO (oblique 0.8, lr 1e-4) | running; the loop then restarts with the low-lr pool (LZ, LE, LO, LD, LX) | – |
+| 13 | mg12 CL (3.18) | CL (seed 13) vs CO (oblique 0.8, lr 1e-4) | **CL final: 2.92 laps/ep, 64 % 2+ passes, 52 % oblique -> 3.43**; CO best 2.76 | **CL** again (but corner entry fell 60 -> 52 %) |
+| 14 | mg13 CL (3.43) | CL (seed 14) vs LZ (clearance reward, lr 2e-5) | running (first round with the low-lr pool) | – |
 
 **Why CL matters (2026-10-23).** A continued run trains at lr 1e-4 by default (`train_onboard.py`). Every
 round-2 idea at that rate came out *worse* than its parent: fine-tuning a good policy that hard knocks it
@@ -189,7 +190,7 @@ off its optimum before the new idea can help. At 2e-5 the same C9 recipe improve
 So from round 14 the optimiser retries the ideas at the gentle rate (`L*` keys in `week10_experiments.py`),
 corner ideas first (LZ clearance reward, LE stress drone). The pool can now be changed without a restart:
 write `["LZ", ...]` to `results/hoop/mg_loop_pool.json`. Fly this one first:
-`hardware/policies/LOOP_20261023_w10-mg12-CL-loop-lowlr_final_2.42lpe.zip` (FLY_THIS_FIRST.txt).
+`hardware/policies/LOOP_20261024_w10-mg13-CL-loop-lowlr_final_3.03lpe.zip` (FLY_THIS_FIRST.txt; round 13).
 
 **Hierarchical RL result (2026-10-23).** No gain over the flat policy: flat C9 2.75, learned manager (best)
 2.74, fixed switch 2.51 (`results/hoop/hrl_compare.md`). The manager learned to pick C9 about 90 % of the
