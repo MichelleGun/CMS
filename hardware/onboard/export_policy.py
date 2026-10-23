@@ -64,7 +64,7 @@ def env_kwargs(meta: dict, tracker: bool) -> dict:
                 wash_deg=float(rb.get("wash_deg", 15.0)), ring_tracker=tracker)
 
 
-def score(model_path: Path, episodes=36, seed=SEED, meta_override=None):
+def score(model_path: Path, episodes=36, seed=SEED, meta_override=None, oblique_episodes=30):
     """Fly a saved model through the flight loader on the laps task. -> dict of scores."""
     from onboard import spec
     from onboard.gym_env import OnboardHoopEnv
@@ -98,7 +98,7 @@ def score(model_path: Path, episodes=36, seed=SEED, meta_override=None):
     finally:
         env.close()
     p = np.array(passes)
-    oblique = oblique_entry(fn, tracker, meta, seed=seed + 1)
+    oblique = oblique_entry(fn, tracker, meta, episodes=oblique_episodes, seed=seed + 1)
     return dict(zones={k: round(float(np.mean(v)), 2) for k, v in sorted(zones.items())},
                 oblique_entry=oblique, lpe=float(p.mean()), best_streak=int(p.max()), two_plus=float((p >= 2).mean()),
                 one_plus=float((p >= 1).mean()), episodes=episodes, obs_width=int(fn.obs_width),

@@ -69,6 +69,7 @@ _N8 = ["--ring-tracker", "--history-lags", "0,1,2,4,8,16", "--asym-critic",
        "--lr", "5e-5", "--target-kl", "0.01", "--batch-size", "512", "--n-epochs", "5",
        "--critic-warmup-steps", "0", "--sway-deg", "2"]
 _MG_DEMOS = ["--demos", "hardware/flights/demos/dagger_n1_r*.npz", "hardware/flights/demos/dagger_mg_r*.npz"]
+_C9_STARTS = ["--oblique-p", "0.6", "--near-pass-p", "0.3"]     # C9's starts (loop practice)
 _N8_RW = '{"r_wrong_way": -20, "drain": false, "r_struck": -10, "w_dwell": 0.05}'
 # + line up on the axis before going in, and keep clear of the noodle
 _N8_CLEAR_RW = ('{"r_wrong_way": -20, "drain": false, "r_struck": -15, "w_dwell": 0.05, '
@@ -139,6 +140,21 @@ EXPERIMENTS = {
     "C9": ("loop_practice", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.6", "--near-pass-p", "0.3"]),
     "DE9": ("dagger_stress", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.4", "--stress-p", "0.3"]
             + _MG_DEMOS),
+    # 2026-10-23 optimiser round 2, all built on C9 (mg6, 2.33 laps/ep, but oblique entry fell to 57 %):
+    # CZ: clearance / line-up reward; CE: + stress drone (E9 was the first big jump); CD: + DAgger
+    # relabel of C9's own states; CL: gentler fine-tune (lr 2e-5); CO: more slanted starts (0.8).
+    "CZ": ("loop_clearance", _N8 + ["--reward-weights", _N8_CLEAR_RW] + _C9_STARTS),
+    "CE": ("loop_stress", _N8 + ["--reward-weights", _N8_RW, "--stress-p", "0.3"] + _C9_STARTS),
+    "CD": ("loop_dagger", _N8 + ["--reward-weights", _N8_RW] + _C9_STARTS + _MG_DEMOS),
+    "CL": ("loop_lowlr", _N8 + ["--reward-weights", _N8_RW, "--lr", "2e-5"] + _C9_STARTS),
+    "CO": ("loop_oblique08", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.8", "--near-pass-p", "0.3"]),
+    # 2026-10-23 hierarchical RL (hrl.py): two SKILLS for the options framework, both from C9.
+    # SE "enter": the episode ends at the first pass (--laps 1), slanted starts, line-up / clearance
+    #   reward: it only has to get in cleanly from any angle (the corner problem).
+    # SL "loop": every episode starts just before the hoop (--near-pass-p 1), so most of it is going
+    #   round and re-entering.
+    "SE": ("skill_enter", _N8 + ["--reward-weights", _N8_CLEAR_RW, "--laps", "1", "--oblique-p", "0.6"]),
+    "SL": ("skill_loop", _N8 + ["--reward-weights", _N8_RW, "--near-pass-p", "1.0"]),
     "Y": ("trk_loopdemo", _C_TRK + ["--gamma", "0.995", "--gae-lambda", "0.97", "--streak", "1.0",
                                     "--streak-cap", "4", "--bc-coef", "0.1", "--bc-coef-min", "0.05"]),
 }
