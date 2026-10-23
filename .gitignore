@@ -64,3 +64,6 @@ hardware/calibration/sessions/
 # the loop optimiser's single-copy lock (loop_forever.py)
 results/hoop/mg_loop.lock
 _site/
+
+# the online copy's snapshot of a few runs (scripts/build_site.py)
+!webapp/frontend/data/api/runs/
