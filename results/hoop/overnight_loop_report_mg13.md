@@ -1,0 +1,11 @@
+# Overnight loop training (2026-10-24 00:47)
+
+Goal: enter the hoop, loop round, re-enter, as many times as possible. Score = **laps per episode** (passes in a 90 s episode, same-side laps from all 9 start zones, measured profile, full randomisation). Written by `hardware/onboard/loop_night.py`.
+
+## Race (3 envs each, from C's best model, ring tracker on)
+
+| Run | Extra settings | Steps | Last-10 laps/ep | Best eval | State |
+|---|---|---|---|---|---|
+| w10_laps_T_kl_tracker (control, 8 envs, earlier) | (control) | 32,630,000 | 0.156 | 0.500 | yardstick |
+| w10_mg13_CL_loop_lowlr | 0.3 --bc-coef-min 0.3 --lr 5e-5 --target-kl 0.01 --batch-size 512 --n-epochs 5 --critic-warmup-steps 0 --sway-deg 2 --reward-weights {"r_wrong_way": -20, "drain": false, "r_struck": -10, "w_dwell": 0.05} --lr 2e-5 --oblique-p 0.6 --near-pass-p 0.3 | 16,689,196 | 2.364 | 2.861 | running |
+| w10_mg13_CO_loop_oblique08 | 0.3 --bc-coef-min 0.3 --lr 5e-5 --target-kl 0.01 --batch-size 512 --n-epochs 5 --critic-warmup-steps 0 --sway-deg 2 --reward-weights {"r_wrong_way": -20, "drain": false, "r_struck": -10, "w_dwell": 0.05} --oblique-p 0.8 --near-pass-p 0.3 | 16,729,196 | 1.933 | 2.528 | running |

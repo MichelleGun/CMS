@@ -1,0 +1,67 @@
+{
+  "task": "onboard_hoop",
+  "algo": "ppo",
+  "yaw_convention": "cw",
+  "ring_tracker": true,
+  "profile": "measured",
+  "robust": {
+    "dr": 1.0,
+    "sway_deg": 2.0,
+    "wash_deg": 15.0
+  },
+  "hrl": {
+    "kind": "learned",
+    "skills": [
+      "results/hoop/runs/w10_hrl_SE_skill_enter",
+      "results/hoop/runs/w10_hrl_SL_skill_loop",
+      "results/hoop/runs/w10_mg6_C9_loop_practice"
+    ],
+    "option_ticks": 8,
+    "obs_history": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "frame_dim": 41
+  },
+  "run_id": "hrl_v1",
+  "env": "onboard",
+  "created_at": "2026-10-23T15:28:54",
+  "final_status": "completed",
+  "n_envs": 4,
+  "seed": 0,
+  "timesteps_requested": 300000,
+  "phase_baseline": {
+    "mean": 1.7222222222222223,
+    "max": 5,
+    "two_plus": 0.5,
+    "zones": {
+      "1": 1.75,
+      "2": 0.5,
+      "3": 2.0,
+      "4": 2.0,
+      "5": 1.5,
+      "6": 2.25,
+      "7": 3.25,
+      "8": 2.25,
+      "9": 0.0
+    },
+    "usage_before_after_first_pass": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ]
+    ]
+  },
+  "finished_at": "2026-10-23T21:00:36",
+  "best_mean_passes": 2.1944444444444446
+}
