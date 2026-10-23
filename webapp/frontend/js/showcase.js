@@ -37,7 +37,7 @@ const Showcase = (() => {
       stat(Show.pct(best.two_plus), "of episodes with 2+ passes (it loops)") +
       stat(best.best, "most passes in one episode") +
       stat(board.length, "trained policies scored");
-    const hero = ms.find((m) => m.id === "C9") || ms[ms.length - 1];
+    const hero = ms.find((m) => / \(best\)$/.test(m.label)) || ms[ms.length - 1];   // build_site.py marks it
     new Replay($("ov-hero"), { id: hero.id, title: hero.label, tall: true });
     $("ov-timeline").innerHTML = tl.map((t) =>
       `<div class="item"><div class="date">${Show.esc(t.date)}</div><div>${Show.md(t.change)}</div>

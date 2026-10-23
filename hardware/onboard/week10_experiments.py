@@ -148,6 +148,16 @@ EXPERIMENTS = {
     "CD": ("loop_dagger", _N8 + ["--reward-weights", _N8_RW] + _C9_STARTS + _MG_DEMOS),
     "CL": ("loop_lowlr", _N8 + ["--reward-weights", _N8_RW, "--lr", "2e-5"] + _C9_STARTS),
     "CO": ("loop_oblique08", _N8 + ["--reward-weights", _N8_RW, "--oblique-p", "0.8", "--near-pass-p", "0.3"]),
+    # 2026-10-23 round 12: CL (the same as C9 but lr 2e-5 instead of the 1e-4 default for a continued
+    # run) was the first challenger to beat C9 (score 3.18 vs 2.75, 2.58 laps/ep). Every other
+    # round-2 idea had fine-tuned at 1e-4 and come out worse than its parent, so the ideas are tried
+    # again at the gentle rate: L* = C* with lr 2e-5, LX = CL at 1e-5.
+    "LZ": ("low_clearance", _N8 + ["--reward-weights", _N8_CLEAR_RW, "--lr", "2e-5"] + _C9_STARTS),
+    "LE": ("low_stress", _N8 + ["--reward-weights", _N8_RW, "--lr", "2e-5", "--stress-p", "0.3"] + _C9_STARTS),
+    "LO": ("low_oblique08", _N8 + ["--reward-weights", _N8_RW, "--lr", "2e-5", "--oblique-p", "0.8",
+                                   "--near-pass-p", "0.3"]),
+    "LD": ("low_dagger", _N8 + ["--reward-weights", _N8_RW, "--lr", "2e-5"] + _C9_STARTS + _MG_DEMOS),
+    "LX": ("lower_lr", _N8 + ["--reward-weights", _N8_RW, "--lr", "1e-5"] + _C9_STARTS),
     # 2026-10-23 hierarchical RL (hrl.py): two SKILLS for the options framework, both from C9.
     # SE "enter": the episode ends at the first pass (--laps 1), slanted starts, line-up / clearance
     #   reward: it only has to get in cleanly from any angle (the corner problem).

@@ -42,12 +42,13 @@ MILESTONES = [
     ("n8", "n8: memory", "1 s of memory + asymmetric critic + DAgger teacher: the first policy that loops", "results/hoop/runs/n8_dapg_nodrain/best_model.zip"),
     ("O", "O: slanted starts", "practice at corner approaches", "results/hoop/runs/w10_n9_O_oblique/best_model.zip"),
     ("E9", "E9: stress drone", "trained with a slower, driftier drone in 30 % of episodes", "results/hoop/runs/w10_mg2_E9_stress/best_model.zip"),
-    ("C9", "C9: loop practice (best)", "more slanted starts and starts just before the hoop", "results/hoop/runs/w10_mg6_C9_loop_practice/final_model.zip"),
+    ("C9", "C9: loop practice", "more slanted starts and starts just before the hoop", "results/hoop/runs/w10_mg6_C9_loop_practice/final_model.zip"),
+    ("CL", "CL: gentle fine-tune (best)", "C9's recipe at a 5x lower learning rate: 2.58 laps/ep", "results/hoop/runs/w10_mg12_CL_loop_lowlr/final_model.zip"),
     ("HRLp", "HRL: fixed switch", "skills: enter until the first pass, then loop", "results/hoop/runs/hrl_v1/phase_bundle.json"),
     ("HRLm", "HRL: learned manager", "a PPO manager picks a skill every 0.53 s", "results/hoop/runs/hrl_v1/best_model.zip"),
 ]
 CURVE_RUNS = [("T", "w10_laps_T_kl_tracker"), ("W", "w10_laps3_W_trk_pure"), ("n8", "n8_dapg_nodrain_cont2"),
-              ("O", "w10_n9_O_oblique"), ("E9", "w10_mg2_E9_stress"), ("C9", "w10_mg6_C9_loop_practice"),
+              ("O", "w10_n9_O_oblique"), ("E9", "w10_mg2_E9_stress"), ("C9", "w10_mg6_C9_loop_practice"), ("CL", "w10_mg12_CL_loop_lowlr"),
               ("HRLm", "hrl_v1")]
 REPLAY_EPISODES = 3
 REPLAY_SEED = 950_000_000          # export_policy's layouts: every policy flies the same starts

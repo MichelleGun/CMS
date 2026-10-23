@@ -1058,7 +1058,14 @@ footer{margin-top:60px;padding-top:14px;border-top:1px solid var(--line);color:v
 <li>a <b>fixed switch</b>: the enter skill until the first pass, then the loop skill. The switch reads "a pass happened" from the drone's own pass detector (telemetry), so it works on the real drone too.</li>
 </ul>
 <p>If the fixed switch already wins, the gain comes from the skills. If the learned manager wins on top of that, it has learned something about <i>when</i> to switch (for example, back to "enter" when a loop goes wrong).</p>
-<!--HRLRESULTS-->
+<h3>Result (2026-10-23)</h3>
+<div class="scroll"><table><thead><tr><th>Policy</th><th>Laps / 90 s</th><th>2+ passes</th><th>Corner entry</th><th>Score</th></tr></thead>
+<tbody>
+<tr><td>flat C9</td><td>2.17</td><td>62 %</td><td>58 %</td><td>2.75</td></tr>
+<tr><td>fixed switch (enter → loop)</td><td>1.96</td><td>54 %</td><td>55 %</td><td>2.51</td></tr>
+<tr><td>learned manager (best)</td><td>2.15</td><td>57 %</td><td>58 %</td><td>2.74</td></tr>
+</tbody></table></div>
+<p><b>No gain.</b> The manager learned to pick the C9 generalist about 90 % of the time: it found that the flat policy is already the best skill. The specialist skills had 2 M steps of training each against C9's ~30 M, so the hierarchy is parked. The bigger win that day came from a <b>gentler fine-tune</b> (CL, learning rate 2e-5): 2.58 laps/ep, score 3.18.</p>
 <div class="call"><p><b>Same in the sim and on the drone.</b> The hierarchy flies through the same loader as every policy (<code>policy.load_policy</code> → <code>HierarchicalPolicy</code>). It decides at the same ticks as in training: every 8 ticks, or when the pass counter changes. A test feeds the frames the simulator produced to the flight version and checks that it sends the same stick commands, tick for tick.</p></div>
 <p class="where">hardware/onboard/hrl.py (OptionEnv, HierarchicalPolicy, PhaseSwitch), train_hrl.py, hrl_pipeline.py, week10_experiments.py (SE, SL), tests/test_hrl.py; results/hoop/hrl_compare.md.</p>
 
