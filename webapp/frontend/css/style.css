@@ -743,3 +743,89 @@ select:disabled, input:disabled { opacity: 0.45; cursor: not-allowed; }
 #calib-modal button { width: auto; flex: 0 0 auto; }
 #calib-head h2 { flex: 1 1 auto; min-width: 0; }
 .calib-open-row button { width: auto; margin-top: 0; white-space: nowrap; }
+
+/* ======================================================= results tabs (js/showcase.js)
+   Overview, Policies and Training: scrolling document pages inside the dashboard,
+   shared with the online copy (GitHub Pages). */
+#app-header h1 span { color: var(--accent-orange); }
+.tab-sep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 6px; }
+.tab-link { text-decoration: none; display: inline-flex; align-items: center; }
+#static-banner { background: var(--bg-panel-raised); border-bottom: 1px solid var(--border); padding: 7px 20px;
+  font-size: 13px; color: var(--text-dim); }
+#static-banner b { color: var(--accent-orange); }
+#static-banner a { color: var(--text); }
+
+.tab-page.doc-page { display: block; height: calc(100% - 49px); overflow-y: auto; background: var(--bg); }
+.doc { max-width: 1120px; margin: 0 auto; padding: 20px 16px 64px; line-height: 1.6; font-size: 15px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.doc a { color: #c45ad6; }
+.doc h1.doc-title { font-size: clamp(26px, 4.5vw, 40px); line-height: 1.12; margin: 6px 0 12px; letter-spacing: -.02em; }
+.doc h2 { font-size: 22px; margin: 40px 0 8px; letter-spacing: -.01em; text-transform: none; color: var(--text); }
+.doc h3 { font-size: 16px; margin: 22px 0 6px; }
+.doc p { max-width: 74ch; }
+.doc .lede { font-size: 17px; color: var(--text-dim); max-width: 66ch; }
+.doc .note { font-size: 13.5px; color: var(--text-dim); background: none; padding: 0; border-radius: 0; margin: 0 0 8px; }
+.doc .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent-orange); }
+.doc code { font-family: ui-monospace, Consolas, monospace; font-size: .88em; background: var(--bg-panel-raised);
+  padding: 1px 5px; border-radius: 4px; }
+.doc pre { background: var(--bg-panel-raised); padding: 12px 14px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+.doc pre code { background: none; padding: 0; }
+.doc .card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 20px 0; }
+.stat { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.stat .v { font-size: 30px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.stat .k { font-size: 13px; color: var(--text-dim); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.grid2 .note { margin: 6px 2px 0; }
+
+.doc .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel); margin: 12px 0; }
+.doc table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+.doc th, .doc td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.doc th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); background: var(--bg-panel-raised); }
+.doc tr:last-child td { border-bottom: 0; }
+.doc td.n { font-family: ui-monospace, Consolas, monospace; white-space: nowrap; }
+.doc tr.hi td { background: rgba(255, 113, 48, 0.12); }
+.chip { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bg-panel-raised);
+  color: var(--text-dim); border: 1px solid var(--border); }
+.chip.yes { color: #4fd18f; }
+.bar { display: inline-block; vertical-align: middle; width: 70px; height: 6px; background: #2c2c40; border-radius: 3px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: #c45ad6; }
+
+/* recorded replay viewer (js/replay.js) */
+.viewer { position: relative; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.viewer canvas { display: block; width: 100%; height: 340px; cursor: grab; }
+.viewer.tall canvas { height: 440px; }
+.viewer .hud { position: absolute; left: 10px; top: 8px; font: 13px ui-monospace, Consolas, monospace; color: var(--text);
+  background: rgba(31, 31, 46, 0.8); padding: 3px 8px; border-radius: 6px; pointer-events: none; }
+.viewer .ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--border); font-size: 14px; }
+.viewer .ctl button, .viewer .ctl select { font: inherit; font-size: 13px; background: var(--bg-panel-raised); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; max-width: 100%; }
+.viewer .ctl input[type=range] { flex: 1 1 120px; accent-color: var(--accent-orange); }
+.viewer .title { font-weight: 700; }
+
+.chart-box { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; height: 340px; }
+.timeline { border-left: 3px solid var(--border); margin: 12px 0 0 6px; padding-left: 18px; }
+.timeline .item { position: relative; margin: 0 0 18px; }
+.timeline .item::before { content: ""; position: absolute; left: -26px; top: 6px; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--accent-orange); border: 2px solid var(--bg); }
+.timeline .date { font: 12px ui-monospace, Consolas, monospace; color: var(--text-dim); }
+.timeline .imp { font-size: 14px; color: var(--text-dim); }
+.cta-row { margin: 18px 0; }
+.doc .cta { display: inline-block; background: var(--accent-orange); color: #171721; text-decoration: none; font-weight: 700;
+  padding: 9px 16px; border-radius: 8px; margin: 6px 8px 6px 0; }
+.doc .cta.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+
+/* narrow screens (phones looking at the online copy): the header scrolls sideways,
+   the dashboard's columns stack */
+@media (max-width: 900px) {
+  #app-header { flex-wrap: wrap; gap: 8px; padding: 10px 16px; }
+  #tabs { margin-left: 0; overflow-x: auto; max-width: 100%; flex-wrap: nowrap; }
+  .tab-btn { white-space: nowrap; }
+  .tab-page.doc-page { height: auto; overflow: visible; }
+  #app-main, .tab-page.three-col, .tab-page.two-col { display: block; height: auto; }
+  #app-main > *, .tab-page .col { min-height: 0; }
+  #viewport-wrap { height: 60vh; }
+  html, body { height: auto; }
+}
+@media (max-width: 600px) { .viewer canvas, .viewer.tall canvas { height: 280px; } .doc h2 { margin-top: 30px; } }

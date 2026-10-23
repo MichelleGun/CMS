@@ -33,40 +33,7 @@ function createScene3D() {
   let droneRotTarget = new THREE.Euler(0, 0, 0);
 
   function buildDrone() {
-    const g = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: PALETTE.droneBody });
-    const armMat = new THREE.MeshStandardMaterial({ color: PALETTE.droneArm });
-    const rotorMat = new THREE.MeshStandardMaterial({ color: PALETTE.droneRotor });
-
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.03, 0.06), bodyMat);
-    g.add(body);
-    g.userData.bodyMat = bodyMat;
-
-    const armLen = 0.09;
-    const armPositions = [
-      [1, 1], [1, -1], [-1, 1], [-1, -1],
-    ];
-    armPositions.forEach(([sx, sz]) => {
-      const arm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.004, 0.004, armLen, 6),
-        armMat,
-      );
-      arm.rotation.z = Math.PI / 2;
-      arm.position.set(sx * armLen / 2 * 0.8, 0, sz * armLen / 2 * 0.8);
-      arm.rotation.y = Math.atan2(sz, sx);
-      arm.rotation.z = Math.PI / 2;
-      g.add(arm);
-
-      const rotor = new THREE.Mesh(
-        new THREE.CircleGeometry(0.035, 12),
-        rotorMat,
-      );
-      rotor.rotation.x = -Math.PI / 2;
-      rotor.position.set(sx * armLen * 0.8, 0.01, sz * armLen * 0.8);
-      g.add(rotor);
-    });
-
-    return g;
+    return DroneModel.build({ accent: PALETTE.droneBody });     // js/dronemodel.js
   }
 
   function buildHoop() {
@@ -222,9 +189,10 @@ function createScene3D() {
 
   function setDroneTarget(pos, rpy, snap = false) {
     dronePosTarget = simToThree(pos);
-    // sim roll/pitch/yaw (about x, y, z) -> three (x, -z, y) axis remap for
-    // a body rotated with the same convention as simToThree's position swap.
-    droneRotTarget = new THREE.Euler(rpy[0], rpy[2], -rpy[1], "XYZ");
+    // simToThree swaps y and z (a mirror), which flips every rotation's sense: sim
+    // R = Rz(yaw) Ry(pitch) Rx(roll) becomes three Ry(-yaw) Rz(-pitch) Rx(-roll), Euler order YZX.
+    // (The old symmetric drone hid this; the camera nose now shows the heading.)
+    droneRotTarget = new THREE.Euler(-rpy[0], -rpy[2], -rpy[1], "YZX");
     if (snap) {
       dronePosCurrent.copy(dronePosTarget);
       droneRotCurrent.copy(droneRotTarget);
@@ -321,10 +289,12 @@ function createScene3D() {
     lastRender = now;
     dronePosCurrent.lerp(dronePosTarget, 0.25);
     droneRotCurrent.x += (droneRotTarget.x - droneRotCurrent.x) * 0.25;
-    droneRotCurrent.y += (droneRotTarget.y - droneRotCurrent.y) * 0.25;
+    const dYaw = Math.atan2(Math.sin(droneRotTarget.y - droneRotCurrent.y), Math.cos(droneRotTarget.y - droneRotCurrent.y));
+    droneRotCurrent.y += dYaw * 0.25;      // the short way round, not a full spin at +-180 deg
     droneRotCurrent.z += (droneRotTarget.z - droneRotCurrent.z) * 0.25;
     droneGroup.position.copy(dronePosCurrent);
     droneGroup.rotation.copy(droneRotCurrent);
+    DroneModel.spin(droneGroup, 0.033);
 
     controls.update();
     renderer.render(scene, camera);

@@ -232,7 +232,7 @@ const EnvView = (() => {
     if (!on || scanLoading) return;
     scanLoading = true;
     status.textContent = "loading scan (34 MB)...";
-    new THREE.GLTFLoader().load("/assets/3D_net%26hoop.glb", (gltf) => {
+    new THREE.GLTFLoader().load("assets/3D_net%26hoop.glb", (gltf) => {
       scanObj = gltf.scene;
       scanObj.traverse((o) => {
         if (o.isMesh) {

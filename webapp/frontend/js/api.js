@@ -3,13 +3,43 @@
 const API_BASE = "";
 const WS_BASE = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
 
+// The online copy (GitHub Pages) has no server: GETs read a snapshot written by
+// scripts/build_site.py (/api/runs/x -> data/api/runs/x.json), anything that would start,
+// change or fly something says where to get the code, and sockets stay quiet.
+const STATIC_MSG = "This runs on your own computer, next to the drone. Get the code: " + window.DQ_REPO;
+const STATIC_EMPTY = {
+  "/api/drone/flights": { flights: [] }, "/api/jobs": { jobs: [] }, "/api/imitation/demos": { demos: [] },
+  "/api/imitation/models": { models: [] }, "/api/calib/presets": { presets: [] }, "/api/calib/images": { images: [] },
+};
+
+const staticCache = {};      // a snapshot never changes, so the tabs' polling is answered from memory
+
+function staticGet(path) {
+  const bare = path.split("?")[0];
+  if (STATIC_EMPTY[bare]) return Promise.resolve(STATIC_EMPTY[bare]);
+  const file = "data" + bare.split("/").map((s) => s && decodeURIComponent(s).replace(/[^\w.-]/g, "_")).join("/") + ".json";
+  if (!staticCache[file]) {
+    staticCache[file] = fetch(file).then((res) => {
+      if (!res.ok) throw new Error("not in the online demo");
+      return res.text();
+    });
+  }
+  return staticCache[file].then((text) => JSON.parse(text));   // a fresh copy each time, as from a server
+}
+
+function quietSocket() {
+  return { close() {}, send() {}, readyState: 3 };
+}
+
 async function apiGet(path) {
+  if (window.DQ_STATIC) return staticGet(path);
   const res = await fetch(API_BASE + path);
   if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
   return res.json();
 }
 
 async function apiPost(path, body) {
+  if (window.DQ_STATIC) throw new Error(STATIC_MSG);
   const res = await fetch(API_BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -24,6 +54,7 @@ async function apiPost(path, body) {
 }
 
 async function apiPut(path, body) {
+  if (window.DQ_STATIC) throw new Error(STATIC_MSG);
   const res = await fetch(API_BASE + path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -38,6 +69,7 @@ async function apiPut(path, body) {
 }
 
 async function apiDelete(path) {
+  if (window.DQ_STATIC) throw new Error(STATIC_MSG);
   const res = await fetch(API_BASE + path, { method: "DELETE" });
   if (!res.ok) {
     let detail = `${res.status}`;
@@ -90,6 +122,7 @@ const Api = {
   showcaseCamUrl: (runId) => `/api/runs/${encodeURIComponent(runId)}/showcase/cam.jpg?t=${Date.now()}`,
 
   openRunSocket(runId, { onTelemetry, onStatus, onRunEnded, onLog, onShowcase, onError, onAny, onClose } = {}) {
+    if (window.DQ_STATIC) return quietSocket();
     const ws = new WebSocket(`${WS_BASE}/ws/runs/${encodeURIComponent(runId)}`);
     ws.onmessage = (evt) => {
       let msg;
@@ -129,7 +162,7 @@ const Api = {
   getDroneEvents: (id) => apiGet(`/api/drone/flights/${encodeURIComponent(id)}/events`),
   answerSave: (id, save, passed) =>
     apiPost(`/api/drone/flights/${encodeURIComponent(id)}/save`, { save, passed }),
-  openKeysSocket: (id) =>
+  openKeysSocket: (id) => window.DQ_STATIC ? quietSocket() :
     new WebSocket(`${WS_BASE}/ws/drone/${encodeURIComponent(id)}/keys`),
 
   // --- imitation learning and jobs
@@ -156,6 +189,7 @@ const Api = {
     `/api/drone/flights/${encodeURIComponent(id)}/camera/latest.jpg?t=${Date.now()}`,
 
   openDroneSocket(flightId, { onTick, onStatus, onEvent, onEnded, onError } = {}) {
+    if (window.DQ_STATIC) return quietSocket();
     const ws = new WebSocket(`${WS_BASE}/ws/drone/${encodeURIComponent(flightId)}`);
     ws.onmessage = (evt) => {
       let msg;

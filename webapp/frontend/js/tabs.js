@@ -1,19 +1,22 @@
-// Hash-based tabs: #sim, #env, #drone, #imitation, #history. No router, no build step.
+// Hash-based tabs: #overview, #policies, #training (results, js/showcase.js) and the dashboard's
+// #sim, #env, #drone, #imitation, #history. No router, no build step. The online copy opens on
+// the Overview, the local dashboard on the Simulator.
 // Pages are <main> elements; the simulator page is #app-main, the others #tab-<name>.
 const Tabs = (() => {
-  const NAMES = ["sim", "env", "drone", "imitation", "history"];
+  const NAMES = ["overview", "policies", "training", "sim", "env", "drone", "imitation", "history"];
+  const HOME = window.DQ_STATIC ? "overview" : "sim";
   const listeners = [];
-  let current = "sim";
+  let current = HOME;
 
   function page(name) {
     return document.getElementById(name === "sim" ? "app-main" : "tab-" + name);
   }
 
   function show(name) {
-    if (!NAMES.includes(name)) name = "sim";
+    if (!NAMES.includes(name)) name = HOME;
     current = name;
     NAMES.forEach((n) => { page(n).hidden = n !== name; });
-    document.querySelectorAll(".tab-btn").forEach((b) => {
+    document.querySelectorAll(".tab-btn[data-tab]").forEach((b) => {
       b.classList.toggle("active", b.dataset.tab === name);
     });
     // The header pill is the simulator's training status; elsewhere it misleads.
@@ -25,11 +28,11 @@ const Tabs = (() => {
   }
 
   function init() {
-    document.querySelectorAll(".tab-btn").forEach((b) => {
+    document.querySelectorAll(".tab-btn[data-tab]").forEach((b) => {
       b.addEventListener("click", () => show(b.dataset.tab));
     });
     window.addEventListener("hashchange", () => show(location.hash.slice(1)));
-    show(location.hash.slice(1) || "sim");
+    show(location.hash.slice(1) || HOME);
   }
 
   return {

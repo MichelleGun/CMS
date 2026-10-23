@@ -1,5 +1,6 @@
 // A recorded simulator episode played back in 3D (data/replays/<id>.json, written by
 // scripts/build_site.py --record). Sim frame: x, y on the floor, z up -> three.js: (x, z, -y).
+// Used by the Overview and Policies tabs, locally and on the online copy alike.
 class Replay {
   constructor(el, { id, title, tall = false, autoplay = true } = {}) {
     this.el = el;
@@ -10,8 +11,8 @@ class Replay {
     this.ep = 0;
     el.classList.add("viewer");
     if (tall) el.classList.add("tall");
-    el.innerHTML = `<div class="hud">loading…</div><canvas aria-label="3D replay of ${Site.esc(title || id)}"></canvas>
-      <div class="ctl"><span class="title">${Site.esc(title || id)}</span>
+    el.innerHTML = `<div class="hud">loading…</div><canvas aria-label="3D replay of ${Show.esc(title || id)}"></canvas>
+      <div class="ctl"><span class="title">${Show.esc(title || id)}</span>
       <button type="button" data-a="play">Pause</button>
       <select data-a="ep" aria-label="start layout"></select>
       <select data-a="speed" aria-label="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select>
@@ -28,10 +29,9 @@ class Replay {
     fetch(`data/replays/${id}.json`).then((r) => r.json()).then((d) => {
       this.data = d;
       this.ctl("ep").innerHTML = d.episodes.map((e, k) =>
-        `<option value="${k}">start ${k + 1}: ${Site.esc(e.start.replace("zone_", "zone "))} · ${e.passes} pass${e.passes === 1 ? "" : "es"}</option>`).join("");
+        `<option value="${k}">start ${k + 1}: ${Show.esc(e.start.replace("zone_", "zone "))} · ${e.passes} pass${e.passes === 1 ? "" : "es"}</option>`).join("");
       this.load(0);
     }).catch(() => { this.hud.textContent = "replay not available"; });
-    document.addEventListener("themechange", () => this.theme());
     new IntersectionObserver((es) => { this.visible = es[0].isIntersecting; }).observe(el);
   }
 
@@ -62,16 +62,10 @@ class Replay {
     this.ringMat = new T.MeshStandardMaterial({ color: 0x2f6fe0, roughness: 0.6 });
     this.ring = new T.Mesh(new T.TorusGeometry(0.21, 0.06, 16, 48), this.ringMat);
     this.scene.add(this.ring);
-    this.drone = new T.Group();
-    this.droneMat = new T.MeshStandardMaterial({ color: 0xff7130 });
-    const body = new T.Mesh(new T.BoxGeometry(0.14, 0.035, 0.12), this.droneMat);
-    const nose = new T.Mesh(new T.ConeGeometry(0.025, 0.07, 12), new T.MeshStandardMaterial({ color: 0x222233 }));
-    nose.rotation.z = -Math.PI / 2;
-    nose.position.x = 0.09;
-    this.drone.add(body, nose);
+    this.drone = DroneModel.build();       // js/dronemodel.js, the same drone as the live view
     this.scene.add(this.drone);
     this.trailGeom = new T.BufferGeometry();
-    this.trailMat = new T.LineBasicMaterial({ color: 0xff7130, transparent: true, opacity: 0.7 });
+    this.trailMat = new T.LineBasicMaterial({ color: 0x3cc6ff, transparent: true, opacity: 0.8 });
     this.trail = new T.Line(this.trailGeom, this.trailMat);
     this.scene.add(this.trail);
     this.theme();
@@ -98,6 +92,7 @@ class Replay {
         }
       }
       if (this.visible !== false || !this.rendered) {      // off-screen viewers sleep
+        if (this.playing) DroneModel.spin(this.drone, dt * this.speed);
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
         this.rendered = true;
@@ -108,11 +103,11 @@ class Replay {
   }
 
   theme() {
-    const dark = Site.isDark();
-    this.scene.background = new THREE.Color(dark ? 0x1f1f2e : 0xffffff);
-    this.cageMat.color = new THREE.Color(dark ? 0x8a8aa6 : 0x6c6c84);
+    // the dashboard's colours (css/style.css: --bg-panel, the room and net lines)
+    this.scene.background = new THREE.Color(0x1f1f2e);
+    this.cageMat.color = new THREE.Color(0x8a8aa6);
     this.scene.remove(this.grid);
-    this.grid = new THREE.GridHelper(2, 10, dark ? 0x4a4a64 : 0xb8b8cc, dark ? 0x30304a : 0xdedeea);
+    this.grid = new THREE.GridHelper(2, 10, 0x4a4a6a, 0x30304a);
     this.scene.add(this.grid);
   }
 

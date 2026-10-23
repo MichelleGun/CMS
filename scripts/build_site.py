@@ -1,11 +1,12 @@
 """
-Build the static showcase website (site/, published on GitHub Pages by .github/workflows/pages.yml).
+Build the results shown by the dashboard's Overview, Policies and Training tabs, and the snapshot
+the online copy (GitHub Pages) reads instead of a server. There is one frontend, webapp/frontend:
+the local server serves it as is, and scripts/build_pages.py packs it for Pages.
 
     python scripts/build_site.py              # refresh the data (leaderboard, curves, rounds, timeline)
     python scripts/build_site.py --record     # also re-record the 3D replays (needs the simulator)
 
-The site only SHOWS results; training and flying stay local (the "Run it yourself" page says how).
-What it writes into site/:
+What it writes into webapp/frontend/:
   data/leaderboard.json   every exported policy's sim scores (hardware/policies/*.meta.json)
   data/curves.json        learning curves (laps per episode per evaluation) of the milestone runs
   data/optimiser.json     the loop optimiser's rounds and fair re-scores (results/hoop/mg_loop_*)
@@ -14,13 +15,14 @@ What it writes into site/:
   data/milestones.json    the milestone policies, with their replay files
   data/replays/<id>.json  (--record) each milestone policy flying the same 3 start layouts, every
                           tick: drone x, y, z, yaw; ring centre and axis; passes; HRL skill
-  anatomy.html            docs/Onboard Hoop Policy Anatomy.html
-  vendor/                 three.js and Chart.js from the dashboard
-No camera frames, flight logs or report drafts are published.
+  data/api/...            the dashboard's own GET answers (config, a few runs and their configs) for
+                          the online copy: /api/runs/x is saved as data/api/runs/x.json (js/api.js)
+No camera frames, flight logs, demos or report drafts are published.
 """
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import sys
@@ -28,8 +30,8 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SITE = ROOT / "site"
-DATA = SITE / "data"
+FRONT = ROOT / "webapp" / "frontend"
+DATA = FRONT / "data"
 RUNS = ROOT / "results" / "hoop" / "runs"
 sys.path.insert(0, str(ROOT / "hardware"))
 
@@ -156,17 +158,68 @@ def record(mid, path, episodes=REPLAY_EPISODES):
     return [e["passes"] for e in eps]
 
 
+# Runs the online copy lists in its Simulator / History tabs: the milestones and the optimiser's rounds.
+SNAPSHOT_RUNS = re.compile(r"^(w10_mg\d+_[A-Z0-9]+_[a-z_]+|hrl_v\d+)$")
+
+
+def api_snapshot(run_ids):
+    """Ask the dashboard backend itself (in-process, no server) and save its answers, so the online
+    copy reads exactly what the local dashboard shows. Local paths are cut down to repo paths."""
+    sys.path.insert(0, str(ROOT / "webapp" / "backend"))
+    from fastapi.testclient import TestClient
+    import main as backend
+    c = TestClient(backend.app)
+    out = DATA / "api"
+    shutil.rmtree(out, ignore_errors=True)
+    roots = [str(ROOT) + os.sep, str(ROOT).replace("\\", "/") + "/"]
+
+    def save(path, obj):
+        text = json.dumps(obj, separators=(",", ":"))
+        for r in roots:
+            text = text.replace(json.dumps(r)[1:-1], "")
+        f = DATA / (path + ".json")
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8")
+
+    def get(path):
+        r = c.get(path)
+        r.raise_for_status()
+        return r.json()
+
+    save("api/config", get("/api/config"))
+    save("api/drone/status", get("/api/drone/status"))
+    runs = get("/api/runs")
+    keep = [r for r in runs["runs"] if r["run_id"] in run_ids or SNAPSHOT_RUNS.match(r["run_id"])]
+    for r in keep:                      # nothing is training in a snapshot
+        if r.get("status") == "training":
+            r["status"] = "completed"
+    runs.update(runs=keep, current_run_id=None,
+                capacity=dict(runs["capacity"] or {}, live_runs=0) if runs.get("capacity") else None)
+    runs["best_run_ids"] = {k: v for k, v in (runs.get("best_run_ids") or {}).items() if any(x["run_id"] == v for x in keep)}
+    if runs.get("best_run_id") not in [x["run_id"] for x in keep]:
+        runs["best_run_id"] = None
+    save("api/runs", runs)
+    for r in keep:
+        rid = r["run_id"]
+        one = get(f"/api/runs/{rid}")
+        if one.get("status") == "training":
+            one["status"] = "completed"
+        if (one.get("live_status") or {}).get("status") == "training":
+            one["live_status"]["status"] = "completed"
+        save(f"api/runs/{rid}", one)
+        try:
+            save(f"api/runs/{rid}/config", get(f"/api/runs/{rid}/config"))
+        except Exception as e:          # an old run without a readable config: its tab says so
+            print(f"[site]   no config for {rid}: {e}")
+    return [r["run_id"] for r in keep]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--record", action="store_true", help="re-record the 3D replays (slow: needs the simulator)")
     ap.add_argument("--only", nargs="*", default=None, help="with --record: just these milestone ids")
     a = ap.parse_args(argv)
     from onboard.sim import CAGE_XY, CAGE_Z
-    SITE.mkdir(exist_ok=True)
-    (SITE / "vendor").mkdir(exist_ok=True)
-    for f in ("three.min.js", "OrbitControls.js", "chart.umd.min.js"):
-        shutil.copy2(ROOT / "webapp" / "frontend" / "vendor" / f, SITE / "vendor" / f)
-    shutil.copy2(ROOT / "docs" / "Onboard Hoop Policy Anatomy.html", SITE / "anatomy.html")
 
     board = leaderboard()
     write("leaderboard.json", board)
@@ -188,7 +241,8 @@ def main(argv=None):
     best = board[0] if board else None
     write("meta.json", dict(built=datetime.now().isoformat(timespec="minutes"), cage_xy=CAGE_XY, cage_z=list(CAGE_Z),
                             repo="https://github.com/MichelleGun/CMS", best=best))
-    print(f"[site] built {SITE} ({len(board)} policies, {len(ms)} replays)")
+    snap = api_snapshot({run for _, run in CURVE_RUNS} | {Path(m["model"]).parent.name for m in ms})
+    print(f"[site] built {DATA} ({len(board)} policies, {len(ms)} replays, {len(snap)} runs in the API snapshot)")
 
 
 if __name__ == "__main__":

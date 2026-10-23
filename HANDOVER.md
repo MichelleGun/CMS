@@ -123,10 +123,14 @@ the flags), and use its key with `--keys`.
 (`results/hoop/hrl_compare.md`). A hierarchy flies like any policy: `fly_hoop.py --mode policy --model
 results/hoop/runs/hrl_v1/best_model.zip` (learned) or `.../hrl_v1/phase_bundle.json` (fixed switch).
 
-**Showcase website (2026-10-23).** `site/` is a static site (GitHub Pages: https://michellegun.github.io/CMS/)
-with the milestone policies flying in 3D (recorded in the simulator), the leaderboard, learning curves, the
-optimiser's rounds and the HRL comparison. Refresh it after new results:
-`python scripts/build_site.py --record`, then commit `site/` and push (the Pages workflow publishes it).
+**Drone Quidditch website (2026-10-23).** The dashboard and the website are one frontend
+(`webapp/frontend`). Its **Overview / Policies / Training** tabs show the milestone policies flying in 3D
+(recorded in the simulator), the leaderboard, learning curves, the optimiser's rounds and the HRL
+comparison, from `webapp/frontend/data/`. GitHub Pages (https://michellegun.github.io/CMS/) serves the same
+page read-only: `scripts/build_pages.py` sets `DQ_STATIC`, and the dashboard tabs then read a snapshot of the
+API (`data/api/`, a few runs only) instead of a server; anything that would train or fly points to the repo.
+Refresh after new results: `python scripts/build_site.py --record`, commit `webapp/frontend/data` and push
+(the Pages workflow republishes). The drone in every 3D view is `webapp/frontend/js/dronemodel.js`.
 
 ## 5. Sharing results
 

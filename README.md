@@ -1,7 +1,9 @@
-# Drone RL, Assignment 3 (CMS)
+# Drone Quidditch (Drone RL, Assignment 3, CMS)
 
-> **Showcase site:** https://michellegun.github.io/CMS/ (policies flying in 3D, learning curves, results;
-> built from `site/` by `scripts/build_site.py`, published by `.github/workflows/pages.yml`).
+> **Online:** https://michellegun.github.io/CMS/ is a read-only copy of our dashboard (`webapp/frontend`):
+> policies flying in 3D, learning curves, results, and a look round the training and flying screens.
+> One frontend serves both: locally with `webapp/backend`, online packed by `scripts/build_pages.py`
+> (`.github/workflows/pages.yml`). Results come from `scripts/build_site.py`.
 >
 > **Helping to train?** Start with [HANDOVER.md](HANDOVER.md) (where we are, how to run an
 > experiment, what to try next). The illustrated explanation of the policy and the training is

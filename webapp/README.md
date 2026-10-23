@@ -1,10 +1,13 @@
-# Hoop finder dashboard
+# Drone Quidditch dashboard
 
-A local web interface for the whole project, in five tabs. Nothing needs a terminal once the
-server is running.
+A local web interface for the whole project. Nothing needs a terminal once the server is running.
+The same page is the project website: GitHub Pages serves it read-only (see *Online copy* below).
 
 | Tab | What you do there |
 |---|---|
+| **Overview** | The goal, headline numbers, the best policy flying in 3D, the project timeline, and how to run it all |
+| **Policies** | Every milestone policy flying the same three starts side by side, and the leaderboard of exported policies |
+| **Training** | Learning curves of the milestone runs, the loop optimiser's rounds, the hierarchical-RL comparison |
 | **Environment** | See the simulated 2×2×2 m net and ring: randomise the ring, preview its wind sway, play an example flight, and overlay the phone scan of the real cage (auto-fitted to the sim net) |
 | **Simulator** | Train RL policies in the PyBullet simulator: start positions, algorithm, reward curve, onboard camera, video replays |
 | **Drone** | Fly the real Tello or a simulated one: the six Stage C steps as buttons, the drone camera, telemetry, Land / Emergency motor cut, **keyboard flight**, and saving the run as a demonstration |
@@ -154,6 +157,22 @@ values) and `reward_overrides`.
 Generating demos, training a clone and evaluating one run as **jobs**, one at a time. Each writes
 its log and record to `hardware/flights/jobs/`, so the History tab shows them after a restart. The
 running job's log streams into the Imitation tab, and **Stop** ends it.
+
+## Online copy (GitHub Pages)
+
+`webapp/frontend` is also the website. `js/mode.js` says which copy is running: the local server serves
+it with `DQ_STATIC = false`; `scripts/build_pages.py` (run by `.github/workflows/pages.yml`) packs it with
+`DQ_STATIC = true`, plus the 3D cage scan and the "How it works" page. In that mode `js/api.js` answers GETs
+from `data/api/` (written by `scripts/build_site.py` by asking this backend in-process), keeps sockets
+quiet, and turns anything that would start, change or fly something into a "get the code" message. The
+Overview / Policies / Training tabs read `data/*.json` the same way in both copies.
+
+To look at the online copy locally:
+
+```
+python scripts/build_pages.py _site
+python -m http.server 8002 --directory _site
+```
 
 ## Tests
 

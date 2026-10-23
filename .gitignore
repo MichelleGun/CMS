@@ -63,3 +63,4 @@ hardware/calibration/sessions/
 
 # the loop optimiser's single-copy lock (loop_forever.py)
 results/hoop/mg_loop.lock
+_site/

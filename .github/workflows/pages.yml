@@ -1,11 +1,16 @@
-# Publishes the static showcase (site/, built by scripts/build_site.py) to GitHub Pages.
+# Publishes the online copy of the dashboard (webapp/frontend in read-only mode, packed by
+# scripts/build_pages.py) to GitHub Pages.
 # One-time setup in the repo: Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
-name: Deploy site to GitHub Pages
+name: Deploy Drone Quidditch to GitHub Pages
 
 on:
   push:
     branches: [main]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    paths:
+      - "webapp/frontend/**"
+      - "docs/Onboard Hoop Policy Anatomy.html"
+      - "scripts/build_pages.py"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -25,9 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: python3 scripts/build_pages.py _site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
