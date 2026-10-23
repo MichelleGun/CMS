@@ -477,7 +477,7 @@
     const viewed = runs.find((r) => r.run_id === viewedRunId);
     viewBestBtn.disabled = !(viewed && viewed.has_model) || (viewed && viewed.env === "onboard");
     viewBestBtn.title = viewed && viewed.env === "onboard"
-      ? "Replays are PyBullet-only: an onboard-camera run has no replay video"
+      ? "Replay videos are PyBullet-only: use \"Watch best policy\" below to see this run's best policy in 3D"
       : "A replay of this run's best saved policy (a new random ring and start each time)";
     if (viewed && !renaming) renderOverlayTitle(viewed);
     applyPanelState();
@@ -595,11 +595,11 @@
         onCameraToggle();
       }
       showcaseStatus.className = "note";
-      showcaseBtn.disabled = onboard;
+      showcaseBtn.disabled = false;
+      showcaseBtn.textContent = onboard ? "Watch best policy" : "Watch current policy";
       showcaseStatus.textContent = onboard
-        ? "Onboard-camera runs train in their own simulator (not PyBullet), so there is no policy episode " +
-          "or replay video here: the far view and drone POV above are the training env live. " +
-          "Fly the saved policy from the Drone tab (dry run first)."
+        ? "Plays one episode of this run's best saved policy in the onboard simulator (the laps task " +
+          "it is scored on, a random start zone each time), shown in the far view and drone POV above."
         : isViewedRunTraining
         ? "Plays one real-time episode with what the policy has learned so far (no exploration). Available after the first evaluation."
         : "Plays one real-time episode of this run's latest saved policy.";
@@ -783,7 +783,9 @@
     if (msg.summary) {
       const passed = msg.success;
       showcaseStatus.className = passed ? "note ok" : "note bad";
-      showcaseStatus.textContent = passed
+      showcaseStatus.textContent = passed && msg.passes > 1
+        ? `${msg.passes} passes through the ring in ${msg.duration_s} s, then ${msg.ended} (rim hits: ${msg.rim_hits}).`
+        : passed
         ? `Passed through the ring${msg.reversed ? " back to front" : ""} in ${msg.duration_s} s (net bumps: ${msg.net_hits}, rim hits: ${msg.rim_hits}).`
         : `Did not pass (${msg.ended} after ${msg.duration_s} s; net bumps: ${msg.net_hits}, rim hits: ${msg.rim_hits}).`;
       if (passed && live.showcaseTarget) Scene3D.markEvent(live.showcaseTarget, "pass", "showcase");
@@ -799,7 +801,8 @@
     Scene3D.setHoop(msg.target, msg.hoop_normal, msg.hoop_radius);
     Scene3D.addTrailPoint(msg.pos, "showcase");
     eventMarks(msg, "showcase");
-    hudLine.textContent = `current policy  \u00b7  ${(msg.step / 30).toFixed(1)} s  \u00b7  passes ${msg.passes || 0}`;
+    const t = msg.t !== undefined ? msg.t : msg.step / 30;     // onboard runs step at 15 Hz and send t
+    hudLine.textContent = `current policy  \u00b7  ${t.toFixed(1)} s  \u00b7  passes ${msg.passes || 0}`;
   }
 
   async function startShowcase() {
@@ -808,7 +811,9 @@
     showcaseStatus.className = "note";
     showcaseStatus.textContent = "loading the policy (10-30 s while training is running)\u2026";
     try {
-      await Api.startShowcase(viewedRunId, { variant: "latest", realtime: realtimeToggle.checked });
+      const viewed = runs.find((r) => r.run_id === viewedRunId);
+      const variant = viewed && viewed.env === "onboard" ? "best" : "latest";
+      await Api.startShowcase(viewedRunId, { variant, realtime: realtimeToggle.checked });
       // re-enable if nothing arrives (e.g. the process failed to start)
       setTimeout(() => { if (!live.showcase) showcaseBtn.disabled = false; }, 60000);
     } catch (e) {
