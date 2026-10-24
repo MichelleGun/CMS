@@ -130,9 +130,9 @@
   },
   "pid": 24940,
   "created_at": "2026-10-23T23:09:32.366301",
-  "finished_at": null,
-  "final_status": null,
-  "final_timesteps": null,
+  "finished_at": "2026-10-24T02:33:47.546456",
+  "final_status": "completed",
+  "final_timesteps": 17816236,
   "ppo": {
     "gamma": 0.99,
     "gae_lambda": 0.95,
