@@ -123,6 +123,10 @@ the flags), and use its key with `--keys`.
 (`results/hoop/hrl_compare.md`). A hierarchy flies like any policy: `fly_hoop.py --mode policy --model
 results/hoop/runs/hrl_v1/best_model.zip` (learned) or `.../hrl_v1/phase_bundle.json` (fixed switch).
 
+**Dashboard layout (2026-10-25).** Five tabs: Overview, Results (Policies, Training progress, Run
+history), Simulator (Train, Environment), Drone (Fly, Demos & clones), Try it yourself. Online, server-only
+controls carry a "Local only" tag. See `webapp/README.md`.
+
 **Drone Quidditch website (2026-10-23).** The dashboard and the website are one frontend
 (`webapp/frontend`). Its **Overview / Policies / Training** tabs show the milestone policies flying in 3D
 (recorded in the simulator), the leaderboard, learning curves, the optimiser's rounds and the HRL
@@ -183,7 +187,10 @@ Newest first. "laps/ep" = passes per 90 s sim episode (same-side laps, all 9 sta
 | 12 | mg6 C9 | C9 (seed 12) vs **CL** (lr 2e-5) | C9 best 2.60; **CL final: 2.58 laps/ep, 61 % 2+ passes, 60 % oblique -> 3.18** | **CL** (first win since C9) |
 | 13 | mg12 CL (3.18) | CL (seed 13) vs CO (oblique 0.8, lr 1e-4) | **CL final: 2.92 laps/ep, 64 % 2+ passes, 52 % oblique -> 3.43**; CO best 2.76 | **CL** again (but corner entry fell 60 -> 52 %) |
 | 14 | mg13 CL (3.43) | CL (seed 14) vs LZ (clearance reward, lr 2e-5) | **CL best: 3.01 laps/ep, 68 % 2+ passes, 57 % oblique -> 3.58**; LZ: 2.67 / 55 % -> 3.22 (better corners than its start, not enough laps) | **CL** |
-| 15 | mg14 CL (3.58) | CL (seed 15) vs LE (stress drone, lr 2e-5) | running | – |
+| 15 | mg14 CL (3.58) | CL (seed 15) vs LE (stress drone, lr 2e-5) | **CL best: 3.60 laps/ep, 61 % 2+, 50 % oblique -> 4.10**; LE best 3.99 (58 % oblique) | **CL** |
+| 16 | mg15 CL (4.10) | CL (seed 16) vs **LO** (lr 2e-5 + 80 % slanted starts) | CL final 4.52; **LO best: 4.33 laps/ep, 69 % 2+, 58 % oblique -> 4.92** | **LO** |
+| 17 | mg16 LO (4.92) | LO (seed 17) vs LD (DAgger relabel, lr 2e-5) | LO final 4.69; LD best 4.04 (interrupted 17:28-01:16, laptop asleep; resumed by itself) | parent |
+| 18 | mg16 LO | LO (seed 18) vs LX (lr 1e-5) | running | – |
 
 **Why CL matters (2026-10-23).** A continued run trains at lr 1e-4 by default (`train_onboard.py`). Every
 round-2 idea at that rate came out *worse* than its parent: fine-tuning a good policy that hard knocks it
@@ -191,7 +198,7 @@ off its optimum before the new idea can help. At 2e-5 the same C9 recipe improve
 So from round 14 the optimiser retries the ideas at the gentle rate (`L*` keys in `week10_experiments.py`),
 corner ideas first (LZ clearance reward, LE stress drone). The pool can now be changed without a restart:
 write `["LZ", ...]` to `results/hoop/mg_loop_pool.json`. Fly this one first:
-the round-14 CL policy (`hardware/policies/LOOP_20261024_w10-mg14-CL-loop-lowlr_*`; the optimiser's re-score prefers its `best`, the 36-episode export ranking its `final`: both are close).
+the round-16 LO policy, `hardware/policies/LOOP_20261024_w10-mg16-LO-low-oblique08_best_4.06lpe.zip` (the optimiser's re-score: 4.33 laps/ep). FLY_THIS_FIRST.txt ranks by the shorter 36-episode export score and may name a close neighbour (round 17's LO final).
 
 **Hierarchical RL result (2026-10-23).** No gain over the flat policy: flat C9 2.75, learned manager (best)
 2.74, fixed switch 2.51 (`results/hoop/hrl_compare.md`). The manager learned to pick C9 about 90 % of the

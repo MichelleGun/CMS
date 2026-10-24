@@ -110,6 +110,16 @@ function createScene3D() {
       }
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    // If the browser drops the graphics context (too many 3D views, or a huge model), say so on
+    // the canvas's own page instead of leaving it white.
+    canvas.addEventListener("webglcontextlost", (e) => {
+      e.preventDefault();
+      contextLost = true;
+      const note = document.createElement("div");
+      note.className = "gl-lost";
+      note.textContent = "3D view paused: the browser ran out of graphics memory. Reload the page.";
+      canvas.parentElement.appendChild(note);
+    });
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(PALETTE.bg);
@@ -145,6 +155,7 @@ function createScene3D() {
   }
 
   let lastRender = 0;
+  let contextLost = false;
   let viewShiftPx = 0;          // shift the picture left so overlays on the right don't hide the cage
 
   function resize() {
@@ -282,7 +293,7 @@ function createScene3D() {
     // two scenes at 60 fps would otherwise compete with training for the CPU/GPU.
     // 30 fps is plenty for telemetry that arrives at ~15 Hz, and halves the drawing cost.
     const now = performance.now();
-    if (document.hidden || renderer.domElement.offsetParent === null || now - lastRender < 33) {
+    if (contextLost || document.hidden || renderer.domElement.offsetParent === null || now - lastRender < 33) {
       requestAnimationFrame(tick);
       return;
     }

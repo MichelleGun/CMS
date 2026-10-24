@@ -6,7 +6,7 @@
   <title>Drone Quidditch</title>
   <meta name="description" content="A Tello drone that learns, with reinforcement learning, to fly through a hoop, loop round and go through again.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%23ff7130' stroke-width='5'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="css/style.css?v=22">
+  <link rel="stylesheet" href="css/style.css?v=24">
   <script src="js/mode.js?v=1"></script>
   <script src="vendor/three.min.js"></script>
   <script src="vendor/OrbitControls.js"></script>
@@ -16,21 +16,31 @@
 <body>
   <header id="app-header">
     <h1>Drone <span>Quidditch</span></h1>
-    <nav id="tabs">
-      <button class="tab-btn" data-tab="overview" type="button">Overview</button>
-      <button class="tab-btn" data-tab="policies" type="button">Policies</button>
-      <button class="tab-btn" data-tab="training" type="button">Training</button>
-      <span class="tab-sep" aria-hidden="true"></span>
-      <button class="tab-btn" data-tab="sim" type="button">Simulator</button>
-      <button class="tab-btn" data-tab="env" type="button">Environment</button>
-      <button class="tab-btn" data-tab="drone" type="button">Drone</button>
-      <button class="tab-btn" data-tab="imitation" type="button">Imitation</button>
-      <button class="tab-btn" data-tab="history" type="button">History</button>
-      <a class="tab-btn tab-link" href="anatomy.html" target="_blank" rel="noopener">How it works</a>
+    <nav id="tabs" aria-label="Sections">
+      <button class="tab-btn" data-group="overview" type="button">Overview</button>
+      <button class="tab-btn" data-group="results" type="button">Results</button>
+      <button class="tab-btn" data-group="simulator" type="button">Simulator</button>
+      <button class="tab-btn" data-group="drone" type="button">Drone</button>
+      <button class="tab-btn" data-group="try" type="button">Try it yourself</button>
     </nav>
     <div id="status-pill" class="pill pill-idle">idle</div>
     <div id="live-flight-pill" class="pill pill-training" hidden>flight live</div>
   </header>
+  <nav id="subtabs" aria-label="Pages in this section">
+    <div class="subtab-row" data-group="results" hidden>
+      <button class="subtab-btn" data-tab="policies" type="button">Policies: replays &amp; leaderboard</button>
+      <button class="subtab-btn" data-tab="training" type="button">Training progress</button>
+      <button class="subtab-btn" data-tab="history" type="button">Run history</button>
+    </div>
+    <div class="subtab-row" data-group="simulator" hidden>
+      <button class="subtab-btn" data-tab="sim" type="button">Train</button>
+      <button class="subtab-btn" data-tab="env" type="button">Environment</button>
+    </div>
+    <div class="subtab-row" data-group="drone" hidden>
+      <button class="subtab-btn" data-tab="drone" type="button">Fly</button>
+      <button class="subtab-btn" data-tab="imitation" type="button">Demos &amp; clones</button>
+    </div>
+  </nav>
   <div id="boot-error" role="alert" hidden></div>
   <div id="static-banner" hidden></div>
 
@@ -50,17 +60,46 @@
     <div id="ov-hero"></div>
     <div class="cta-row">
       <a class="cta" href="#policies" data-go="policies">Compare all policies</a>
-      <a class="cta ghost" href="anatomy.html" target="_blank" rel="noopener">How the policy works</a>
-      <a class="cta ghost repo-link" href="https://github.com/MichelleGun/CMS" target="_blank" rel="noopener">Code on GitHub</a>
+      <a class="cta ghost" href="#env" data-go="env">Explore the arena</a>
+      <a class="cta ghost" href="#try" data-go="try">Try it yourself</a>
+    </div>
+
+    <h2>How it works</h2>
+    <div class="card how-card">
+      <p>The policy sees only what the Tello's camera sees: a hoop tracker turns each frame into a few numbers
+        (where the ring is, how big, how sure), the last second of them is kept as memory, and a small neural
+        network turns that into stick commands 15 times a second. It was trained with PPO in a simulator of
+        our cage, drone and camera, with everything randomised so it survives the real thing.</p>
+      <a class="cta" href="anatomy.html" target="_blank" rel="noopener">Read the illustrated explanation</a>
+      <span class="note">Architecture, observations, rewards, training tricks, and what each change did.</span>
     </div>
     <h2>How we got here</h2>
     <p class="note">Every change, why it was made, and what it did (from the project's running log).</p>
     <div class="timeline" id="ov-timeline"></div>
 
-    <h2 id="ov-run">Run it yourself</h2>
-    <p>The Simulator, Environment, Drone, Imitation and History tabs are the dashboard we train and fly with. They
-      need the code on your own computer: the trainer needs Python and the simulator, and the dashboard talks to the
-      drone over Wi-Fi. Online you can look around them, but not start anything.</p>
+    <p class="note" id="ov-built"></p>
+  </div></main>
+
+  <main id="tab-try" class="tab-page doc-page" hidden><div class="doc">
+    <h1 class="doc-title">Try it yourself</h1>
+    <p class="lede">Training, the simulator and flying the drone run on your own computer: the trainer needs
+      Python and the simulator, and the dashboard talks to the Tello over Wi-Fi. Download the project and this
+      same dashboard opens locally with every button working.</p>
+    <div class="cta-row">
+      <a class="cta big repo-link" href="https://github.com/MichelleGun/CMS" target="_blank" rel="noopener">Get the code on GitHub</a>
+      <a class="cta ghost" href="https://github.com/MichelleGun/CMS/blob/main/HANDOVER.md" target="_blank" rel="noopener">Hand-over notes</a>
+    </div>
+    <div class="card local-list">
+      <b>What works only on your own computer</b>
+      <ul>
+        <li>Simulator &rsaquo; Train: starting, stopping and watching trainings; replays and the drone's-eye camera</li>
+        <li>Simulator &rsaquo; Environment: the phone scan of the real cage (34 MB)</li>
+        <li>Drone: flying (simulated or real), keyboard flight, camera calibration, recording demos</li>
+        <li>Drone &rsaquo; Demos &amp; clones: making demos and training behaviour clones</li>
+      </ul>
+      <span class="note">Online, those controls carry a <span class="local-chip">Local only</span> tag.</span>
+    </div>
+
     <h3>1. Get the project</h3>
     <pre><code>git clone https://github.com/MichelleGun/CMS.git
 cd CMS</code></pre>
@@ -86,16 +125,22 @@ python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/&lt;
     <h3>Update these results</h3>
     <pre><code>python scripts/build_site.py --record</code></pre>
     <p class="note">It rewrites <code>webapp/frontend/data/</code>. Pushing that to GitHub republishes the online copy.</p>
-    <p class="note" id="ov-built"></p>
   </div></main>
 
   <main id="tab-policies" class="tab-page doc-page" hidden><div class="doc">
-    <h1 class="doc-title">Policies</h1>
-    <p class="lede">Each milestone policy flies the <b>same three start positions</b> in the simulator, so you can see
-      what each change did. Pick a start under each replay. The scores come from 36 fixed episodes per policy,
-      through the same code that flies the real drone.</p>
-    <h2>Milestones, side by side</h2>
-    <div class="grid2" id="pol-replays"></div>
+    <h1 class="doc-title">Compare policies</h1>
+    <p class="lede">Each milestone policy flies the <b>same three start positions</b> in the simulator, so you can
+      see what each change did. Pick a policy and a start; add a second one to compare side by side. The scores
+      come from fixed episodes per policy, through the same code that flies the real drone.</p>
+    <h2>Replays</h2>
+    <div class="pick-row">
+      <label>Policy <select id="pol-pick-a"></select></label>
+      <label>Compare with <select id="pol-pick-b"><option value="">nothing</option></select></label>
+    </div>
+    <div class="grid2" id="pol-replays">
+      <div><div id="pol-view-a"></div><p class="note" id="pol-what-a"></p></div>
+      <div id="pol-col-b" hidden><div id="pol-view-b"></div><p class="note" id="pol-what-b"></p></div>
+    </div>
     <h2>Leaderboard</h2>
     <p class="note"><b>Passes / 90 s</b>: average passes in a 90 s episode (same-side laps, starts from all 9 zones of
       the cage). <b>Corner entry</b>: share of slanted starts near the hoop (like the cage corners) that end in a clean
@@ -109,10 +154,11 @@ python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/&lt;
   </div></main>
 
   <main id="tab-training" class="tab-page doc-page" hidden><div class="doc">
-    <h1 class="doc-title">Training</h1>
+    <h1 class="doc-title">Training progress</h1>
     <p class="lede">All training is PPO (actor-critic) in our simulator of the real cage, drone and camera, with
       randomised dynamics so the policy survives the real drone. Each run continues from the previous milestone.
-      To watch a run's own curves, or start one, use the <a href="#sim" data-go="sim">Simulator</a> tab.</p>
+      Every run's own curves are under <a href="#history" data-go="history">Run history</a>; starting one is
+      <a href="#sim" data-go="sim">Simulator &rsaquo; Train</a>.</p>
     <h2>Learning curves</h2>
     <p class="note">Passes per 90 s episode at each evaluation (36 fixed episodes), against the steps that run added.</p>
     <div class="chart-box"><canvas id="tr-curves" aria-label="learning curves"></canvas></div>
@@ -136,7 +182,7 @@ python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/&lt;
 
   <main id="app-main" class="tab-page" data-tab-page="sim">
     <aside id="run-history">
-      <h2>Runs</h2>
+      <h2>Training runs</h2>
       <div id="run-list"></div>
     </aside>
 
@@ -564,7 +610,9 @@ python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/&lt;
   <main id="tab-imitation" class="tab-page three-col" hidden>
     <aside class="col">
       <div class="panel">
-        <h2>Demonstrations</h2>
+        <h2>Recorded demonstrations</h2>
+        <div class="note">Demos come from Drone &rsaquo; Fly (option 5, fly it yourself, with "Record a
+          demonstration" ticked). Here you label them, make simulated ones, and train a behaviour clone.</div>
         <div class="seg small" id="demo-filter">
           <label><input type="radio" name="demo-filter" value="all" checked> All</label>
           <label><input type="radio" name="demo-filter" value="real"> Real</label>
@@ -623,7 +671,7 @@ python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/&lt;
   <main id="tab-env" class="tab-page two-col" hidden>
     <aside class="col">
       <div class="panel">
-        <h2>Training environment</h2>
+        <h2>The arena the policy trains in</h2>
         <div class="note">The simulated cage the policy trains in: a 2&times;2&times;2 m net with a blue
           noodle ring hung near the centre, posed like the one in the phone scan (1.29 m up, turned and
           leaning slightly). The drone always starts on the floor, must take off, find the ring and
@@ -675,7 +723,7 @@ python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/&lt;
   <main id="tab-history" class="tab-page two-col" hidden>
     <aside class="col">
       <div class="panel">
-        <h2>History</h2>
+        <h2>Run history: every training run, flight and job</h2>
         <div class="seg small" id="hist-filter">
           <label><input type="radio" name="hist-filter" value="real" checked> Real flights</label>
           <label><input type="radio" name="hist-filter" value="dry"> Dry runs</label>
@@ -786,10 +834,10 @@ python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/&lt;
   </div>
   <script src="js/api.js?v=24"></script>
   <script src="js/dronemodel.js?v=1"></script>
-  <script src="js/scene3d.js?v=21"></script>
+  <script src="js/scene3d.js?v=22"></script>
   <script src="js/controls.js?v=19"></script>
   <script src="js/chart.js?v=19"></script>
-  <script src="js/tabs.js?v=20"></script>
+  <script src="js/tabs.js?v=22"></script>
   <script src="js/frames.js?v=20"></script>
   <script src="js/keys.js?v=20"></script>
   <script src="js/drone.js?v=21"></script>
@@ -797,10 +845,10 @@ python hardware/onboard/fly_hoop.py --mode policy --model hardware/policies/&lt;
   <script src="js/imitation.js?v=19"></script>
   <script src="js/runconfig.js?v=1"></script>
   <script src="js/history.js?v=20"></script>
-  <script src="js/envview.js?v=20"></script>
+  <script src="js/envview.js?v=21"></script>
   <script src="js/reward.js?v=19"></script>
-  <script src="js/replay.js?v=1"></script>
-  <script src="js/showcase.js?v=2"></script>
+  <script src="js/replay.js?v=2"></script>
+  <script src="js/showcase.js?v=4"></script>
   <script src="js/app.js?v=23"></script>
 </body>
 </html>

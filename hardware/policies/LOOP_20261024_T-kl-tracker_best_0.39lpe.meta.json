@@ -107,7 +107,7 @@
   },
   "clearml_task_id": "b4cbad5a4b9e4e35bccda2344173f7ef",
   "exported_from": "results\\hoop\\runs\\w10_laps_T_kl_tracker\\best_model.zip",
-  "exported_at": "2026-10-24T07:16:31",
+  "exported_at": "2026-10-24T15:35:43",
   "export_scores": {
     "zones": {
       "1": 1.0,

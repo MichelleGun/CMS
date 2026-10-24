@@ -3,16 +3,20 @@
 A local web interface for the whole project. Nothing needs a terminal once the server is running.
 The same page is the project website: GitHub Pages serves it read-only (see *Online copy* below).
 
-| Tab | What you do there |
+Five tabs; the ones with several pages show a second row of tabs under the header. The page names
+are also the links (`#sim`, `#env`, `#history`, ...), so old links still open the right page.
+
+| Tab › page | What you do there |
 |---|---|
-| **Overview** | The goal, headline numbers, the best policy flying in 3D, the project timeline, and how to run it all |
-| **Policies** | Every milestone policy flying the same three starts side by side, and the leaderboard of exported policies |
-| **Training** | Learning curves of the milestone runs, the loop optimiser's rounds, the hierarchical-RL comparison |
-| **Environment** | See the simulated 2×2×2 m net and ring: randomise the ring, preview its wind sway, play an example flight, and overlay the phone scan of the real cage (auto-fitted to the sim net) |
-| **Simulator** | Train RL policies in the PyBullet simulator: start positions, algorithm, reward curve, onboard camera, video replays |
-| **Drone** | Fly the real Tello or a simulated one: the six Stage C steps as buttons, the drone camera, telemetry, Land / Emergency motor cut, **keyboard flight**, and saving the run as a demonstration |
-| **Imitation** | List every demonstration (recorded flights and simulated), generate simulated demos, train a behaviour clone on the ones you tick, evaluate clones, and send one to the Drone tab |
-| **History** | Every real flight, dry run, training run and job, with charts of range, height, travel and commands over time, the events, and the last camera frame |
+| **Overview** | The goal, headline numbers, the best policy flying in 3D, the project timeline, a short "how it works" with a link to the illustrated explanation (`anatomy.html`), and a button to the arena |
+| **Results › Policies** | Pick a milestone policy (and optionally a second, side by side) to watch it fly the same three starts; the leaderboard of exported policies |
+| **Results › Training progress** | Learning curves of the milestone runs, the loop optimiser's rounds, the hierarchical-RL comparison |
+| **Results › Run history** | Every real flight, dry run, training run and job, with charts of range, height, travel and commands over time, the events, and the last camera frame |
+| **Simulator › Train** | Train RL policies in the simulator: start positions, algorithm, reward curve, onboard camera, replays |
+| **Simulator › Environment** | The simulated 2×2×2 m net and ring: randomise the ring, preview its wind sway, play an example flight, and overlay the phone scan of the real cage (auto-fitted to the sim net) |
+| **Drone › Fly** | Fly the real Tello or a simulated one: the Stage C steps as buttons (5 = fly it yourself, which can record a demonstration), the drone camera, telemetry, Land / Emergency motor cut, keyboard flight, camera calibration |
+| **Drone › Demos & clones** | The recorded demonstrations (label them), simulated demos, training and scoring a behaviour clone, and sending one to Fly |
+| **Try it yourself** | How to download and run everything: setup, the dashboard, training an experiment, flying a policy, rebuilding these results |
 
 ## Run it
 
@@ -162,10 +166,15 @@ running job's log streams into the Imitation tab, and **Stop** ends it.
 
 `webapp/frontend` is also the website. `js/mode.js` says which copy is running: the local server serves
 it with `DQ_STATIC = false`; `scripts/build_pages.py` (run by `.github/workflows/pages.yml`) packs it with
-`DQ_STATIC = true`, plus the 3D cage scan and the "How it works" page. In that mode `js/api.js` answers GETs
-from `data/api/` (written by `scripts/build_site.py` by asking this backend in-process), keeps sockets
-quiet, and turns anything that would start, change or fly something into a "get the code" message. The
-Overview / Policies / Training tabs read `data/*.json` the same way in both copies.
+`DQ_STATIC = true`, plus the "How it works" page. In that mode `js/api.js` answers GETs from `data/api/`
+(written by `scripts/build_site.py` by asking this backend in-process) and keeps sockets quiet. Controls that
+need this server are disabled and tagged **Local only** (the list is `LOCAL_ONLY` / `LOCAL_PANELS` in
+`js/showcase.js`); the tag links to *Try it yourself*. The 34 MB phone scan is not published. The Overview
+and Results pages read `data/*.json` the same way in both copies.
+
+Each recorded replay is one WebGL renderer, and browsers allow only a handful per page (losing one turns its
+canvas white), so Results › Policies has one viewer plus an optional second one, switched by the pickers
+(`Replay.show`). A lost 3D context now shows a "reload" message instead of a white canvas.
 
 To look at the online copy locally:
 

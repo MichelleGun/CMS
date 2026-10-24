@@ -6,8 +6,8 @@ Pack the dashboard (webapp/frontend) as the online copy for GitHub Pages. Run by
     python -m http.server 8002 --directory _site
 
 The page is the same one the local server serves; only js/mode.js changes (DQ_STATIC = true),
-so the tabs read the snapshot in data/ (scripts/build_site.py) instead of a server. The 3D cage
-model and the "How it works" page are copied in here rather than kept twice in the repo.
+so the tabs read the snapshot in data/ (scripts/build_site.py) instead of a server, and controls that
+need the server are marked "Local only". The "How it works" page is copied in rather than kept twice.
 Standard library only: the workflow needs no installs.
 """
 import shutil
@@ -28,8 +28,7 @@ def build(out):
     text = mode.read_text(encoding="utf-8")
     assert "window.DQ_STATIC = false;" in text, "js/mode.js changed: update build_pages.py"
     mode.write_text(text.replace("window.DQ_STATIC = false;", "window.DQ_STATIC = true;"), encoding="utf-8")
-    (out / "assets").mkdir(exist_ok=True)
-    shutil.copy2(ROOT / "assets" / "3D_net&hoop.glb", out / "assets" / "3D_net&hoop.glb")
+    # (no 34 MB phone scan online: its overlay is a local-only feature, so visitors never download it)
     shutil.copy2(ROOT / "docs" / "Onboard Hoop Policy Anatomy.html", out / "anatomy.html")
     (out / ".nojekyll").write_text("", encoding="utf-8")     # serve files as they are
     size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())

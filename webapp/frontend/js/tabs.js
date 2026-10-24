@@ -1,10 +1,23 @@
-// Hash-based tabs: #overview, #policies, #training (results, js/showcase.js) and the dashboard's
-// #sim, #env, #drone, #imitation, #history. No router, no build step. The online copy opens on
-// the Overview, the local dashboard on the Simulator.
+// Hash-based tabs in two levels. The header has five groups; a group with more than one page
+// shows a sub-tab row under the header:
+//   Overview | Results (Policies, Training progress, Run history) | Simulator (Train, Environment)
+//   | Drone (Fly, Demos) | Try it yourself
+// The hash and the listeners use the PAGE name (#sim, #env, #history...), so old links and every
+// module's Tabs.onChange(name) keep working. No router, no build step. The online copy opens on
+// the Overview, the local dashboard on Simulator > Train.
 // Pages are <main> elements; the simulator page is #app-main, the others #tab-<name>.
 const Tabs = (() => {
-  const NAMES = ["overview", "policies", "training", "sim", "env", "drone", "imitation", "history"];
+  const GROUPS = {
+    overview: ["overview"],
+    results: ["policies", "training", "history"],
+    simulator: ["sim", "env"],
+    drone: ["drone", "imitation"],
+    try: ["try"],
+  };
+  const NAMES = Object.values(GROUPS).flat();
+  const groupOf = (name) => Object.keys(GROUPS).find((g) => GROUPS[g].includes(name));
   const HOME = window.DQ_STATIC ? "overview" : "sim";
+  const lastSub = {};                     // group -> the sub-page shown last, reopened by its tab
   const listeners = [];
   let current = HOME;
 
@@ -12,11 +25,24 @@ const Tabs = (() => {
     return document.getElementById(name === "sim" ? "app-main" : "tab-" + name);
   }
 
+  // A page name always means that page ("drone" is the Fly page, though the group shares its name).
   function show(name) {
     if (!NAMES.includes(name)) name = HOME;
+    const group = groupOf(name);
     current = name;
+    lastSub[group] = name;
     NAMES.forEach((n) => { page(n).hidden = n !== name; });
-    document.querySelectorAll(".tab-btn[data-tab]").forEach((b) => {
+    document.querySelectorAll(".tab-btn[data-group]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.group === group);
+    });
+    // one row of sub-tabs per group; single-page groups have none
+    let anySub = false;
+    document.querySelectorAll(".subtab-row").forEach((row) => {
+      row.hidden = row.dataset.group !== group;
+      anySub = anySub || !row.hidden;
+    });
+    document.body.classList.toggle("has-subtabs", anySub);
+    document.querySelectorAll(".subtab-btn").forEach((b) => {
       b.classList.toggle("active", b.dataset.tab === name);
     });
     // The header pill is the simulator's training status; elsewhere it misleads.
@@ -28,7 +54,11 @@ const Tabs = (() => {
   }
 
   function init() {
-    document.querySelectorAll(".tab-btn[data-tab]").forEach((b) => {
+    document.querySelectorAll(".tab-btn[data-group]").forEach((b) => {
+      // a header tab reopens the page last seen in its group
+      b.addEventListener("click", () => show(lastSub[b.dataset.group] || GROUPS[b.dataset.group][0]));
+    });
+    document.querySelectorAll(".subtab-btn").forEach((b) => {
       b.addEventListener("click", () => show(b.dataset.tab));
     });
     window.addEventListener("hashchange", () => show(location.hash.slice(1)));

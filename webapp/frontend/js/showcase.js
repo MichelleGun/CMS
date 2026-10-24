@@ -47,13 +47,34 @@ const Showcase = (() => {
 
   async function policies() {
     const [ms, board] = await Promise.all([Show.data("milestones.json"), Show.data("leaderboard.json")]);
-    const box = $("pol-replays");
-    ms.forEach((m) => {
-      const card = document.createElement("div");
-      card.innerHTML = `<div class="replay"></div><p class="note">${Show.esc(m.what)}</p>`;
-      box.appendChild(card);
-      new Replay(card.querySelector(".replay"), { id: m.id, title: m.label, autoplay: false });
-    });
+    // Two viewers at most (one WebGL renderer each), switched by the pickers: one renderer per
+    // milestone used to exhaust the browser's graphics contexts and turn canvases white.
+    const byId = Object.fromEntries(ms.map((m) => [m.id, m]));
+    const opts = ms.map((m) => `<option value="${Show.esc(m.id)}">${Show.esc(m.label)}</option>`).join("");
+    const pickA = $("pol-pick-a"), pickB = $("pol-pick-b");
+    pickA.innerHTML = opts;
+    pickB.innerHTML = `<option value="">nothing</option>` + opts;
+    const best = ms.find((m) => / \(best\)$/.test(m.label)) || ms[ms.length - 1];
+    pickA.value = best.id;
+    let viewA = null, viewB = null;
+    const showA = () => {
+      const m = byId[pickA.value];
+      if (viewA) viewA.show(m.id, m.label);
+      else viewA = new Replay($("pol-view-a"), { id: m.id, title: m.label, autoplay: false });
+      $("pol-what-a").textContent = m.what;
+    };
+    const showB = () => {
+      const m = byId[pickB.value];
+      $("pol-col-b").hidden = !m;
+      if (!m) { if (viewB) viewB.playing = false; return; }
+      if (viewB) viewB.show(m.id, m.label);
+      else viewB = new Replay($("pol-view-b"), { id: m.id, title: m.label, autoplay: false });
+      $("pol-what-b").textContent = m.what;
+      window.dispatchEvent(new Event("resize"));
+    };
+    pickA.addEventListener("change", showA);
+    pickB.addEventListener("change", showB);
+    showA();
     $("pol-board").innerHTML = board.slice(0, 40).map((r, i) =>
       `<tr${i === 0 ? ' class="hi"' : ""}><td class="n">${i + 1}</td><td><code>${Show.esc(r.file)}</code></td>
        <td class="n">${Show.num(r.lpe)}</td><td>${Show.bar(r.two_plus)}</td><td class="n">${r.best}</td>
@@ -95,14 +116,64 @@ const Showcase = (() => {
 
   const RENDER = { overview: [overview, "ov-hero"], policies: [policies, "pol-replays"], training: [training, "tr-hrl"] };
 
-  // On the online copy, say plainly which tabs only look and which need the code.
+  // On the online copy, say plainly which pages only look and which need the code.
   const STATIC_NOTES = {
-    sim: "This is the training screen. Pick a run on the left to see its curves; starting a training needs the code on your own computer.",
-    env: "The simulated cage, hoop and drone. Editing it, and training in it, runs on your own computer.",
-    drone: "Flying the Tello and calibrating its camera happen on a laptop next to the drone.",
-    imitation: "Recording and training from demonstrations runs on your own computer.",
+    sim: "You can browse the training runs and their curves. Starting, stopping and watching a training runs on your own computer.",
+    env: "The simulated arena works here. The phone scan of the real cage is only in the downloaded version.",
+    drone: "Flying the Tello (or a simulated one) and calibrating its camera run on a laptop next to the drone.",
+    imitation: "Recording demos and training behaviour clones run on your own computer.",
     history: "A snapshot of selected training runs. Flights and jobs stay on the computer that ran them.",
   };
+
+  // Controls that need the local server: disabled online, with a "Local only" tag next to them.
+  // (js/api.js still refuses the call if one slips through.)
+  const LOCAL_ONLY = [
+    "start-btn", "stop-btn", "teacher-btn", "showcase-btn", "realtime-toggle", "camera-toggle", "pov-toggle",
+    "replay-current-btn", "replay-best-btn", "view-best-btn", "rename-btn", "star-btn",
+    "fly-start-btn", "calib-open-btn", "opt-record", "drone-camera-toggle",
+    "gen-btn", "train-btn", "job-stop-btn",
+    "env-scan-chk", "env-scan-scale", "env-scan-yaw", "env-scan-x", "env-scan-y", "env-scan-fit-btn",
+  ];
+  // whole panels whose buttons are made on the fly (flight steps, keyboard flight, clone list)
+  const LOCAL_PANELS = ["stage-list", "keys-panel", "flight-options"];
+
+  function markLocalOnly() {
+    document.body.classList.add("dq-static");
+    const chip = () => {
+      const c = document.createElement("a");
+      c.className = "local-chip";
+      c.href = "#try";
+      c.dataset.go = "try";
+      c.textContent = "Local only";
+      c.title = "Runs on your own computer: see Try it yourself";
+      return c;
+    };
+    LOCAL_ONLY.forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.disabled = true;
+      el.classList.add("is-local");
+      // a checkbox's label, or the button itself, gets the tag
+      const host = el.closest("label") || el;
+      if (!host.nextElementSibling || !host.nextElementSibling.classList.contains("local-chip")) host.after(chip());
+    });
+    // the tabs' own code re-enables buttons as their state changes; clicks are stopped here instead
+    document.addEventListener("click", (e) => {
+      if (e.target.closest(".local-chip")) return;
+      if (e.target.closest(".is-local, .local-panel button, .local-panel input, .local-panel select")) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    }, true);
+    if ($("env-scan-status")) $("env-scan-status").textContent =
+      "The 34 MB phone scan of the real cage is only in the downloaded version (Try it yourself).";
+    LOCAL_PANELS.forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.classList.add("local-panel");
+      el.prepend(chip());
+    });
+  }
 
   function onTab(name) {
     if (RENDER[name] && !done[name]) {
@@ -111,10 +182,11 @@ const Showcase = (() => {
       fn().catch((e) => { console.error(e); fail($(el), e); });
     }
     const banner = $("static-banner");
-    if (!window.DQ_STATIC || !STATIC_NOTES[name]) { banner.hidden = true; return; }
+    const on = !!(window.DQ_STATIC && STATIC_NOTES[name]);
+    document.body.classList.toggle("has-banner", on);      // the pages size to the space left
+    if (!on) { banner.hidden = true; return; }
     banner.innerHTML = `<b>Online copy.</b> ${STATIC_NOTES[name]}
-      <a href="${window.DQ_REPO}" target="_blank" rel="noopener">Get the code on GitHub</a>
-      &middot; <a href="#overview" data-go="overview">How to run it</a>`;
+      <a href="#try" data-go="try">Try it yourself</a>`;
     banner.hidden = false;
   }
 
@@ -125,8 +197,8 @@ const Showcase = (() => {
       if (!a) return;
       e.preventDefault();
       Tabs.show(a.dataset.go);
-      if (a.dataset.go === "overview") $("ov-run").scrollIntoView({ behavior: "smooth" });
     });
+    if (window.DQ_STATIC) markLocalOnly();
     Tabs.onChange(onTab);
     onTab(Tabs.current());
   }

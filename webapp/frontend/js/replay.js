@@ -12,7 +12,7 @@ class Replay {
     el.classList.add("viewer");
     if (tall) el.classList.add("tall");
     el.innerHTML = `<div class="hud">loading…</div><canvas aria-label="3D replay of ${Show.esc(title || id)}"></canvas>
-      <div class="ctl"><span class="title">${Show.esc(title || id)}</span>
+      <div class="ctl"><span class="title"></span>
       <button type="button" data-a="play">Pause</button>
       <select data-a="ep" aria-label="start layout"></select>
       <select data-a="speed" aria-label="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select>
@@ -26,13 +26,26 @@ class Replay {
     this.ctl("seek").addEventListener("input", (e) => { this.i = Number(e.target.value); this.draw(true); });
     if (!autoplay) this.ctl("play").textContent = "Play";
     this.init3d();
+    this.show(id, title);
+    new IntersectionObserver((es) => { this.visible = es[0].isIntersecting; }).observe(el);
+  }
+
+  // Swap in another policy's recording; the same WebGL renderer is kept (browsers allow only a few
+  // of them per page, and losing one turns a canvas white).
+  show(id, title) {
+    this.id = id;
+    this.ticks = null;
+    this.el.querySelector(".title").textContent = title || id;
+    this.canvas.setAttribute("aria-label", `3D replay of ${title || id}`);
+    this.hud.textContent = "loading…";
+    const want = id;
     fetch(`data/replays/${id}.json`).then((r) => r.json()).then((d) => {
+      if (this.id !== want) return;               // picked something else meanwhile
       this.data = d;
       this.ctl("ep").innerHTML = d.episodes.map((e, k) =>
         `<option value="${k}">start ${k + 1}: ${Show.esc(e.start.replace("zone_", "zone "))} · ${e.passes} pass${e.passes === 1 ? "" : "es"}</option>`).join("");
-      this.load(0);
+      this.load(Math.min(this.ep, d.episodes.length - 1));
     }).catch(() => { this.hud.textContent = "replay not available"; });
-    new IntersectionObserver((es) => { this.visible = es[0].isIntersecting; }).observe(el);
   }
 
   v(x, y, z) { return new THREE.Vector3(x, z, -y); }
@@ -41,6 +54,11 @@ class Replay {
     const T = THREE;
     this.renderer = new T.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.canvas.addEventListener("webglcontextlost", (e) => {
+      e.preventDefault();
+      this.lost = true;
+      this.hud.textContent = "3D view paused: the browser ran out of graphics memory. Reload the page.";
+    });
     this.scene = new T.Scene();
     this.camera = new T.PerspectiveCamera(45, 1, 0.05, 50);
     this.camera.position.set(1.55, 1.75, 1.85);
@@ -91,7 +109,7 @@ class Replay {
           this.draw();
         }
       }
-      if (this.visible !== false || !this.rendered) {      // off-screen viewers sleep
+      if (!this.lost && (this.visible !== false || !this.rendered)) {      // off-screen viewers sleep
         if (this.playing) DroneModel.spin(this.drone, dt * this.speed);
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
