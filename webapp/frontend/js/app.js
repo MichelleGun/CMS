@@ -1113,6 +1113,7 @@
     safe("Environment tab", () => EnvView.init());
     safe("Imitation tab", () => Imitation.init());
     safe("History tab", () => History.init());
+    safe("results tabs", () => Showcase.init());
     // A live flight is visible from every tab, so it is never out of sight.
     const livePill = document.getElementById("live-flight-pill");
     livePill.addEventListener("click", () => Tabs.show("drone"));
@@ -1194,7 +1195,7 @@
     // .catch here too: if the backend is mid-restart when a poll lands, this
     // is a normal transient state, not worth an unhandled-rejection console
     // error every 2.5s until it comes back.
-    setInterval(() => refreshRuns().catch(() => {}), 2500);
+    if (!window.DQ_STATIC) setInterval(() => refreshRuns().catch(() => {}), 2500);   // a snapshot doesn't change
   }
 
   // the History tab opens a run here

@@ -45,7 +45,10 @@ STOP = CMS / "results" / "hoop" / "mg_loop.stop"
 START_PARENT = ("results/hoop/runs/w10_n9_O_oblique", "O")
 # round 1 of the optimiser (2026-10-17..19) tried D9, E9, C9, DE9, OF, OS: E9 then C9 won. Round 2
 # (2026-10-23) builds on C9 (see week10_experiments): corners (CZ, CO, CE), loops (CD), stability (CL)
-POOL = ["CZ", "CE", "CD", "CL", "CO"]
+# (2026-10-23, round 13 on) CL won with lr 2e-5, so the ideas are retried at that rate (L* keys).
+# The corner ideas go first (LZ clearance, LE stress drone): real flights clipped the hoop's corners.
+POOL = ["LZ", "LE", "LO", "LD", "LX"]
+POOL_FILE = CMS / "results" / "hoop" / "mg_loop_pool.json"   # optional: ["key", ...], read every round
 RESCORE = CMS / "results" / "hoop" / "mg_loop_rescore.json"
 LOCK = CMS / "results" / "hoop" / "mg_loop.lock"
 MARGIN = 0.10          # a challenger must beat the parent by this much (one 36-episode number wobbles +-0.15)
@@ -175,6 +178,10 @@ def run_round(st, a):
     from week10_experiments import EXPERIMENTS
     k = st["round"] + 1
     tag = f"mg{k}"
+    try:                               # change the ideas without restarting the loop
+        a.pool = json.loads(POOL_FILE.read_text(encoding="utf-8")) or a.pool
+    except (OSError, ValueError):
+        pass
     keys, nxt = plan(st, a.pool)
     keys = [x for x in keys if x in EXPERIMENTS]
     log(f"round {k}: parent {Path(st['parent']).name} ({st['parent_key']}), keys {keys}")

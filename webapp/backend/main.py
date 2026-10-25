@@ -13,7 +13,7 @@ mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config import ALGORITHMS, REWARD_INFO, ASSETS_DIR, FRONTEND_DIR, HOOP_SPEC, REACH_RADIUS, ROOM, RUNS_DIR, START_MARGIN, START_Z, XY_MARGIN, Z_RANGE
@@ -632,6 +632,13 @@ def stop_job(job_id: str):
 
 
 # ----------------------------------------------------------------- static
+
+@app.get("/anatomy.html", include_in_schema=False)
+def anatomy():
+    # "How it works": the architecture page lives in docs/; the online copy gets a copy of it
+    # (scripts/build_pages.py), so the same link works in both.
+    return FileResponse(ASSETS_DIR.parent / "docs" / "Onboard Hoop Policy Anatomy.html")
+
 
 app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
 app.mount("/media", StaticFiles(directory=str(RUNS_DIR)), name="media")

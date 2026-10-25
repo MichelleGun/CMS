@@ -1,9 +1,20 @@
 {
-  "round": 8,
-  "parent": "results/hoop/runs/w10_mg6_C9_loop_practice",
-  "parent_key": "C9",
-  "parent_score": 2.6168333333333336,
-  "tried": [],
+  "round": 18,
+  "parent": "results/hoop/runs/w10_mg18_LX_lower_lr",
+  "parent_key": "LX",
+  "parent_score": 5.108333333333333,
+  "tried": [
+    "CZ",
+    "CE",
+    "CD",
+    "CL",
+    "CO",
+    "LZ",
+    "LE",
+    "LO",
+    "LD",
+    "LX"
+  ],
   "history": [
     {
       "round": 1,
@@ -226,6 +237,297 @@
       ],
       "parent_after": "results/hoop/runs/w10_mg6_C9_loop_practice",
       "at": "2026-10-19T23:31"
+    },
+    {
+      "round": 9,
+      "keys": [
+        "C9",
+        "CZ"
+      ],
+      "results": [
+        {
+          "key": "C9",
+          "run": "w10_mg9_C9_loop_practice",
+          "score": 2.344777777777778,
+          "model": "results/hoop/runs/w10_mg9_C9_loop_practice/final_model.zip",
+          "lpe": 1.7777777777777777,
+          "two_plus": 0.5,
+          "oblique": 0.567
+        },
+        {
+          "key": "CZ",
+          "run": "w10_mg9_CZ_loop_clearance",
+          "score": 2.694111111111111,
+          "model": "results/hoop/runs/w10_mg9_CZ_loop_clearance/best_model.zip",
+          "lpe": 2.111111111111111,
+          "two_plus": 0.5555555555555556,
+          "oblique": 0.583
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg6_C9_loop_practice",
+      "at": "2026-10-23T07:52"
+    },
+    {
+      "round": 10,
+      "keys": [
+        "C9",
+        "CE"
+      ],
+      "results": [
+        {
+          "key": "C9",
+          "run": "w10_mg10_C9_loop_practice",
+          "score": 2.5281111111111114,
+          "model": "results/hoop/runs/w10_mg10_C9_loop_practice/final_model.zip",
+          "lpe": 1.8611111111111112,
+          "two_plus": 0.5555555555555556,
+          "oblique": 0.667
+        },
+        {
+          "key": "CE",
+          "run": "w10_mg10_CE_loop_stress",
+          "score": 2.494111111111111,
+          "model": "results/hoop/runs/w10_mg10_CE_loop_stress/final_model.zip",
+          "lpe": 1.8611111111111112,
+          "two_plus": 0.5416666666666666,
+          "oblique": 0.633
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg6_C9_loop_practice",
+      "at": "2026-10-23T12:37"
+    },
+    {
+      "round": 11,
+      "keys": [
+        "C9",
+        "CD"
+      ],
+      "results": [
+        {
+          "key": "C9",
+          "run": "w10_mg11_C9_loop_practice",
+          "score": 2.553111111111111,
+          "model": "results/hoop/runs/w10_mg11_C9_loop_practice/final_model.zip",
+          "lpe": 1.9861111111111112,
+          "two_plus": 0.6111111111111112,
+          "oblique": 0.567
+        },
+        {
+          "key": "CD",
+          "run": "w10_mg11_CD_loop_dagger",
+          "score": 2.494111111111111,
+          "model": "results/hoop/runs/w10_mg11_CD_loop_dagger/best_model.zip",
+          "lpe": 1.8611111111111112,
+          "two_plus": 0.5,
+          "oblique": 0.633
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg6_C9_loop_practice",
+      "at": "2026-10-23T16:58"
+    },
+    {
+      "round": 12,
+      "keys": [
+        "C9",
+        "CL"
+      ],
+      "results": [
+        {
+          "key": "C9",
+          "run": "w10_mg12_C9_loop_practice",
+          "score": 2.5968888888888886,
+          "model": "results/hoop/runs/w10_mg12_C9_loop_practice/best_model.zip",
+          "lpe": 2.013888888888889,
+          "two_plus": 0.5972222222222222,
+          "oblique": 0.583
+        },
+        {
+          "key": "CL",
+          "run": "w10_mg12_CL_loop_lowlr",
+          "score": 3.1833333333333336,
+          "model": "results/hoop/runs/w10_mg12_CL_loop_lowlr/final_model.zip",
+          "lpe": 2.5833333333333335,
+          "two_plus": 0.6111111111111112,
+          "oblique": 0.6
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg12_CL_loop_lowlr",
+      "at": "2026-10-23T23:08"
+    },
+    {
+      "round": 13,
+      "keys": [
+        "CL",
+        "CO"
+      ],
+      "results": [
+        {
+          "key": "CL",
+          "run": "w10_mg13_CL_loop_lowlr",
+          "score": 3.4336666666666664,
+          "model": "results/hoop/runs/w10_mg13_CL_loop_lowlr/final_model.zip",
+          "lpe": 2.9166666666666665,
+          "two_plus": 0.6388888888888888,
+          "oblique": 0.517
+        },
+        {
+          "key": "CO",
+          "run": "w10_mg13_CO_loop_oblique08",
+          "score": 2.758,
+          "model": "results/hoop/runs/w10_mg13_CO_loop_oblique08/best_model.zip",
+          "lpe": 2.125,
+          "two_plus": 0.6111111111111112,
+          "oblique": 0.633
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg13_CL_loop_lowlr",
+      "at": "2026-10-24T03:04"
+    },
+    {
+      "round": 14,
+      "keys": [
+        "CL",
+        "LZ"
+      ],
+      "results": [
+        {
+          "key": "CL",
+          "run": "w10_mg14_CL_loop_lowlr",
+          "score": 3.5808888888888886,
+          "model": "results/hoop/runs/w10_mg14_CL_loop_lowlr/best_model.zip",
+          "lpe": 3.013888888888889,
+          "two_plus": 0.6805555555555556,
+          "oblique": 0.567
+        },
+        {
+          "key": "LZ",
+          "run": "w10_mg14_LZ_low_clearance",
+          "score": 3.216666666666667,
+          "model": "results/hoop/runs/w10_mg14_LZ_low_clearance/best_model.zip",
+          "lpe": 2.6666666666666665,
+          "two_plus": 0.5694444444444444,
+          "oblique": 0.55
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg14_CL_loop_lowlr",
+      "at": "2026-10-24T07:38"
+    },
+    {
+      "round": 15,
+      "keys": [
+        "CL",
+        "LE"
+      ],
+      "results": [
+        {
+          "key": "CL",
+          "run": "w10_mg15_CL_loop_lowlr",
+          "score": 4.097222222222222,
+          "model": "results/hoop/runs/w10_mg15_CL_loop_lowlr/best_model.zip",
+          "lpe": 3.5972222222222223,
+          "two_plus": 0.6111111111111112,
+          "oblique": 0.5
+        },
+        {
+          "key": "LE",
+          "run": "w10_mg15_LE_low_stress",
+          "score": 3.985777777777778,
+          "model": "results/hoop/runs/w10_mg15_LE_low_stress/best_model.zip",
+          "lpe": 3.4027777777777777,
+          "two_plus": 0.625,
+          "oblique": 0.583
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg15_CL_loop_lowlr",
+      "at": "2026-10-24T11:33"
+    },
+    {
+      "round": 16,
+      "keys": [
+        "CL",
+        "LO"
+      ],
+      "results": [
+        {
+          "key": "CL",
+          "run": "w10_mg16_CL_loop_lowlr",
+          "score": 4.519777777777778,
+          "model": "results/hoop/runs/w10_mg16_CL_loop_lowlr/final_model.zip",
+          "lpe": 3.9027777777777777,
+          "two_plus": 0.6527777777777778,
+          "oblique": 0.617
+        },
+        {
+          "key": "LO",
+          "run": "w10_mg16_LO_low_oblique08",
+          "score": 4.916333333333333,
+          "model": "results/hoop/runs/w10_mg16_LO_low_oblique08/best_model.zip",
+          "lpe": 4.333333333333333,
+          "two_plus": 0.6944444444444444,
+          "oblique": 0.583
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg16_LO_low_oblique08",
+      "at": "2026-10-24T15:50"
+    },
+    {
+      "round": 17,
+      "keys": [
+        "LO",
+        "LD"
+      ],
+      "results": [
+        {
+          "key": "LO",
+          "run": "w10_mg17_LO_low_oblique08",
+          "score": 4.686444444444445,
+          "model": "results/hoop/runs/w10_mg17_LO_low_oblique08/final_model.zip",
+          "lpe": 4.069444444444445,
+          "two_plus": 0.625,
+          "oblique": 0.617
+        },
+        {
+          "key": "LD",
+          "run": "w10_mg17_LD_low_dagger",
+          "score": 4.035777777777778,
+          "model": "results/hoop/runs/w10_mg17_LD_low_dagger/best_model.zip",
+          "lpe": 3.4027777777777777,
+          "two_plus": 0.6527777777777778,
+          "oblique": 0.633
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg16_LO_low_oblique08",
+      "at": "2026-10-25T04:50"
+    },
+    {
+      "round": 18,
+      "keys": [
+        "LO",
+        "LX"
+      ],
+      "results": [
+        {
+          "key": "LO",
+          "run": "w10_mg18_LO_low_oblique08",
+          "score": 4.5552222222222225,
+          "model": "results/hoop/runs/w10_mg18_LO_low_oblique08/final_model.zip",
+          "lpe": 3.9722222222222223,
+          "two_plus": 0.5972222222222222,
+          "oblique": 0.583
+        },
+        {
+          "key": "LX",
+          "run": "w10_mg18_LX_lower_lr",
+          "score": 5.108333333333333,
+          "model": "results/hoop/runs/w10_mg18_LX_lower_lr/best_model.zip",
+          "lpe": 4.458333333333333,
+          "two_plus": 0.6805555555555556,
+          "oblique": 0.65
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg18_LX_lower_lr",
+      "at": "2026-10-25T18:47"
     }
-  ]
+  ],
+  "parent_model": "results/hoop/runs/w10_mg18_LX_lower_lr/best_model.zip"
 }

@@ -33,40 +33,7 @@ function createScene3D() {
   let droneRotTarget = new THREE.Euler(0, 0, 0);
 
   function buildDrone() {
-    const g = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: PALETTE.droneBody });
-    const armMat = new THREE.MeshStandardMaterial({ color: PALETTE.droneArm });
-    const rotorMat = new THREE.MeshStandardMaterial({ color: PALETTE.droneRotor });
-
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.03, 0.06), bodyMat);
-    g.add(body);
-    g.userData.bodyMat = bodyMat;
-
-    const armLen = 0.09;
-    const armPositions = [
-      [1, 1], [1, -1], [-1, 1], [-1, -1],
-    ];
-    armPositions.forEach(([sx, sz]) => {
-      const arm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.004, 0.004, armLen, 6),
-        armMat,
-      );
-      arm.rotation.z = Math.PI / 2;
-      arm.position.set(sx * armLen / 2 * 0.8, 0, sz * armLen / 2 * 0.8);
-      arm.rotation.y = Math.atan2(sz, sx);
-      arm.rotation.z = Math.PI / 2;
-      g.add(arm);
-
-      const rotor = new THREE.Mesh(
-        new THREE.CircleGeometry(0.035, 12),
-        rotorMat,
-      );
-      rotor.rotation.x = -Math.PI / 2;
-      rotor.position.set(sx * armLen * 0.8, 0.01, sz * armLen * 0.8);
-      g.add(rotor);
-    });
-
-    return g;
+    return DroneModel.build({ accent: PALETTE.droneBody });     // js/dronemodel.js
   }
 
   function buildHoop() {
@@ -143,6 +110,16 @@ function createScene3D() {
       }
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    // If the browser drops the graphics context (too many 3D views, or a huge model), say so on
+    // the canvas's own page instead of leaving it white.
+    canvas.addEventListener("webglcontextlost", (e) => {
+      e.preventDefault();
+      contextLost = true;
+      const note = document.createElement("div");
+      note.className = "gl-lost";
+      note.textContent = "3D view paused: the browser ran out of graphics memory. Reload the page.";
+      canvas.parentElement.appendChild(note);
+    });
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(PALETTE.bg);
@@ -178,6 +155,7 @@ function createScene3D() {
   }
 
   let lastRender = 0;
+  let contextLost = false;
   let viewShiftPx = 0;          // shift the picture left so overlays on the right don't hide the cage
 
   function resize() {
@@ -222,9 +200,10 @@ function createScene3D() {
 
   function setDroneTarget(pos, rpy, snap = false) {
     dronePosTarget = simToThree(pos);
-    // sim roll/pitch/yaw (about x, y, z) -> three (x, -z, y) axis remap for
-    // a body rotated with the same convention as simToThree's position swap.
-    droneRotTarget = new THREE.Euler(rpy[0], rpy[2], -rpy[1], "XYZ");
+    // simToThree swaps y and z (a mirror), which flips every rotation's sense: sim
+    // R = Rz(yaw) Ry(pitch) Rx(roll) becomes three Ry(-yaw) Rz(-pitch) Rx(-roll), Euler order YZX.
+    // (The old symmetric drone hid this; the camera nose now shows the heading.)
+    droneRotTarget = new THREE.Euler(-rpy[0], -rpy[2], -rpy[1], "YZX");
     if (snap) {
       dronePosCurrent.copy(dronePosTarget);
       droneRotCurrent.copy(droneRotTarget);
@@ -314,17 +293,19 @@ function createScene3D() {
     // two scenes at 60 fps would otherwise compete with training for the CPU/GPU.
     // 30 fps is plenty for telemetry that arrives at ~15 Hz, and halves the drawing cost.
     const now = performance.now();
-    if (document.hidden || renderer.domElement.offsetParent === null || now - lastRender < 33) {
+    if (contextLost || document.hidden || renderer.domElement.offsetParent === null || now - lastRender < 33) {
       requestAnimationFrame(tick);
       return;
     }
     lastRender = now;
     dronePosCurrent.lerp(dronePosTarget, 0.25);
     droneRotCurrent.x += (droneRotTarget.x - droneRotCurrent.x) * 0.25;
-    droneRotCurrent.y += (droneRotTarget.y - droneRotCurrent.y) * 0.25;
+    const dYaw = Math.atan2(Math.sin(droneRotTarget.y - droneRotCurrent.y), Math.cos(droneRotTarget.y - droneRotCurrent.y));
+    droneRotCurrent.y += dYaw * 0.25;      // the short way round, not a full spin at +-180 deg
     droneRotCurrent.z += (droneRotTarget.z - droneRotCurrent.z) * 0.25;
     droneGroup.position.copy(dronePosCurrent);
     droneGroup.rotation.copy(droneRotCurrent);
+    DroneModel.spin(droneGroup, 0.033);
 
     controls.update();
     renderer.render(scene, camera);

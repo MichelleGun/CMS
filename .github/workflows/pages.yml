@@ -1,0 +1,39 @@
+# Publishes the online copy of the dashboard (webapp/frontend in read-only mode, packed by
+# scripts/build_pages.py) to GitHub Pages.
+# One-time setup in the repo: Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+name: Deploy Drone Quidditch to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "webapp/frontend/**"
+      - "docs/Onboard Hoop Policy Anatomy.html"
+      - "scripts/build_pages.py"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/build_pages.py _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
