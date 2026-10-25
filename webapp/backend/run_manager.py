@@ -509,8 +509,9 @@ class RunManager:
         return {"status": "failed"}
 
     # ------------------------------------------------------------- showcase
-    # One real-time episode of the run's current policy (scripts/showcase_hoop.py), allowed
-    # while training is running: it is a separate process with its own simulator.
+    # One real-time episode of the run's current policy (scripts/showcase_hoop.py, or
+    # hardware/onboard/showcase_onboard.py for onboard-camera runs), allowed while training is
+    # running: it is a separate process with its own simulator.
 
     def is_showcase_active(self, run_id: str) -> bool:
         proc = self._showcase_procs.get(run_id)
@@ -521,7 +522,6 @@ class RunManager:
         run_dir = RUNS_DIR / run_id
         if not (run_dir / "meta.json").is_file():
             raise ValueError(f"unknown run '{run_id}'")
-        _refuse_onboard(run_dir)
         if self.is_showcase_active(run_id):
             raise RuntimeError("a showcase is already playing for this run")
         names = ["latest_model.zip", "best_model.zip", "final_model.zip"]
@@ -529,11 +529,13 @@ class RunManager:
             names = ["best_model.zip", "latest_model.zip", "final_model.zip"]
         if not any((run_dir / n).is_file() for n in names):
             raise FileNotFoundError("no model saved yet: wait for the first evaluation")
+        # onboard-camera runs fly in their own simulator, not PyBullet
+        onboard = (_read_json(run_dir / "meta.json") or {}).get("env") == "onboard"
+        script = HARDWARE_DIR / "onboard" / "showcase_onboard.py" if onboard else SCRIPTS_DIR / "showcase_hoop.py"
         # Truncate first, so a connected socket (which tails from its last offset) sees the
         # file shrink and restarts from the top of this new showcase.
         (run_dir / "showcase.jsonl").write_text("")
-        argv = [PYTHON_EXE, str(SCRIPTS_DIR / "showcase_hoop.py"),
-                "--run-dir", str(run_dir), "--variant", variant]
+        argv = [PYTHON_EXE, str(script), "--run-dir", str(run_dir), "--variant", variant]
         if seed is not None:
             argv += ["--seed", str(seed)]
         if realtime:
@@ -587,7 +589,8 @@ def _terminate_tree(pid: int):
 def _refuse_onboard(run_dir: Path):
     meta = _read_json(run_dir / "meta.json") or {}
     if meta.get("env") == "onboard":
-        raise ValueError("this is an onboard-camera run: replays and showcases are PyBullet-only. "
+        raise ValueError("this is an onboard-camera run: video replays are PyBullet-only "
+                         "(use Watch policy for a live episode in the 3D view). "
                          "Score it with hardware/onboard/eval_policy.py --model "
                          f"<run>/best_model.zip, or fly it from the Drone tab")
 

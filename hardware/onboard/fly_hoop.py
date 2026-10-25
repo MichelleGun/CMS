@@ -1372,18 +1372,19 @@ def main(argv=None):
                 obs_dim=flight.builder.width, task=spec.TASK_NAME,
                 obs_shape=(flight.builder.width,))
 
-        if a.dry_run:
-            from onboard.sim_drone import SimDrone
-            drone = SimDrone(profile=a.profile, seed=a.seed + attempt,
-                             detector=flight.detector,
-                             ring_opening_m=a.ring_opening,
-                             ring_noodle_m=a.ring_noodle,
-                             drone_width_m=a.drone_width)
-        else:
-            drone = create_drone(settings)
-
         status = "crashed"
         try:
+            # inside the try, so a failure here (e.g. djitellopy missing) still records
+            # final_status and the dashboard shows "crashed" instead of a silent stop
+            if a.dry_run:
+                from onboard.sim_drone import SimDrone
+                drone = SimDrone(profile=a.profile, seed=a.seed + attempt,
+                                 detector=flight.detector,
+                                 ring_opening_m=a.ring_opening,
+                                 ring_noodle_m=a.ring_noodle,
+                                 drone_width_m=a.drone_width)
+            else:
+                drone = create_drone(settings)
             res = flight.run(drone)
             status = res.get("status", "unknown")
             results.append(res)

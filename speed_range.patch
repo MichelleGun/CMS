@@ -1,0 +1,229 @@
+diff --git a/hardware/onboard/gym_env.py b/hardware/onboard/gym_env.py
+index a99b7a1..63c1a91 100644
+--- a/hardware/onboard/gym_env.py
++++ b/hardware/onboard/gym_env.py
+@@ -149,7 +149,7 @@ class OnboardHoopEnv(gym.Env):
+                  streak: float = STREAK_GAIN, streak_cap: float = STREAK_CAP,
+                  ring_tracker: bool = False, reward_weights: Optional[dict] = None,
+                  history_lags=None, privileged: bool = False, near_pass_p: float = 0.0,
+-                 oblique_p: float = 0.0, stall_sec: float = 0.0):
++                 oblique_p: float = 0.0, stall_sec: float = 0.0, speed_range=None):
+         """dr / sway_deg / hard_start_p / ramp / open_plane / wash_deg: see sim.py. open_plane
+         defaults to on whenever starts can be away from the front runway. laps: passes per
+         episode (1: the episode ends at the first crossing; 0: endless). lap_dir: "alternate"
+@@ -192,7 +192,8 @@ class OnboardHoopEnv(gym.Env):
+         self._kwargs = dict(profile=profile, render=render_frames, ring=ring,
+                             detector=detector, drone_width_m=drone_width_m, dr=dr,
+                             sway_deg=sway_deg, hard_start_p=hard_start_p, ramp=ramp,
+-                            open_plane=open_plane, wash_deg=wash_deg, start_mode=start_mode)
++                            open_plane=open_plane, wash_deg=wash_deg, start_mode=start_mode,
++                            speed_range=speed_range)
+         self._seed = int(seed)
+         # curriculum (training only): this share of episodes starts lined up just in front of
+         # the ring (sim.place_near_pass), so most of the episode is the loop after the pass.
+diff --git a/hardware/onboard/sim.py b/hardware/onboard/sim.py
+index e386439..9d75bba 100644
+--- a/hardware/onboard/sim.py
++++ b/hardware/onboard/sim.py
+@@ -219,11 +219,22 @@ class OnboardSim:
+                  drone_width_m: float = spec.DRONE_WIDTH_M,
+                  dr: float = 0.0, sway_deg: float = DEFAULT_SWAY_DEG, hard_start_p: float = 0.0,
+                  ramp: float = 1.0, open_plane: bool = False, wash_deg: float = 0.0,
+-                 start_mode: str = "ring"):
++                 start_mode: str = "ring", speed_range: Optional[tuple] = None):
+         """dr / sway_deg / hard_start_p / ramp: see the module docstring. open_plane: a crossing
+         of the ring's plane clear of the noodle (under it, around it) is not an outcome and the
+-        episode goes on (so there is no "missed"); needed once starts can be beside or below."""
++        episode goes on (so there is no "missed"); needed once starts can be beside or below.
++        speed_range (lo, hi), training only: every episode multiplies the forward and the sideways
++        stick gain by its own log-uniform draw from [lo, hi]. The real Tello's forward/sideways
++        speed was never measured in the cage (sim_fidelity.md: telemetry too noisy; over the
++        mission pads forward came out ~2x the sim), so the policy and its tracker practise
++        with the speed off in either direction. Own random stream: None changes nothing."""
+         self.profile = PROFILES[profile] if isinstance(profile, str) else profile
++        self.speed_range = (None if speed_range is None
++                            else (float(speed_range[0]), float(speed_range[1])))
++        if self.speed_range and not 0 < self.speed_range[0] <= self.speed_range[1]:
++            raise ValueError("speed_range must be (lo, hi) with 0 < lo <= hi")
++        self._spd_rng = np.random.default_rng(int(seed or 0) + 9_901)
++        self.gain_mult_fb = self.gain_mult_lr = 1.0
+         self.base_profile = self.profile
+         self.dr, self.sway_deg, self.hard_start_p = float(dr), float(sway_deg), float(hard_start_p)
+         self.ramp = float(ramp)
+@@ -294,6 +305,10 @@ class OnboardSim:
+             self.profile = self.base_profile
+             self.speed_scale = self.yaw_scale = 1.0
+             self._latency = False
++        if self.speed_range:
++            lo, hi = np.log(self.speed_range[0]), np.log(self.speed_range[1])
++            self.gain_mult_fb = float(np.exp(self._spd_rng.uniform(lo, hi)))
++            self.gain_mult_lr = float(np.exp(self._spd_rng.uniform(lo, hi)))
+         pos, yaw = self._fixed_start
+         self.start_type = "front"
+         self.clear_cross = 0
+@@ -628,8 +643,8 @@ class OnboardSim:
+         cmd = self._applied
+ 
+         vmax = MAX_SPEED * self.speed_scale
+-        want = (cmd[spec.ACT_FB] * vmax * p.gain_fb * self.forward
+-                + cmd[spec.ACT_LR] * vmax * p.gain_lr * self.right
++        want = (cmd[spec.ACT_FB] * vmax * p.gain_fb * self.gain_mult_fb * self.forward
++                + cmd[spec.ACT_LR] * vmax * p.gain_lr * self.gain_mult_lr * self.right
+                 + np.array([0.0, 0.0, cmd[spec.ACT_UD] * vmax * p.gain_ud]))
+         # Braking is slower than accelerating, which is the single biggest reason a real
+         # Tello overshoots a visual target.
+diff --git a/hardware/onboard/speed_stress.py b/hardware/onboard/speed_stress.py
+new file mode 100644
+index 0000000..fee52f1
+--- /dev/null
++++ b/hardware/onboard/speed_stress.py
+@@ -0,0 +1,113 @@
++"""
++How much does a policy rely on the simulator's forward/sideways speed being right?
++
++The real Tello's forward and sideways speed was never measured in the cage (sim_fidelity.md:
++the velocity telemetry is too noisy there; over the mission pads forward came out ~2x the sim).
++The corner entries that clipped the hoop on the real drone are flown partly blind, on the ring
++tracker's dead reckoning at the nominal speed, so a speed error lands right on the rim.
++
++This scores oblique entry (slanted starts near the ring, as from a corner of the cage; the same
++starts as export_policy.oblique_entry) with the forward and sideways stick gain multiplied by
++each factor. A policy that holds up at 0.6x and 2x is safer to fly than one that only works at 1x.
++
++    python hardware/onboard/speed_stress.py results/hoop/runs/w10_n9_O_oblique/latest_model.zip
++    python hardware/onboard/speed_stress.py A.zip B.zip --mults 0.6 1 1.5 2 --episodes 60
++
++A run folder can be given instead of a zip (its latest_model.zip). Episodes per cell default to
++60 (oblique entry is a share, so 30 starts is +-18 points; 60 is about +-13).
++"""
++import argparse
++import sys
++from concurrent.futures import ProcessPoolExecutor
++from dataclasses import replace
++from pathlib import Path
++
++HERE = Path(__file__).resolve().parent
++CMS = HERE.parents[1]
++for p in (HERE, HERE.parent, CMS / "scripts"):
++    if str(p) not in sys.path:
++        sys.path.insert(0, str(p))
++
++SEED = 970_000_000           # layouts no other scoring tool uses
++
++
++def _resolve(arg: str) -> Path:
++    p = Path(arg)
++    if p.is_dir():
++        p = p / "latest_model.zip"
++    if not p.is_file():
++        sys.exit(f"no policy at {p}")
++    from rescore_checkpoints import _meta_for
++    run = p.parent.parent if p.parent.name == "checkpoints" else p.parent
++    _meta_for(p, run)            # checkpoints need their run's meta.json beside them
++    return p
++
++
++def _cell(job):
++    model, mult, episodes, seed = job
++    from onboard import spec
++    from onboard.gym_env import OnboardHoopEnv
++    from onboard.policy import load_policy
++    from onboard.sim import PROFILES
++    from export_policy import env_kwargs
++    fn = load_policy(Path(model))
++    tracker = fn.obs_width == spec.TRACKER_OBS_DIM
++    kw = dict(env_kwargs(fn.meta, tracker), laps=1)
++    base = PROFILES[kw["profile"]] if isinstance(kw["profile"], str) else kw["profile"]
++    kw["profile"] = replace(base, name=f"speed x{mult:g}",
++                            gain_fb=base.gain_fb * mult, gain_lr=base.gain_lr * mult)
++    env = OnboardHoopEnv(seed=seed, oblique_p=1.0, **kw)
++    env.set_episode_seed(seed)
++    ok = struck = 0
++    try:
++        for _ in range(episodes):
++            obs, _ = env.reset()
++            if hasattr(fn, "reset"):
++                fn.reset()
++            done, info = False, {}
++            while not done:
++                obs, _, term, trunc, info = env.step(fn(obs))
++                done = term or trunc
++            ok += info.get("phase") == "passed"
++            struck += info.get("phase") == "struck"
++    finally:
++        env.close()
++    return model, mult, ok / episodes, struck / episodes
++
++
++def main(argv=None):
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("models", nargs="+")
++    ap.add_argument("--mults", type=float, nargs="+", default=[0.6, 1.0, 1.5, 2.0])
++    ap.add_argument("--episodes", type=int, default=60)
++    ap.add_argument("--workers", type=int, default=4, help="processes (~0.5 GB each)")
++    ap.add_argument("--seed", type=int, default=SEED)
++    a = ap.parse_args(argv)
++    models = [str(_resolve(m)) for m in a.models]
++    jobs = [(m, k, a.episodes, a.seed) for m in models for k in a.mults]
++    print(f"scoring {len(models)} policies x {len(a.mults)} speeds x {a.episodes} slanted starts "
++          f"on {min(a.workers, len(jobs))} workers ...", flush=True)
++    res = {}
++    with ProcessPoolExecutor(max_workers=max(1, min(a.workers, len(jobs)))) as ex:
++        for model, mult, ok, struck in ex.map(_cell, jobs):
++            res[(model, mult)] = (ok, struck)
++            print(f"  {Path(model).parent.name}/{Path(model).name} at x{mult:g}: "
++                  f"{ok:.0%} pass, {struck:.0%} strike", flush=True)
++
++    def name(m):
++        p = Path(m)
++        run = p.parent.parent.name if p.parent.name == "checkpoints" else p.parent.name
++        return f"{run}/{p.stem}"
++
++    print("\nOblique entry (clean pass from a slanted start) with the forward/sideways speed off by:\n")
++    print("| Policy | " + " | ".join(f"x{k:g}" for k in a.mults) + " | worst |")
++    print("|---|" + "---|" * (len(a.mults) + 1))
++    for m in models:
++        vals = [res[(m, k)][0] for k in a.mults]
++        print(f"| {name(m)} | " + " | ".join(f"{v:.0%}" for v in vals) + f" | {min(vals):.0%} |")
++    print(f"\n{a.episodes} starts per cell: differences under ~{1.96 * 0.5 / a.episodes ** 0.5:.0%} are noise. "
++          "The same starts are used for every policy and speed.")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/hardware/onboard/train_onboard.py b/hardware/onboard/train_onboard.py
+index 21b3e66..36dc835 100644
+--- a/hardware/onboard/train_onboard.py
++++ b/hardware/onboard/train_onboard.py
+@@ -435,6 +435,11 @@ def main(argv=None):
+     ap.add_argument("--wash-deg", type=float, default=15.0,
+                     help="largest tilt of the ring when the drone's prop wash pushes it away (deg, "
+                          "0 = off): the real noodle tilts up about its rope as the drone nears")
++    ap.add_argument("--speed-range", type=float, nargs=2, default=None, metavar=("LO", "HI"),
++                    help="training only: every episode scales the forward and sideways stick gain "
++                         "by its own log-uniform draw from [LO, HI] (e.g. 0.6 2.2). The real Tello's "
++                         "forward/sideways speed was never measured (sim_fidelity.md); evaluation "
++                         "stays at the nominal speed, so scores still compare with other runs")
+     ap.add_argument("--oblique-p", type=float, default=0.0,
+                     help="training only: share of episodes that start 0.5-1.1 m from the ring, 35-80 deg "
+                          "off its axis, ring in view at a slant (as from a corner of the real cage)")
+@@ -599,7 +604,8 @@ def main(argv=None):
+         "robust": {"dr": args.dr, "sway_deg": args.sway_deg, "hard_start_p": args.hard_start_p,
+                    "wash_deg": args.wash_deg, "start_mode": args.start_mode,
+                    "dr_steps": args.dr_steps, "bc_augment": bool(args.bc_augment),
+-                   "near_pass_p": args.near_pass_p, "oblique_p": args.oblique_p},
++                   "near_pass_p": args.near_pass_p, "oblique_p": args.oblique_p,
++                   "speed_range": list(args.speed_range) if args.speed_range else None},
+         "obs_dim": full_w,
+         "frame_dim": frame_w,            # one frame: what ObsBuilder builds on the drone
+         "ring_tracker": bool(args.ring_tracker),
+@@ -628,7 +634,8 @@ def main(argv=None):
+     ramped = args.dr_steps > 0 and (args.dr > 0 or args.hard_start_p > 0)
+     env_kwargs = dict(profile=args.profile, seed=args.seed * 100_000, **robust,
+                       ramp=0.0 if ramped else 1.0, near_pass_p=args.near_pass_p,
+-                      oblique_p=args.oblique_p, stall_sec=args.stall_sec)
++                      oblique_p=args.oblique_p, stall_sec=args.stall_sec,
++                      speed_range=tuple(args.speed_range) if args.speed_range else None)
+     train_env = make_train_vec_env(OnboardHoopEnv, env_kwargs, args.n_envs, seed=args.seed, vec=vec,
+                                    rank_seed_kwarg="seed")
+     # Evaluation layouts come from a separate stream that training never draws from;
