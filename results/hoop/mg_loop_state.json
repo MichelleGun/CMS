@@ -1,8 +1,8 @@
 {
-  "round": 17,
-  "parent": "results/hoop/runs/w10_mg16_LO_low_oblique08",
-  "parent_key": "LO",
-  "parent_score": 4.916333333333333,
+  "round": 18,
+  "parent": "results/hoop/runs/w10_mg18_LX_lower_lr",
+  "parent_key": "LX",
+  "parent_score": 5.108333333333333,
   "tried": [
     "CZ",
     "CE",
@@ -12,7 +12,8 @@
     "LZ",
     "LE",
     "LO",
-    "LD"
+    "LD",
+    "LX"
   ],
   "history": [
     {
@@ -497,7 +498,36 @@
       ],
       "parent_after": "results/hoop/runs/w10_mg16_LO_low_oblique08",
       "at": "2026-10-25T04:50"
+    },
+    {
+      "round": 18,
+      "keys": [
+        "LO",
+        "LX"
+      ],
+      "results": [
+        {
+          "key": "LO",
+          "run": "w10_mg18_LO_low_oblique08",
+          "score": 4.5552222222222225,
+          "model": "results/hoop/runs/w10_mg18_LO_low_oblique08/final_model.zip",
+          "lpe": 3.9722222222222223,
+          "two_plus": 0.5972222222222222,
+          "oblique": 0.583
+        },
+        {
+          "key": "LX",
+          "run": "w10_mg18_LX_lower_lr",
+          "score": 5.108333333333333,
+          "model": "results/hoop/runs/w10_mg18_LX_lower_lr/best_model.zip",
+          "lpe": 4.458333333333333,
+          "two_plus": 0.6805555555555556,
+          "oblique": 0.65
+        }
+      ],
+      "parent_after": "results/hoop/runs/w10_mg18_LX_lower_lr",
+      "at": "2026-10-25T18:47"
     }
   ],
-  "parent_model": "results/hoop/runs/w10_mg16_LO_low_oblique08/best_model.zip"
+  "parent_model": "results/hoop/runs/w10_mg18_LX_lower_lr/best_model.zip"
 }
